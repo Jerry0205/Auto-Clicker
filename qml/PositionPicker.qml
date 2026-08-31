@@ -20,6 +20,7 @@ Window {
     color: "#99151a20"
     flags: Qt.Window | Qt.FramelessWindowHint
     modality: Qt.ApplicationModal
+    transientParent: null
     title: qsTr("Position wählen")
 
     Rectangle {
