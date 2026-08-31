@@ -106,6 +106,12 @@ Item {
             font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.15
         }
 
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            cursorShape: Qt.ArrowCursor
+        }
+
         Controls.Button {
             id: cancelButton
             anchors.horizontalCenter: parent.horizontalCenter
