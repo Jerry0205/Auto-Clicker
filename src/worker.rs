@@ -34,6 +34,7 @@ const COMMAND_CAPACITY: usize = 16;
 const PORTAL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const HOTKEY_ID: &str = "toggle-clicking";
 
+/// Commands sent from the main thread to the worker thread.
 #[derive(Debug)]
 pub enum Command {
     Start(ClickSettings),
@@ -42,6 +43,7 @@ pub enum Command {
     Shutdown,
 }
 
+/// Events sent from the worker thread to the main UI thread.
 #[derive(Debug, Clone)]
 pub enum WorkerEvent {
     Status(String),
@@ -50,6 +52,7 @@ pub enum WorkerEvent {
     Error(String),
 }
 
+/// Handle to the worker thread for sending commands and managing lifecycle.
 pub struct WorkerHandle {
     tx: mpsc::Sender<Command>,
     closing: Arc<AtomicBool>,
@@ -57,6 +60,10 @@ pub struct WorkerHandle {
 }
 
 impl WorkerHandle {
+    /// Spawns a new worker thread.
+    ///
+    /// The worker manages portal connections, global hotkey bindings, and click scheduling.
+    /// Events are sent back to the UI via the provided `emit` callback.
     pub fn spawn<F>(initial: ClickSettings, preferred_hotkey: String, emit: F) -> Self
     where
         F: Fn(WorkerEvent) + Send + Sync + 'static,
@@ -87,6 +94,9 @@ impl WorkerHandle {
         Self { tx, closing, join }
     }
 
+    /// Sends a command to the worker thread.
+    ///
+    /// Returns an error if the worker is shutting down or the command queue is full.
     pub fn send(&self, command: Command) -> Result<(), &'static str> {
         if self.closing.load(Ordering::Acquire) {
             return Err("Die Anwendung wird bereits beendet.");
@@ -96,6 +106,7 @@ impl WorkerHandle {
             .map_err(|_| "Der interne Befehlskanal ist ausgelastet.")
     }
 
+    /// Initiates shutdown and blocks until the worker thread exits.
     pub fn shutdown(mut self) {
         if !self.closing.swap(true, Ordering::AcqRel) {
             let _ = self.tx.blocking_send(Command::Shutdown);
@@ -135,6 +146,9 @@ struct ActiveRun {
 
 type Emitter = Arc<dyn Fn(WorkerEvent) + Send + Sync>;
 
+/// Sets up a global shortcut through the XDG GlobalShortcuts portal.
+///
+/// Requests the user's preferred hotkey and returns the actual bound key.
 async fn setup_hotkey(
     preferred_hotkey: String,
 ) -> Result<(GlobalShortcuts, Session<GlobalShortcuts>, String), String> {
@@ -162,12 +176,14 @@ async fn setup_hotkey(
     Ok((portal, session, actual))
 }
 
+/// Creates a portal session for sending mouse clicks.
 async fn setup_click_session(fixed: bool) -> Result<PortalClickSession, String> {
     PortalClickSession::create(fixed)
         .await
         .map_err(|error| error.to_string())
 }
 
+/// Sleeps until the next scheduled tick, or waits indefinitely if no deadline is set.
 async fn wait_for_tick(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => sleep_until(deadline).await,
@@ -175,6 +191,7 @@ async fn wait_for_tick(deadline: Option<Instant>) {
     }
 }
 
+/// Waits for the next hotkey event from the stream, or waits indefinitely if no stream exists.
 async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<HotkeySignal> {
     match stream {
         Some(state) => state.events.next().await,
@@ -182,6 +199,7 @@ async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<HotkeySignal> {
     }
 }
 
+/// Waits for a task to complete, or waits indefinitely if the task handle is None.
 async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task::JoinError> {
     match task {
         Some(task) => task.await,
@@ -189,6 +207,10 @@ async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task
     }
 }
 
+/// Main worker thread event loop.
+///
+/// Manages portal connections, hotkey bindings, click scheduling, and command processing.
+/// Runs until a shutdown command is received or the command channel closes.
 async fn run_worker(
     mut commands: mpsc::Receiver<Command>,
     mut latest_settings: ClickSettings,
@@ -427,6 +449,7 @@ async fn run_worker(
     (emit)(WorkerEvent::Running(false));
 }
 
+/// Initiates a new clicking run with the given settings.
 fn start_run(
     machine: &mut StateMachine,
     active: &mut Option<ActiveRun>,
@@ -447,6 +470,7 @@ fn start_run(
     (emit)(WorkerEvent::Status(format!("Klickt • {cps:.0} CPS")));
 }
 
+/// Stops the currently running click sequence.
 fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &Emitter) {
     if machine.stop() {
         *active = None;

@@ -13,6 +13,7 @@ use crate::model::{ClickSettings, ClickType};
 
 const EVENT_TIMEOUT: Duration = Duration::from_millis(250);
 
+/// Errors that can occur when interacting with the XDG RemoteDesktop portal.
 #[derive(Debug, Error)]
 pub enum PortalError {
     #[error("Das XDG RemoteDesktop-Portal ist nicht verfügbar: {0}")]
@@ -38,6 +39,10 @@ pub enum PortalError {
     EventTimeout,
 }
 
+/// Active session for sending mouse clicks through the XDG RemoteDesktop portal.
+///
+/// Maintains the portal connection, session state, and optional screen stream
+/// for fixed-position clicking.
 #[derive(Debug)]
 pub struct PortalClickSession {
     portal: RemoteDesktop,
@@ -53,6 +58,10 @@ struct MonitorStream {
 }
 
 impl PortalClickSession {
+    /// Creates a new portal session for mouse clicking.
+    ///
+    /// If `fixed_position` is true, also requests a screencast session to enable
+    /// absolute cursor positioning. Otherwise, only pointer control is requested.
     pub async fn create(fixed_position: bool) -> Result<Self, PortalError> {
         let portal = RemoteDesktop::new()
             .await
@@ -129,10 +138,16 @@ impl PortalClickSession {
         })
     }
 
+    /// Returns whether this session supports fixed-position clicking.
     pub const fn supports_fixed_position(&self) -> bool {
         self.stream.is_some()
     }
 
+    /// Performs a click action according to the provided settings.
+    ///
+    /// If settings specify a fixed position, moves the pointer first.
+    /// Then performs the appropriate number of button press/release cycles.
+    /// Attempts to release stuck buttons on error.
     pub async fn click(&self, settings: &ClickSettings) -> Result<(), PortalError> {
         if let Some((x, y)) = settings.position {
             let stream = self.stream.ok_or(PortalError::MissingMonitorStream)?;
@@ -211,6 +226,9 @@ impl PortalClickSession {
         Ok(())
     }
 
+    /// Attempts to release a mouse button without error checking.
+    ///
+    /// Used for cleanup after errors to prevent stuck mouse buttons.
     async fn best_effort_release(&self, button: i32) {
         let _ = timeout(
             EVENT_TIMEOUT,
@@ -224,6 +242,7 @@ impl PortalClickSession {
         .await;
     }
 
+    /// Closes the portal session and releases resources.
     pub async fn close(self) {
         let _ = self.session.close().await;
     }

@@ -2,11 +2,16 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 
+/// Maximum allowed clicks per second (CPS) to prevent system abuse.
 pub const MAX_CPS: u32 = 100;
+/// Minimum allowed interval between clicks in milliseconds.
 pub const MIN_INTERVAL_MS: u64 = 1_000 / MAX_CPS as u64;
+/// Maximum allowed interval between clicks (24 hours in milliseconds).
 pub const MAX_INTERVAL_MS: u64 = 86_400_000;
+/// Maximum allowed repeat count for finite click sequences.
 pub const MAX_REPEAT_COUNT: u64 = 10_000_000;
 
+/// Mouse button selection for clicking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MouseButton {
@@ -17,6 +22,7 @@ pub enum MouseButton {
 }
 
 impl MouseButton {
+    /// Returns the evdev button code for this mouse button.
     pub const fn evdev_code(self) -> i32 {
         match self {
             Self::Left => 0x110,
@@ -26,6 +32,7 @@ impl MouseButton {
     }
 }
 
+/// Type of click action to perform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ClickType {
@@ -35,6 +42,7 @@ pub enum ClickType {
 }
 
 impl ClickType {
+    /// Returns the number of individual clicks to perform for this click type.
     pub const fn clicks_per_tick(self) -> u8 {
         match self {
             Self::Single => 1,
@@ -43,6 +51,7 @@ impl ClickType {
     }
 }
 
+/// Mode for repeating clicks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepeatMode {
@@ -50,6 +59,7 @@ pub enum RepeatMode {
     Count,
 }
 
+/// Mode for determining click position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PositionMode {
@@ -57,6 +67,9 @@ pub enum PositionMode {
     Fixed,
 }
 
+/// Runtime settings for a click sequence.
+///
+/// Contains validated settings ready for execution by the worker thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClickSettings {
     pub interval_ms: u64,
@@ -66,6 +79,7 @@ pub struct ClickSettings {
     pub position: Option<(u32, u32)>,
 }
 
+/// Validation errors for click settings.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     #[error("Das Intervall muss mindestens {MIN_INTERVAL_MS} ms betragen ({MAX_CPS} CPS).")]
@@ -79,6 +93,9 @@ pub enum ValidationError {
 }
 
 impl ClickSettings {
+    /// Validates all settings fields against safety and sanity limits.
+    ///
+    /// Returns an error if any field is out of acceptable range.
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_interval(self.interval_ms)?;
         if let Some(repeat) = self.repeat
@@ -94,15 +111,21 @@ impl ClickSettings {
         Ok(())
     }
 
+    /// Returns the click interval as a Duration.
     pub const fn interval(&self) -> Duration {
         Duration::from_millis(self.interval_ms)
     }
 
+    /// Calculates and returns the effective clicks per second.
     pub fn cps(&self) -> f64 {
         1_000.0 / self.interval_ms as f64
     }
 }
 
+/// Validates a click interval against minimum and maximum limits.
+///
+/// Ensures the interval is within safe operating bounds to prevent system abuse
+/// and maintains reasonable usability.
 pub fn validate_interval(interval_ms: u64) -> Result<(), ValidationError> {
     if interval_ms < MIN_INTERVAL_MS {
         Err(ValidationError::IntervalTooShort)
@@ -117,6 +140,7 @@ pub fn validate_interval(interval_ms: u64) -> Result<(), ValidationError> {
 mod tests {
     use super::*;
 
+    /// Returns a valid ClickSettings instance for testing.
     fn valid_settings() -> ClickSettings {
         ClickSettings {
             interval_ms: 100,

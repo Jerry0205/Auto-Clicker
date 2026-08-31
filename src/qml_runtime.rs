@@ -10,6 +10,9 @@ mod ffi {
     }
 }
 
+/// Checks whether the QML engine has successfully loaded a root object.
+///
+/// Returns false if QML loading failed, indicating the application should exit.
 pub fn has_root_object(engine: &cxx_qt_lib::QQmlApplicationEngine) -> bool {
     ffi::qml_engine_has_root_object(engine)
 }

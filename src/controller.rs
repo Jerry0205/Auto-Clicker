@@ -58,6 +58,10 @@ pub mod qobject {
     impl cxx_qt::Threading for AppController {}
 }
 
+/// Rust implementation of the QML-exposed application controller.
+///
+/// Manages the application state, coordinates with the worker thread,
+/// and provides Qt property bindings for the QML interface.
 pub struct AppControllerRust {
     status: QString,
     error_message: QString,
@@ -118,6 +122,10 @@ impl Drop for AppControllerRust {
 }
 
 impl qobject::AppController {
+    /// Initializes the controller and spawns the worker thread.
+    ///
+    /// Should be called once after the QML component is fully loaded.
+    /// Sets up portal connections and global hotkey bindings.
     pub fn initialize(mut self: Pin<&mut Self>) {
         if self.rust().worker.is_some() {
             return;
@@ -142,6 +150,9 @@ impl qobject::AppController {
         self.as_mut().rust_mut().get_mut().worker = Some(worker);
     }
 
+    /// Starts the auto-clicking sequence with current settings.
+    ///
+    /// Validates settings, saves configuration, and sends the start command to the worker thread.
     pub fn start(mut self: Pin<&mut Self>) {
         self.as_mut().clear_error();
         let settings = match self.as_ref().settings() {
@@ -157,10 +168,12 @@ impl qobject::AppController {
         self.as_mut().send_command(Command::Start(settings));
     }
 
+    /// Stops the currently running auto-clicking sequence.
     pub fn stop(mut self: Pin<&mut Self>) {
         self.as_mut().send_command(Command::Stop);
     }
 
+    /// Toggles the auto-clicking sequence between running and stopped states.
     pub fn toggle(mut self: Pin<&mut Self>) {
         if *self.running() || *self.busy() {
             self.as_mut().stop();
@@ -169,14 +182,21 @@ impl qobject::AppController {
         }
     }
 
+    /// Opens the system hotkey configuration dialog.
+    ///
+    /// Allows the user to change the global shortcut key via KWin's settings.
     pub fn configure_hotkey(mut self: Pin<&mut Self>) {
         self.as_mut().send_command(Command::ConfigureHotkey);
     }
 
+    /// Clears the current error message from the UI.
     pub fn clear_error(mut self: Pin<&mut Self>) {
         self.as_mut().set_error_message(QString::default());
     }
 
+    /// Shuts down the worker thread and cleans up resources.
+    ///
+    /// Called when the application is closing to ensure graceful cleanup.
     pub fn shutdown(mut self: Pin<&mut Self>) {
         if let Some(worker) = self.as_mut().rust_mut().get_mut().worker.take() {
             worker.shutdown();
@@ -185,6 +205,9 @@ impl qobject::AppController {
         self.as_mut().set_busy(false);
     }
 
+    /// Sends a command to the worker thread.
+    ///
+    /// Displays an error if the worker is not initialized or the command channel is full.
     fn send_command(mut self: Pin<&mut Self>, command: Command) {
         let result = self
             .rust()
@@ -197,6 +220,9 @@ impl qobject::AppController {
         }
     }
 
+    /// Converts the current UI property values into validated ClickSettings.
+    ///
+    /// Returns an error if any property contains an invalid value.
     fn settings(self: Pin<&Self>) -> Result<ClickSettings, String> {
         let button = match *self.mouse_button() {
             0 => MouseButton::Left,
@@ -240,6 +266,7 @@ impl qobject::AppController {
         Ok(settings)
     }
 
+    /// Saves the current settings to the configuration file.
     fn save_config(self: Pin<&Self>) -> Result<(), String> {
         let settings = self.settings()?;
         let config = AppConfig {
@@ -264,6 +291,7 @@ impl qobject::AppController {
         config::save(&config).map_err(|error| error.to_string())
     }
 
+    /// Updates the UI to display an error state with the given message.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
         self.as_mut().set_running(false);
         self.as_mut().set_busy(false);
@@ -271,6 +299,9 @@ impl qobject::AppController {
         self.as_mut().set_error_message(QString::from(message));
     }
 
+    /// Handles events received from the worker thread.
+    ///
+    /// Updates UI properties based on worker status, running state, hotkey changes, and errors.
     fn handle_worker_event(mut self: Pin<&mut Self>, event: WorkerEvent) {
         match event {
             WorkerEvent::Status(status) => {

@@ -4,6 +4,11 @@ use cxx_qt_lib::{
 };
 use std::process::ExitCode;
 
+/// Entry point for the Klickmeister auto-clicker application.
+///
+/// Initializes the Qt GUI application, loads the QML interface, and starts the event loop.
+/// Returns `ExitCode::SUCCESS` if the application runs and exits normally, or `ExitCode::FAILURE`
+/// if initialization or execution fails.
 fn main() -> ExitCode {
     let smoke_test = std::env::args_os().any(|argument| argument == "--smoke-test");
     QQuickStyle::set_style(&QString::from("org.kde.desktop"));

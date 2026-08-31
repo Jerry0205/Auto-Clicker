@@ -1,5 +1,8 @@
 use cxx_qt_build::{CxxQtBuilder, QmlModule};
 
+/// Build script for the Klickmeister QML application.
+///
+/// Configures CxxQt to build the QML module with Rust-Qt bindings.
 fn main() {
     CxxQtBuilder::new_qml_module(
         QmlModule::new("io.github.jerry0205.klickmeister")

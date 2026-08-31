@@ -1,3 +1,4 @@
+/// Runtime state of the auto-clicker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RunState {
     #[default]
@@ -9,16 +10,23 @@ pub enum RunState {
     Closing,
 }
 
+/// State machine for managing auto-clicker lifecycle transitions.
+///
+/// Ensures valid state transitions and prevents race conditions.
 #[derive(Debug, Default)]
 pub struct StateMachine {
     state: RunState,
 }
 
 impl StateMachine {
+    /// Returns the current state.
     pub const fn state(&self) -> RunState {
         self.state
     }
 
+    /// Attempts to transition to the Starting state.
+    ///
+    /// Returns true if the transition was allowed, false otherwise.
     pub fn request_start(&mut self) -> bool {
         match self.state {
             RunState::Ready | RunState::Stopped | RunState::Error => {
@@ -29,6 +37,9 @@ impl StateMachine {
         }
     }
 
+    /// Transitions from Starting to Clicking state.
+    ///
+    /// Returns true if the state was Starting, false otherwise.
     pub fn started(&mut self) -> bool {
         if self.state == RunState::Starting {
             self.state = RunState::Clicking;
@@ -38,6 +49,9 @@ impl StateMachine {
         }
     }
 
+    /// Attempts to stop the auto-clicker.
+    ///
+    /// Returns true if the transition to Stopped was allowed, false otherwise.
     pub fn stop(&mut self) -> bool {
         match self.state {
             RunState::Starting | RunState::Clicking => {
@@ -48,12 +62,16 @@ impl StateMachine {
         }
     }
 
+    /// Transitions to the Error state.
+    ///
+    /// Does nothing if already in the Closing state.
     pub fn fail(&mut self) {
         if self.state != RunState::Closing {
             self.state = RunState::Error;
         }
     }
 
+    /// Transitions to the terminal Closing state.
     pub fn close(&mut self) {
         self.state = RunState::Closing;
     }

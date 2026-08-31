@@ -13,6 +13,10 @@ use thiserror::Error;
 const APP_DIR: &str = "klickmeister";
 const CONFIG_FILE: &str = "config.toml";
 
+/// Application configuration structure.
+///
+/// Contains all user-configurable settings for the auto-clicker, including
+/// click intervals, mouse button selection, repeat modes, position settings, and hotkey binding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
@@ -43,6 +47,7 @@ impl Default for AppConfig {
     }
 }
 
+/// Errors that can occur during configuration loading or saving.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("HOME und XDG_CONFIG_HOME sind nicht gesetzt")]
@@ -57,6 +62,10 @@ pub enum ConfigError {
     Serialize(#[source] toml::ser::Error),
 }
 
+/// Returns the path to the application's configuration file.
+///
+/// Checks `XDG_CONFIG_HOME` first, then falls back to `$HOME/.config`.
+/// Returns an error if neither environment variable is set.
 pub fn config_path() -> Result<PathBuf, ConfigError> {
     if let Some(base) = env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(base).join(APP_DIR).join(CONFIG_FILE));
@@ -72,11 +81,19 @@ pub fn config_path() -> Result<PathBuf, ConfigError> {
         .ok_or(ConfigError::MissingHome)
 }
 
+/// Loads the application configuration from the default location.
+///
+/// Returns the default configuration if the file doesn't exist.
+/// Returns an error if the file exists but cannot be read or parsed.
 pub fn load() -> Result<AppConfig, ConfigError> {
     let path = config_path()?;
     load_from(&path)
 }
 
+/// Loads the application configuration from a specific file path.
+///
+/// Returns the default configuration if the file doesn't exist.
+/// Returns an error if the file exists but cannot be read or parsed.
 pub fn load_from(path: &Path) -> Result<AppConfig, ConfigError> {
     match fs::read_to_string(path) {
         Ok(contents) => toml::from_str(&contents).map_err(ConfigError::Parse),
@@ -85,11 +102,20 @@ pub fn load_from(path: &Path) -> Result<AppConfig, ConfigError> {
     }
 }
 
+/// Saves the application configuration to the default location.
+///
+/// Creates parent directories if they don't exist. Uses atomic write operations
+/// to prevent data corruption.
 pub fn save(config: &AppConfig) -> Result<(), ConfigError> {
     let path = config_path()?;
     save_to(&path, config)
 }
 
+/// Saves the application configuration to a specific file path.
+///
+/// Creates parent directories if they don't exist. Uses atomic write operations
+/// (write to temp file, then rename) to prevent data corruption. Sets file permissions
+/// to 0600 on Unix systems for security.
 pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
     let parent = path.parent().ok_or_else(|| {
         ConfigError::Write(io::Error::new(
@@ -125,6 +151,7 @@ mod tests {
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
+    /// Generates a unique temporary file path for testing.
     fn test_path(name: &str) -> PathBuf {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         env::temp_dir().join(format!(

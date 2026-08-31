@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+/// Click scheduling state tracker.
+///
+/// Tracks the interval between clicks and the remaining count for finite sequences.
 #[derive(Debug, Clone)]
 pub struct Schedule {
     interval: Duration,
@@ -8,6 +11,9 @@ pub struct Schedule {
 }
 
 impl Schedule {
+    /// Creates a new schedule with the given interval and optional repeat count.
+    ///
+    /// If `remaining` is None, the schedule runs indefinitely until manually stopped.
     pub const fn new(interval: Duration, remaining: Option<u64>) -> Self {
         Self {
             interval,
@@ -16,18 +22,24 @@ impl Schedule {
         }
     }
 
+    /// Returns the interval duration between clicks.
     pub const fn interval(&self) -> Duration {
         self.interval
     }
 
+    /// Returns the total number of clicks emitted so far.
     pub const fn emitted(&self) -> u64 {
         self.emitted
     }
 
+    /// Returns whether the schedule has completed (for finite sequences).
     pub const fn is_finished(&self) -> bool {
         matches!(self.remaining, Some(0))
     }
 
+    /// Records one click tick, updating counters.
+    ///
+    /// Returns true if the click should proceed, false if the schedule is finished.
     pub fn record_tick(&mut self) -> bool {
         if self.is_finished() {
             return false;
