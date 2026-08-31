@@ -52,6 +52,10 @@ Item {
     visible: false
     z: 10000
     focus: visible
+    Keys.onEscapePressed: function(event) {
+        picker.finish()
+        event.accepted = true
+    }
 
     Connections {
         target: picker.hostWindow
@@ -66,28 +70,9 @@ Item {
         color: "#e6151a20"
     }
 
-    Rectangle {
-        anchors.centerIn: parent
-        width: message.implicitWidth + Kirigami.Units.gridUnit * 3
-        height: message.implicitHeight + Kirigami.Units.gridUnit * 2
-        radius: Kirigami.Units.cornerRadius
-        color: Kirigami.Theme.backgroundColor
-        border.color: Kirigami.Theme.focusColor
-
-        Controls.Label {
-            id: message
-            anchors.centerIn: parent
-            text: picker.inputReady
-                ? qsTr("Gewünschte Position anklicken\nEsc bricht ab")
-                : qsTr("Vollbild wird vorbereitet …\nEsc bricht ab")
-            horizontalAlignment: Text.AlignHCenter
-            font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.15
-        }
-    }
-
     MouseArea {
         anchors.fill: parent
-        acceptedButtons: Qt.AllButtons
+        acceptedButtons: Qt.LeftButton
         cursorShape: picker.inputReady ? Qt.CrossCursor : Qt.BusyCursor
         onClicked: function(mouse) {
             if (!picker.inputReady) {
@@ -96,6 +81,44 @@ Item {
 
             picker.picked(Math.round(mouse.x), Math.round(mouse.y))
             picker.finish()
+        }
+    }
+
+    Rectangle {
+        anchors.centerIn: parent
+        width: Math.max(message.implicitWidth, cancelButton.implicitWidth)
+            + Kirigami.Units.gridUnit * 3
+        height: message.implicitHeight + cancelButton.implicitHeight
+            + Kirigami.Units.gridUnit * 2.5
+        radius: Kirigami.Units.cornerRadius
+        color: Kirigami.Theme.backgroundColor
+        border.color: Kirigami.Theme.focusColor
+
+        Controls.Label {
+            id: message
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: Kirigami.Units.gridUnit
+            text: picker.inputReady
+                ? qsTr("Gewünschte Position anklicken")
+                : qsTr("Vollbild wird vorbereitet …")
+            horizontalAlignment: Text.AlignHCenter
+            font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.15
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            cursorShape: Qt.ArrowCursor
+        }
+
+        Controls.Button {
+            id: cancelButton
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: message.bottom
+            anchors.topMargin: Kirigami.Units.largeSpacing
+            text: qsTr("Abbrechen (Esc)")
+            onClicked: picker.finish()
         }
     }
 
