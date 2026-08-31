@@ -22,6 +22,8 @@ Kirigami.ApplicationWindow {
 
     PositionPicker {
         id: positionPicker
+        anchors.fill: parent
+        hostWindow: root
         onPicked: function(x, y) {
             controller.fixed_x = x
             controller.fixed_y = y
@@ -189,7 +191,7 @@ Kirigami.ApplicationWindow {
                         enabled: !controller.current_position && !controller.running && !controller.busy
                         text: qsTr("Position auf dem Bildschirm auswählen …")
                         icon.name: "crosshairs"
-                        onClicked: positionPicker.begin(root.screen)
+                        onClicked: positionPicker.begin()
                     }
                     Controls.Label {
                         Layout.fillWidth: true
