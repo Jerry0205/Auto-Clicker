@@ -1,7 +1,7 @@
 # Maintainer: Klickmeister contributors
 pkgname=klickmeister
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc='Small, safe auto clicker for KDE Plasma Wayland'
 arch=('x86_64')
 url='https://github.com/jerry0205/Auto-Clicker'
@@ -12,6 +12,20 @@ options=('!lto')
 source=()
 b2sums=()
 
+_cargo_jobs() {
+  local threads
+  threads="$(nproc 2>/dev/null)"
+  if [[ ! "$threads" =~ ^[1-9][0-9]*$ ]]; then
+    threads=2
+  fi
+
+  local jobs=$((threads / 2))
+  if ((jobs < 1)); then
+    jobs=1
+  fi
+  printf '%s' "$jobs"
+}
+
 prepare() {
   cd "$startdir"
   cargo fetch --locked
@@ -19,14 +33,15 @@ prepare() {
 
 build() {
   cd "$startdir"
-  CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" \
+  CARGO_BUILD_JOBS="$(_cargo_jobs)" \
     CARGO_TARGET_DIR=target cargo build --frozen --release
 }
 
 check() {
   cd "$startdir"
-  CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" \
-    CARGO_TARGET_DIR=target cargo test --frozen --all-targets
+  CARGO_BUILD_JOBS="$(_cargo_jobs)" \
+    CARGO_TARGET_DIR=target cargo test --frozen --release --all-targets
+  bash tests/qml-smoke.sh target/release/klickmeister
 }
 
 package() {

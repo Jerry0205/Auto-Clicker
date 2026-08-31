@@ -67,7 +67,9 @@ Direkt aus dem Checkout als Arch-Paket:
 makepkg -si
 ```
 
-Das PKGBUILD begrenzt die Kompilierung standardmäßig auf zwei parallele Jobs, damit Plasma während des Builds bedienbar bleibt. Wer bewusst schneller bauen möchte, kann beispielsweise `CARGO_BUILD_JOBS=6 makepkg -si` verwenden. Diese Einstellung betrifft nur das einmalige Kompilieren, nicht die Laufzeit der Anwendung.
+Das PKGBUILD ermittelt bei jedem Aufruf mit `nproc` die verfügbaren logischen CPU-Threads und verwendet automatisch die Hälfte davon als parallele Cargo-Jobs, mindestens jedoch einen. Ein Rechner mit 12 Threads baut daher mit 6 Jobs. Diese Einstellung betrifft nur das einmalige Kompilieren, nicht die Laufzeit der Anwendung.
+
+Build und Pakettests verwenden dasselbe Release-Profil, sodass Abhängigkeiten nicht ein zweites Mal im Debug-Profil kompiliert werden. Das Release-Profil verzichtet bewusst auf LTO und verwendet 16 Codegen-Einheiten: Die Anwendung bleibt optimiert und klein, während Erst- und Paket-Build deutlich schneller fertig werden.
 
 Das lokale Entwicklungs-PKGBUILD baut den aktuellen Checkout. `cargo fetch --locked` lädt ausschließlich checksummengeprüfte Rust-Quellen aus `Cargo.lock`; es lädt keine fremden Programm-Binärdateien. Für eine veröffentlichte Distribution sollte ein signierter Source-Tarball verwendet und im PKGBUILD mit BLAKE2-Prüfsumme fixiert werden.
 
@@ -80,6 +82,7 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 cargo build --locked --release
+bash tests/qml-smoke.sh target/release/klickmeister
 cargo tree --locked
 cargo audit
 ```

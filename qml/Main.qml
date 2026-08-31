@@ -7,6 +7,8 @@ import io.github.jerry0205.klickmeister
 Kirigami.ApplicationWindow {
     id: root
 
+    property bool smokeTest: false
+
     width: 520
     height: 720
     minimumWidth: 460
@@ -28,7 +30,11 @@ Kirigami.ApplicationWindow {
         }
     }
 
-    Component.onCompleted: controller.initialize()
+    Component.onCompleted: {
+        if (!smokeTest) {
+            controller.initialize()
+        }
+    }
     onClosing: function(close) {
         controller.shutdown()
         close.accepted = true
