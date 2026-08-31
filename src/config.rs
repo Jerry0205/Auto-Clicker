@@ -38,7 +38,7 @@ impl Default for AppConfig {
             position_mode: PositionMode::CurrentCursor,
             fixed_x: 0,
             fixed_y: 0,
-            hotkey: "F6".to_owned(),
+            hotkey: "Pause".to_owned(),
         }
     }
 }
@@ -137,6 +137,7 @@ mod tests {
     fn missing_config_uses_defaults() {
         let path = test_path("missing");
         assert_eq!(load_from(&path).ok(), Some(AppConfig::default()));
+        assert_eq!(AppConfig::default().hotkey, "Pause");
     }
 
     #[test]

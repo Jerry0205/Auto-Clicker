@@ -14,7 +14,7 @@ Rust übernimmt Validierung, Zustandsautomat, Scheduler und Portalzugriffe. Qt 6
 - bis zum Stoppen oder feste Anzahl
 - aktuelle Cursorposition oder feste Position
 - Wayland-konformer Vollbild-Positionspicker
-- globaler Start/Stop-Hotkey, bevorzugt F6
+- globaler Start/Stop-Hotkey, bevorzugt Pause
 - Stop-Button, Hotkey und vollständiger Shutdown beim Fensterschließen
 - kleine TOML-Konfiguration ohne Nutzungsdaten
 
