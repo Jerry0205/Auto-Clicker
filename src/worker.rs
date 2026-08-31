@@ -47,6 +47,7 @@ pub enum WorkerEvent {
     Status(String),
     Running(bool),
     Hotkey(String),
+    StartRequested,
     Error(String),
 }
 
@@ -343,17 +344,11 @@ async fn run_worker(
                         if matches!(machine.state(), RunState::Starting | RunState::Clicking) {
                             if let Some(task) = start_task.take() { task.abort(); }
                             stop_run(&mut machine, &mut active, &emit);
-                        } else if latest_settings.validate().is_ok() && machine.request_start() {
-                            let needs_fixed = latest_settings.position.is_some();
-                            if click_session.as_ref().is_some_and(|session| session.supports_fixed_position() == needs_fixed) {
-                                start_run(&mut machine, &mut active, latest_settings.clone(), &emit);
-                            } else {
-                                if let Some(old_session) = click_session.take() {
-                                    let _ = timeout(PORTAL_CLOSE_TIMEOUT, old_session.close()).await;
-                                }
-                                (emit)(WorkerEvent::Status("Warte auf Wayland-Berechtigung …".to_owned()));
-                                start_task = Some(tokio::spawn(setup_click_session(needs_fixed)));
-                            }
+                        } else {
+                            // Ask the Qt side to start so the current UI values are
+                            // collected, validated and saved. Keeping a settings copy
+                            // here made hotkey starts use values from the previous run.
+                            (emit)(WorkerEvent::StartRequested);
                         }
                     }
                     Some(HotkeySignal::Changed(changed)) => {

@@ -283,6 +283,11 @@ impl qobject::AppController {
                 self.as_mut().set_busy(false);
             }
             WorkerEvent::Hotkey(hotkey) => self.as_mut().set_hotkey(QString::from(&hotkey)),
+            WorkerEvent::StartRequested => {
+                if !*self.running() && !*self.busy() {
+                    self.as_mut().start();
+                }
+            }
             WorkerEvent::Error(error) => self.as_mut().show_error(&error),
         }
     }

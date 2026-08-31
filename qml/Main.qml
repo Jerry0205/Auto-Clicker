@@ -14,7 +14,7 @@ Kirigami.ApplicationWindow {
     minimumWidth: 460
     minimumHeight: 620
     visible: true
-    title: qsTr("Klickmeister")
+    title: qsTr("Klickmeister %1").arg(Qt.application.version)
 
     AppController {
         id: controller
@@ -183,11 +183,13 @@ Kirigami.ApplicationWindow {
                             value: controller.fixed_y
                             onValueModified: controller.fixed_y = value
                         }
-                        Controls.Button {
-                            text: qsTr("Wählen …")
-                            icon.name: "crosshairs"
-                            onClicked: positionPicker.begin(root.screen)
-                        }
+                    }
+                    Controls.Button {
+                        Layout.fillWidth: true
+                        enabled: !controller.current_position && !controller.running && !controller.busy
+                        text: qsTr("Position auf dem Bildschirm auswählen …")
+                        icon.name: "crosshairs"
+                        onClicked: positionPicker.begin(root.screen)
                     }
                     Controls.Label {
                         Layout.fillWidth: true
@@ -248,6 +250,13 @@ Kirigami.ApplicationWindow {
                     implicitWidth: Kirigami.Units.gridUnit
                     implicitHeight: implicitWidth
                 }
+            }
+
+            Controls.Label {
+                Layout.alignment: Qt.AlignHCenter
+                color: Kirigami.Theme.disabledTextColor
+                text: qsTr("Klickmeister %1").arg(Qt.application.version)
+                Accessible.name: qsTr("Installierte Version %1").arg(Qt.application.version)
             }
         }
     }
