@@ -22,7 +22,6 @@ Kirigami.ApplicationWindow {
 
     PositionPicker {
         id: positionPicker
-        transientParent: root
         onPicked: function(x, y) {
             controller.fixed_x = x
             controller.fixed_y = y
@@ -187,7 +186,7 @@ Kirigami.ApplicationWindow {
                         Controls.Button {
                             text: qsTr("Wählen …")
                             icon.name: "crosshairs"
-                            onClicked: positionPicker.showFullScreen()
+                            onClicked: positionPicker.begin(root.screen)
                         }
                     }
                     Controls.Label {
