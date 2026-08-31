@@ -7,6 +7,7 @@ Item {
 
     required property Window hostWindow
     property int previousVisibility: Window.Windowed
+    property bool inputReady: false
 
     signal picked(int x, int y)
 
@@ -16,15 +17,28 @@ Item {
         }
 
         previousVisibility = hostWindow.visibility
+        inputReady = false
         picker.visible = true
         hostWindow.showFullScreen()
         hostWindow.raise()
         hostWindow.requestActivate()
         picker.forceActiveFocus()
+        updateInputReady()
+    }
+
+    function updateInputReady() {
+        if (!picker.visible) {
+            return
+        }
+
+        inputReady = hostWindow.visibility === Window.FullScreen
+            && hostWindow.width === hostWindow.screen.width
+            && hostWindow.height === hostWindow.screen.height
     }
 
     function finish() {
         picker.visible = false
+        inputReady = false
 
         if (previousVisibility === Window.Maximized) {
             hostWindow.showMaximized()
@@ -38,6 +52,14 @@ Item {
     visible: false
     z: 10000
     focus: visible
+
+    Connections {
+        target: picker.hostWindow
+
+        function onHeightChanged() { picker.updateInputReady() }
+        function onVisibilityChanged() { picker.updateInputReady() }
+        function onWidthChanged() { picker.updateInputReady() }
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -55,7 +77,9 @@ Item {
         Controls.Label {
             id: message
             anchors.centerIn: parent
-            text: qsTr("Gewünschte Position anklicken\nEsc bricht ab")
+            text: picker.inputReady
+                ? qsTr("Gewünschte Position anklicken\nEsc bricht ab")
+                : qsTr("Vollbild wird vorbereitet …\nEsc bricht ab")
             horizontalAlignment: Text.AlignHCenter
             font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.15
         }
@@ -64,8 +88,12 @@ Item {
     MouseArea {
         anchors.fill: parent
         acceptedButtons: Qt.AllButtons
-        cursorShape: Qt.CrossCursor
+        cursorShape: picker.inputReady ? Qt.CrossCursor : Qt.BusyCursor
         onClicked: function(mouse) {
+            if (!picker.inputReady) {
+                return
+            }
+
             picker.picked(Math.round(mouse.x), Math.round(mouse.y))
             picker.finish()
         }
