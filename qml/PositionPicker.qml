@@ -2,26 +2,47 @@ import QtQuick
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
 
-Window {
+Item {
     id: picker
+
+    required property Window hostWindow
+    property int previousVisibility: Window.Windowed
 
     signal picked(int x, int y)
 
-    function begin(targetScreen) {
-        // A transient dialog is not reliably promoted to fullscreen by all
-        // Wayland compositors. Use a separate modal window on the same screen
-        // as the main window and explicitly activate it.
-        picker.screen = targetScreen
-        picker.showFullScreen()
-        picker.raise()
-        picker.requestActivate()
+    function begin() {
+        if (picker.visible) {
+            return
+        }
+
+        previousVisibility = hostWindow.visibility
+        picker.visible = true
+        hostWindow.showFullScreen()
+        hostWindow.raise()
+        hostWindow.requestActivate()
+        picker.forceActiveFocus()
     }
 
-    color: "#99151a20"
-    flags: Qt.Window | Qt.FramelessWindowHint
-    modality: Qt.ApplicationModal
-    transientParent: null
-    title: qsTr("Position wählen")
+    function finish() {
+        picker.visible = false
+
+        if (previousVisibility === Window.Maximized) {
+            hostWindow.showMaximized()
+        } else if (previousVisibility === Window.FullScreen) {
+            hostWindow.showFullScreen()
+        } else {
+            hostWindow.showNormal()
+        }
+    }
+
+    visible: false
+    z: 10000
+    focus: visible
+
+    Rectangle {
+        anchors.fill: parent
+        color: "#e6151a20"
+    }
 
     Rectangle {
         anchors.centerIn: parent
@@ -46,12 +67,13 @@ Window {
         cursorShape: Qt.CrossCursor
         onClicked: function(mouse) {
             picker.picked(Math.round(mouse.x), Math.round(mouse.y))
-            picker.close()
+            picker.finish()
         }
     }
 
     Shortcut {
+        enabled: picker.visible
         sequence: StandardKey.Cancel
-        onActivated: picker.close()
+        onActivated: picker.finish()
     }
 }

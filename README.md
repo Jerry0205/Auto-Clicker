@@ -13,7 +13,7 @@ Rust übernimmt Validierung, Zustandsautomat, Scheduler und Portalzugriffe. Qt 6
 - Einfach- und Doppelklick
 - bis zum Stoppen oder feste Anzahl
 - aktuelle Cursorposition oder feste Position
-- Wayland-konformer Vollbild-Positionspicker
+- Wayland-konformer Vollbild-Positionspicker im Hauptfenster
 - globaler Start/Stop-Hotkey, bevorzugt Pause
 - Stop-Button, Hotkey und vollständiger Shutdown beim Fensterschließen
 - kleine TOML-Konfiguration ohne Nutzungsdaten
@@ -102,7 +102,7 @@ Enthalten sind nur Intervall, Maustaste, Klicktyp, Wiederholung, feste Koordinat
 
 ## Bekannte Wayland-Grenzen
 
-- Der Positionspicker öffnet ein eigenes Vollbildfenster auf dem Monitor des Hauptfensters. Wayland erlaubt Anwendungen nicht, den globalen Cursor außerhalb eigener Oberflächen heimlich abzufragen.
+- Der Positionspicker schaltet das Hauptfenster vorübergehend auf dem aktuellen Monitor in den Vollbildmodus. Wayland erlaubt Anwendungen nicht, den globalen Cursor außerhalb eigener Oberflächen heimlich abzufragen.
 - Die festen X/Y-Koordinaten beziehen sich auf den im Portal ausgewählten Monitor, nicht auf einen ungeschützten globalen Desktop-Koordinatenraum.
 - Die Portal-Dialoge können nicht von der Anwendung umgangen werden. Das ist ein Sicherheitsmerkmal.
 - Das Projekt besitzt absichtlich kein X11-/`xdotool`-Fallback.
