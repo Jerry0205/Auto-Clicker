@@ -7,8 +7,20 @@ Window {
 
     signal picked(int x, int y)
 
+    function begin(targetScreen) {
+        // A transient dialog is not reliably promoted to fullscreen by all
+        // Wayland compositors. Use a separate modal window on the same screen
+        // as the main window and explicitly activate it.
+        picker.screen = targetScreen
+        picker.showFullScreen()
+        picker.raise()
+        picker.requestActivate()
+    }
+
     color: "#99151a20"
     flags: Qt.Window | Qt.FramelessWindowHint
+    modality: Qt.ApplicationModal
+    transientParent: null
     title: qsTr("Position wählen")
 
     Rectangle {
@@ -30,6 +42,7 @@ Window {
 
     MouseArea {
         anchors.fill: parent
+        acceptedButtons: Qt.AllButtons
         cursorShape: Qt.CrossCursor
         onClicked: function(mouse) {
             picker.picked(Math.round(mouse.x), Math.round(mouse.y))
