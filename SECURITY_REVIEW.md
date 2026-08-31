@@ -57,7 +57,7 @@ Direkt: `ashpd`, `cxx`, `cxx-qt`, `cxx-qt-lib`, `futures-util`, `serde`, `thiser
 
 `cargo tree --locked` wurde für diesen Stand erfolgreich ausgeführt. `cargo-audit` war im Prüfsystem nicht installiert; entsprechend wurde nichts ungefragt installiert. Nach Installation des Arch-Pakets `cargo-audit` ist `cargo audit` der dokumentierte Prüfbefehl.
 
-CXX-Qt erzeugt die notwendige Qt-FFI und enthält intern `unsafe`; der handgeschriebene Scheduler-, Konfigurations- und Portalcode enthält keine `unsafe`-Blöcke. `rg -n '\bunsafe\b' src` zeigt ausschließlich die von CXX verlangte `unsafe extern "C++"`-Deklaration.
+CXX-Qt erzeugt die notwendige Qt-FFI und enthält intern `unsafe`; der handgeschriebene Scheduler-, Konfigurations- und Portalcode enthält keine `unsafe`-Blöcke. Die beiden `unsafe extern "C++"`-Deklarationen in `controller.rs` und `qml_runtime.rs` sind ausschließlich typisierte CXX-Brücken zu Qt. Der kleine QML-Ladehelfer liest nur `QQmlApplicationEngine::rootObjects().isEmpty()` und verändert keinen fremden Zustand.
 
 ## 9. Mögliche Sicherheitsrisiken
 
