@@ -1,0 +1,36 @@
+[package]
+name = "klickmeister"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A small, safe auto clicker for KDE Plasma Wayland"
+license = "MIT"
+repository = "https://github.com/jerry0205/Auto-Clicker"
+build = "build.rs"
+
+[dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "remote_desktop", "screencast", "global_shortcuts"] }
+cxx = "1.0.194"
+cxx-qt = "0.10.0"
+cxx-qt-lib = { version = "0.10.0", features = ["qt_full"] }
+futures-util = "0.3.31"
+serde = { version = "1.0.219", features = ["derive"] }
+thiserror = "2.0.16"
+tokio = { version = "1.47.1", features = ["macros", "rt", "sync", "time"] }
+toml = "0.9.5"
+
+[build-dependencies]
+cxx-qt-build = { version = "0.10.0", features = ["link_qt_object_files"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"

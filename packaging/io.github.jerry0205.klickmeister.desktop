@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Klickmeister
+GenericName=Auto Clicker
+Comment=Safe auto clicker for KDE Plasma Wayland
+Comment[de]=Sicherer Auto Clicker für KDE Plasma Wayland
+Exec=klickmeister
+Icon=io.github.jerry0205.klickmeister
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=click;mouse;automation;wayland;
+Keywords[de]=Klick;Maus;Automatisierung;Wayland;
+StartupNotify=true
+DBusActivatable=false
+X-KDE-FormFactor=desktop

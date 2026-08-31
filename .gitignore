@@ -1,0 +1,8 @@
+/target/
+/pkg/
+/srcpkg/
+/*.pkg.tar.*
+/*.log
+/.idea/
+/.vscode/
+

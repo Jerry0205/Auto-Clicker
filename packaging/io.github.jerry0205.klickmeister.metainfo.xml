@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.jerry0205.klickmeister</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Klickmeister</name>
+  <summary>A small, safe auto clicker for KDE Plasma Wayland</summary>
+  <summary xml:lang="de">Ein kleiner, sicherer Auto Clicker für KDE Plasma Wayland</summary>
+  <description>
+    <p>Klickmeister generates rate-limited mouse clicks through the XDG Desktop Portal. It has no network access, daemon, autostart, telemetry, or privileged device access.</p>
+    <p xml:lang="de">Klickmeister erzeugt begrenzte Mausklicks über das XDG Desktop Portal. Die Anwendung besitzt keinen Netzwerkzugriff, Daemon, Autostart, Telemetrie oder privilegierten Gerätezugriff.</p>
+  </description>
+  <launchable type="desktop-id">io.github.jerry0205.klickmeister.desktop</launchable>
+  <developer id="io.github.jerry0205">
+    <name>Klickmeister contributors</name>
+  </developer>
+  <provides>
+    <binary>klickmeister</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">460</display_length>
+  </requires>
+  <content_rating type="oars-1.1" />
+  <url type="homepage">https://github.com/jerry0205/Auto-Clicker</url>
+  <releases>
+    <release version="0.1.0" date="2026-08-31" />
+  </releases>
+</component>
