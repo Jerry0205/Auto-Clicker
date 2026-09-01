@@ -25,7 +25,7 @@ Klickmeister ist aktuell für Arch Linux und darauf basierende Systeme wie Cachy
 Zuerst werden die benötigten Pakete installiert:
 
 ```bash
-sudo pacman -S rust cargo clang lld pkgconf qt6-base qt6-declarative qt6-tools kirigami xdg-desktop-portal xdg-desktop-portal-kde
+sudo pacman -S git rust cargo clang lld pkgconf qt6-base qt6-declarative qt6-tools kirigami xdg-desktop-portal xdg-desktop-portal-kde
 ```
 
 Danach kannst du das Projekt herunterladen und installieren:
