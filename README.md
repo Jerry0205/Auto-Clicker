@@ -11,6 +11,7 @@ Du entscheidest, wie geklickt werden soll:
 - linke, rechte oder mittlere Maustaste
 - Einzel- oder Doppelklick
 - an der aktuellen Mausposition oder an einer festen Stelle
+- feste Positionen per Vollbild-Positionswähler auf einem ausgewählten Bildschirm
 - so lange, bis du stoppst, oder nur eine bestimmte Anzahl
 - langsam oder bis zu 100 Klicks pro Sekunde
 
@@ -46,7 +47,7 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 4. Starte den Klicker mit dem Hotkey.
 5. Drücke den Hotkey erneut, um ihn zu stoppen.
 
-Wenn du eine feste Position verwenden möchtest, hilft dir der Positionswähler dabei. KDE fragt dich außerdem, auf welchem Bildschirm geklickt werden darf.
+Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Beim Start fragt KDE, auf welchem Bildschirm geklickt werden darf. Wähle dort denselben Bildschirm aus.
 
 ## Warum fragt KDE nach Berechtigungen?
 
@@ -66,7 +67,7 @@ Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So
 
 - Das kleinste Intervall beträgt 10 Millisekunden. Mehr als 100 Klicks pro Sekunde sind nicht möglich.
 - Eine feste Position gilt immer für den Bildschirm, den du im KDE-Dialog ausgewählt hast.
-- Der Positionswähler öffnet sich auf dem aktuellen Bildschirm im Vollbild.
+- Der Positionswähler öffnet sich auf dem Bildschirm, den du zuvor in Klickmeister ausgewählt hast.
 - Klickmeister ist nur für Wayland gedacht. Ein X11- oder `xdotool`-Ersatz ist nicht eingebaut.
 - Gespeichert werden nur deine Einstellungen. Es gibt keine Statistiken, keine Nutzungsdaten und keine Telemetrie.
 

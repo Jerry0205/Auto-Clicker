@@ -8,6 +8,33 @@ Kirigami.ApplicationWindow {
     id: root
 
     property bool smokeTest: false
+    property bool monitorSelectionReady: false
+    property var selectedMonitor: null
+
+    function ensureMonitorSelection() {
+        if (!monitorSelectionReady) {
+            return
+        }
+
+        const screens = Qt.application.screens
+        for (let index = 0; index < screens.length; ++index) {
+            if (screens[index] === selectedMonitor) {
+                monitorInput.currentIndex = index
+                return
+            }
+        }
+
+        for (let index = 0; index < screens.length; ++index) {
+            if (screens[index] === root.screen) {
+                selectedMonitor = screens[index]
+                monitorInput.currentIndex = index
+                return
+            }
+        }
+
+        selectedMonitor = screens.length > 0 ? screens[0] : null
+        monitorInput.currentIndex = screens.length > 0 ? 0 : -1
+    }
 
     width: 520
     height: 720
@@ -22,7 +49,6 @@ Kirigami.ApplicationWindow {
 
     PositionPicker {
         id: positionPicker
-        anchors.fill: parent
         hostWindow: root
         onPicked: function(x, y) {
             controller.fixed_x = x
@@ -31,12 +57,22 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    Connections {
+        target: controller
+
+        function onFixed_xChanged() { xInput.value = controller.fixed_x }
+        function onFixed_yChanged() { yInput.value = controller.fixed_y }
+    }
+
     Component.onCompleted: {
+        ensureMonitorSelection()
         if (!smokeTest) {
             controller.initialize()
         }
     }
+    onScreenChanged: ensureMonitorSelection()
     onClosing: function(close) {
+        positionPicker.finish()
         controller.shutdown()
         close.accepted = true
     }
@@ -169,6 +205,7 @@ Kirigami.ApplicationWindow {
                         enabled: !controller.current_position && !controller.running && !controller.busy
                         Controls.Label { text: qsTr("X") }
                         Controls.SpinBox {
+                            id: xInput
                             Layout.fillWidth: true
                             from: 0
                             to: 100000
@@ -178,6 +215,7 @@ Kirigami.ApplicationWindow {
                         }
                         Controls.Label { text: qsTr("Y") }
                         Controls.SpinBox {
+                            id: yInput
                             Layout.fillWidth: true
                             from: 0
                             to: 100000
@@ -186,19 +224,42 @@ Kirigami.ApplicationWindow {
                             onValueModified: controller.fixed_y = value
                         }
                     }
+                    RowLayout {
+                        enabled: !controller.current_position && !controller.running && !controller.busy
+                        Controls.Label { text: qsTr("Monitor") }
+                        Controls.ComboBox {
+                            id: monitorInput
+                            Layout.fillWidth: true
+                            model: Qt.application.screens
+                            textRole: "name"
+                            Component.onCompleted: {
+                                root.monitorSelectionReady = true
+                                root.ensureMonitorSelection()
+                            }
+                            onActivated: root.selectedMonitor = Qt.application.screens[currentIndex]
+                            Accessible.name: qsTr("Monitor für die feste Position")
+                        }
+                    }
                     Controls.Button {
                         Layout.fillWidth: true
                         enabled: !controller.current_position && !controller.running && !controller.busy
                         text: qsTr("Position auf dem Bildschirm auswählen …")
                         icon.name: "crosshairs"
-                        onClicked: positionPicker.begin()
+                        onClicked: {
+                            const screens = Qt.application.screens
+                            const selectedScreen = monitorInput.currentIndex >= 0
+                                && monitorInput.currentIndex < screens.length
+                                ? screens[monitorInput.currentIndex]
+                                : root.screen
+                            positionPicker.begin(selectedScreen)
+                        }
                     }
                     Controls.Label {
                         Layout.fillWidth: true
                         visible: !controller.current_position
                         wrapMode: Text.WordWrap
                         color: Kirigami.Theme.disabledTextColor
-                        text: qsTr("Koordinaten sind relativ zum gewählten Monitor. Beim Start bestätigt KWin einmalig Monitor- und Zeigerzugriff.")
+                        text: qsTr("Koordinaten sind relativ zum oben gewählten Monitor. Wähle beim Start im KWin-Dialog denselben Monitor aus.")
                     }
                 }
             }
