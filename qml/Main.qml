@@ -27,9 +27,14 @@ Kirigami.ApplicationWindow {
             controller.fixed_x = x
             controller.fixed_y = y
             controller.current_position = false
-            xInput.value = x
-            yInput.value = y
         }
+    }
+
+    Connections {
+        target: controller
+
+        function onFixedXChanged() { xInput.value = controller.fixed_x }
+        function onFixedYChanged() { yInput.value = controller.fixed_y }
     }
 
     Component.onCompleted: {
