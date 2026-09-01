@@ -10,6 +10,7 @@ Kirigami.ApplicationWindow {
     property bool smokeTest: false
     property bool monitorSelectionReady: false
     property var selectedMonitor: null
+    property var positionPicker: null
 
     function ensureMonitorSelection() {
         if (!monitorSelectionReady) {
@@ -47,13 +48,21 @@ Kirigami.ApplicationWindow {
         id: controller
     }
 
-    PositionPicker {
-        id: positionPicker
-        hostWindow: root
-        onPicked: function(x, y) {
-            controller.fixed_x = x
-            controller.fixed_y = y
-            controller.current_position = false
+    Component {
+        id: positionPickerComponent
+
+        PositionPicker {
+            hostWindow: root
+            onPicked: function(x, y) {
+                controller.fixed_x = x
+                controller.fixed_y = y
+                controller.current_position = false
+            }
+            onFinished: {
+                const finishedPicker = root.positionPicker
+                root.positionPicker = null
+                finishedPicker.destroy()
+            }
         }
     }
 
@@ -72,7 +81,9 @@ Kirigami.ApplicationWindow {
     }
     onScreenChanged: ensureMonitorSelection()
     onClosing: function(close) {
-        positionPicker.finish()
+        if (positionPicker) {
+            positionPicker.finish()
+        }
         controller.shutdown()
         close.accepted = true
     }
@@ -251,7 +262,12 @@ Kirigami.ApplicationWindow {
                                 && monitorInput.currentIndex < screens.length
                                 ? screens[monitorInput.currentIndex]
                                 : root.screen
-                            positionPicker.begin(selectedScreen)
+                            positionPicker = positionPickerComponent.createObject(root, {
+                                "screen": selectedScreen
+                            })
+                            if (positionPicker) {
+                                positionPicker.begin()
+                            }
                         }
                     }
                     Controls.Label {

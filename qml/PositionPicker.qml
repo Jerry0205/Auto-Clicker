@@ -9,13 +9,13 @@ Window {
     property bool inputReady: false
 
     signal picked(int x, int y)
+    signal finished()
 
-    function begin(targetScreen) {
+    function begin() {
         if (picker.visible) {
             return
         }
 
-        picker.screen = targetScreen || hostWindow.screen
         inputReady = false
         picker.showFullScreen()
         picker.raise()
@@ -37,6 +37,7 @@ Window {
     function finish() {
         inputReady = false
         picker.hide()
+        picker.finished()
     }
 
     visible: false
