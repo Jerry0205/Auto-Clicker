@@ -2,27 +2,25 @@ import QtQuick
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
 
-Item {
+Window {
     id: picker
 
     required property Window hostWindow
-    property int previousVisibility: Window.Windowed
     property bool inputReady: false
 
     signal picked(int x, int y)
 
-    function begin() {
+    function begin(targetScreen) {
         if (picker.visible) {
             return
         }
 
-        previousVisibility = hostWindow.visibility
+        picker.screen = targetScreen || hostWindow.screen
         inputReady = false
-        picker.visible = true
-        hostWindow.showFullScreen()
-        hostWindow.raise()
-        hostWindow.requestActivate()
-        picker.forceActiveFocus()
+        picker.showFullScreen()
+        picker.raise()
+        picker.requestActivate()
+        picker.contentItem.forceActiveFocus()
         updateInputReady()
     }
 
@@ -31,34 +29,23 @@ Item {
             return
         }
 
-        inputReady = hostWindow.visibility === Window.FullScreen
-            && hostWindow.width === hostWindow.screen.width
-            && hostWindow.height === hostWindow.screen.height
+        inputReady = picker.visibility === Window.FullScreen
+            && picker.width === picker.screen.width
+            && picker.height === picker.screen.height
     }
 
     function finish() {
-        picker.visible = false
         inputReady = false
-
-        if (previousVisibility === Window.Maximized) {
-            hostWindow.showMaximized()
-        } else if (previousVisibility === Window.FullScreen) {
-            hostWindow.showFullScreen()
-        } else {
-            hostWindow.showNormal()
-        }
+        picker.hide()
     }
 
     visible: false
-    z: 10000
-    focus: visible
-    Keys.onEscapePressed: function(event) {
-        picker.finish()
-        event.accepted = true
-    }
+    transientParent: null
+    flags: Qt.FramelessWindowHint
+    color: "transparent"
 
     Connections {
-        target: picker.hostWindow
+        target: picker
 
         function onHeightChanged() { picker.updateInputReady() }
         function onVisibilityChanged() { picker.updateInputReady() }
