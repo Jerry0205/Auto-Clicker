@@ -7,6 +7,7 @@ Window {
 
     required property Window hostWindow
     property bool inputReady: false
+    property bool finishing: false
 
     signal picked(int x, int y)
     signal finished()
@@ -35,6 +36,11 @@ Window {
     }
 
     function finish() {
+        if (finishing) {
+            return
+        }
+
+        finishing = true
         inputReady = false
         picker.hide()
         picker.finished()
@@ -44,6 +50,11 @@ Window {
     transientParent: null
     flags: Qt.FramelessWindowHint
     color: "transparent"
+
+    onClosing: function(close) {
+        close.accepted = false
+        picker.finish()
+    }
 
     Connections {
         target: picker

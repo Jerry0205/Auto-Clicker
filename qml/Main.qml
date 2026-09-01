@@ -52,6 +52,7 @@ Kirigami.ApplicationWindow {
         id: positionPickerComponent
 
         PositionPicker {
+            id: picker
             hostWindow: root
             onPicked: function(x, y) {
                 controller.fixed_x = x
@@ -59,9 +60,10 @@ Kirigami.ApplicationWindow {
                 controller.current_position = false
             }
             onFinished: {
-                const finishedPicker = root.positionPicker
-                root.positionPicker = null
-                finishedPicker.destroy()
+                if (root.positionPicker === picker) {
+                    root.positionPicker = null
+                }
+                picker.destroy()
             }
         }
     }
@@ -257,16 +259,21 @@ Kirigami.ApplicationWindow {
                         text: qsTr("Position auf dem Bildschirm auswählen …")
                         icon.name: "crosshairs"
                         onClicked: {
+                            if (positionPicker) {
+                                return
+                            }
+
                             const screens = Qt.application.screens
                             const selectedScreen = monitorInput.currentIndex >= 0
                                 && monitorInput.currentIndex < screens.length
                                 ? screens[monitorInput.currentIndex]
                                 : root.screen
-                            positionPicker = positionPickerComponent.createObject(root, {
+                            const picker = positionPickerComponent.createObject(root, {
                                 "screen": selectedScreen
                             })
-                            if (positionPicker) {
-                                positionPicker.begin()
+                            if (picker) {
+                                positionPicker = picker
+                                picker.begin()
                             }
                         }
                     }
