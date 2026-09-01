@@ -8,6 +8,21 @@ Kirigami.ApplicationWindow {
     id: root
 
     property bool smokeTest: false
+    property bool monitorSelectionReady: false
+
+    function selectWindowScreen() {
+        if (!monitorSelectionReady || !root.screen) {
+            return
+        }
+
+        const screens = Qt.application.screens
+        for (let index = 0; index < screens.length; ++index) {
+            if (screens[index] === root.screen) {
+                monitorInput.currentIndex = index
+                return
+            }
+        }
+    }
 
     width: 520
     height: 720
@@ -33,15 +48,17 @@ Kirigami.ApplicationWindow {
     Connections {
         target: controller
 
-        function onFixedXChanged() { xInput.value = controller.fixed_x }
-        function onFixedYChanged() { yInput.value = controller.fixed_y }
+        function onFixed_xChanged() { xInput.value = controller.fixed_x }
+        function onFixed_yChanged() { yInput.value = controller.fixed_y }
     }
 
     Component.onCompleted: {
+        selectWindowScreen()
         if (!smokeTest) {
             controller.initialize()
         }
     }
+    onScreenChanged: selectWindowScreen()
     onClosing: function(close) {
         positionPicker.finish()
         controller.shutdown()
@@ -203,15 +220,9 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             model: Qt.application.screens
                             textRole: "name"
-
                             Component.onCompleted: {
-                                const screens = Qt.application.screens
-                                for (let index = 0; index < screens.length; ++index) {
-                                    if (screens[index] === root.screen) {
-                                        currentIndex = index
-                                        break
-                                    }
-                                }
+                                root.monitorSelectionReady = true
+                                root.selectWindowScreen()
                             }
                             Accessible.name: qsTr("Monitor für die feste Position")
                         }
