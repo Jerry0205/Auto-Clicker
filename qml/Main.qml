@@ -38,6 +38,7 @@ Kirigami.ApplicationWindow {
         }
     }
     onClosing: function(close) {
+        positionPicker.finish()
         controller.shutdown()
         close.accepted = true
     }
