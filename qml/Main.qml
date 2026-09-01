@@ -9,19 +9,31 @@ Kirigami.ApplicationWindow {
 
     property bool smokeTest: false
     property bool monitorSelectionReady: false
+    property var selectedMonitor: null
 
-    function selectWindowScreen() {
-        if (!monitorSelectionReady || !root.screen) {
+    function ensureMonitorSelection() {
+        if (!monitorSelectionReady) {
             return
         }
 
         const screens = Qt.application.screens
         for (let index = 0; index < screens.length; ++index) {
-            if (screens[index] === root.screen) {
+            if (screens[index] === selectedMonitor) {
                 monitorInput.currentIndex = index
                 return
             }
         }
+
+        for (let index = 0; index < screens.length; ++index) {
+            if (screens[index] === root.screen) {
+                selectedMonitor = screens[index]
+                monitorInput.currentIndex = index
+                return
+            }
+        }
+
+        selectedMonitor = screens.length > 0 ? screens[0] : null
+        monitorInput.currentIndex = screens.length > 0 ? 0 : -1
     }
 
     width: 520
@@ -53,12 +65,12 @@ Kirigami.ApplicationWindow {
     }
 
     Component.onCompleted: {
-        selectWindowScreen()
+        ensureMonitorSelection()
         if (!smokeTest) {
             controller.initialize()
         }
     }
-    onScreenChanged: selectWindowScreen()
+    onScreenChanged: ensureMonitorSelection()
     onClosing: function(close) {
         positionPicker.finish()
         controller.shutdown()
@@ -222,8 +234,9 @@ Kirigami.ApplicationWindow {
                             textRole: "name"
                             Component.onCompleted: {
                                 root.monitorSelectionReady = true
-                                root.selectWindowScreen()
+                                root.ensureMonitorSelection()
                             }
+                            onActivated: root.selectedMonitor = Qt.application.screens[currentIndex]
                             Accessible.name: qsTr("Monitor für die feste Position")
                         }
                     }
