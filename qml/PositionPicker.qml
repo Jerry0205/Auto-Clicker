@@ -12,6 +12,7 @@ Window {
     property bool inputReady: false
     property bool selecting: false
     property bool previewOnly: false
+    property bool positionPinned: false
     property bool waitingForScreenshot: false
     property int targetX: 0
     property int targetY: 0
@@ -36,10 +37,16 @@ Window {
     function begin(targetScreen, x, y, preview, magnifier) {
         if (selecting || !targetScreen) return
         captureId += 1
-        // Main creates a fresh native window with its screen set before begin().
+        // Set geometry as well as screen before creating the native surface:
+        // Qt Wayland uses the initial geometry to select the fullscreen output.
         screen = targetScreen
+        picker.x = targetScreen.virtualX
+        picker.y = targetScreen.virtualY
+        picker.width = targetScreen.width
+        picker.height = targetScreen.height
         hostVisibility = hostWindow.visibility
         previewOnly = preview
+        positionPinned = false
         selecting = true
         inputReady = false
         captureError = ""
@@ -57,9 +64,9 @@ Window {
             const bottom = Math.max(desktopBounds.y + desktopBounds.height, s.virtualY + s.height)
             desktopBounds = Qt.rect(left, top, right - left, bottom - top)
         }
-        hostWindow.hide()
         waitingForScreenshot = magnifier && !preview
         if (waitingForScreenshot) {
+            hostWindow.hide()
             captureDelay.start()
             captureFallback.start()
         }
@@ -71,9 +78,17 @@ Window {
         showFullScreen()
         raise()
         requestActivate()
-        keyboard.forceActiveFocus()
+        focusSelection()
         updateInputReady()
         if (previewOnly) previewTimer.start()
+    }
+
+    // KWin grants activation asynchronously. Keep the host mapped until the
+    // picker owns focus, rather than letting another application take it first.
+    function focusSelection() {
+        if (!selecting || !visible || !active) return
+        keyboard.forceActiveFocus()
+        hostWindow.hide()
     }
 
     function acceptScreenshot(requestId, uri, error) {
@@ -90,6 +105,12 @@ Window {
         inputReady = selecting && visible && visibility === Window.FullScreen
             && width === screen.width && height === screen.height
         if (inputReady) setTarget(targetX, targetY)
+    }
+
+    function moveTarget(dx, dy) {
+        if (!inputReady || previewOnly) return
+        positionPinned = true
+        setTarget(targetX + dx, targetY + dy)
     }
 
     function confirm() {
@@ -123,6 +144,15 @@ Window {
     transientParent: null
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     color: "transparent"
+    onActiveChanged: {
+        updateInputReady()
+        focusSelection()
+    }
+    onVisibleChanged: {
+        updateInputReady()
+        focusSelection()
+    }
+    onScreenChanged: updateInputReady()
     onClosing: function(close) { close.accepted = false; finish() }
 
     Timer { id: captureDelay; interval: 250; onTriggered: picker.screenshotRequested(picker.captureId) }
@@ -180,13 +210,20 @@ Window {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: picker.inputReady ? Qt.CrossCursor : Qt.BusyCursor
         onPositionChanged: function(mouse) {
-            if (picker.inputReady && !picker.previewOnly) picker.setTarget(mouse.x, mouse.y)
+            if (picker.inputReady && !picker.previewOnly && !picker.positionPinned) picker.setTarget(mouse.x, mouse.y)
+        }
+        onPressed: function(mouse) {
+            if (mouse.button === Qt.LeftButton) {
+                if (!picker.active) picker.requestActivate()
+                keyboard.forceActiveFocus()
+                picker.focusSelection()
+            }
         }
         onClicked: function(mouse) {
             if (mouse.button === Qt.RightButton || picker.previewOnly) picker.finish()
-            else {
+            else if (picker.inputReady) {
                 picker.setTarget(mouse.x, mouse.y)
-                picker.confirm()
+                picker.positionPinned = true
             }
         }
     }
@@ -245,31 +282,25 @@ Window {
             horizontalAlignment: Text.AlignHCenter
             text: picker.previewOnly
                 ? qsTr("Zielposition · X: %1 · Y: %2").arg(picker.targetX).arg(picker.targetY)
-                : qsTr("%1 · X: %2 · Y: %3\nKlicken / Enter: übernehmen · Pfeiltasten: 1 Schritt · Umschalt: 10 · Esc / Rechtsklick: abbrechen")
+                : !picker.inputReady ? qsTr("Vollbild wird vorbereitet … · Esc: abbrechen")
+                : qsTr("%1 · X: %2 · Y: %3\nKlicken: Ziel setzen · Enter: übernehmen · Pfeiltasten: 1 Schritt · Umschalt: 10 · Esc / Rechtsklick: abbrechen")
                     .arg(monitors.displayName(picker.screen, Qt.application.screens)).arg(picker.targetX).arg(picker.targetY)
                     + (picker.magnifierReady ? qsTr("\nLupe 4× · Standbild") : "")
                     + (picker.captureError.length ? "\n" + picker.captureError : "")
         }
     }
 
-    Shortcut { enabled: picker.visible; sequence: StandardKey.Cancel; onActivated: picker.finish() }
-    Item {
-        id: keyboard
-        anchors.fill: parent
-        focus: true
-        Keys.onPressed: function(event) {
-            if (!picker.inputReady || picker.previewOnly) return
-            const step = event.modifiers & Qt.ShiftModifier ? 10 : 1
-            switch (event.key) {
-            case Qt.Key_Left: picker.setTarget(picker.targetX - step, picker.targetY); break
-            case Qt.Key_Right: picker.setTarget(picker.targetX + step, picker.targetY); break
-            case Qt.Key_Up: picker.setTarget(picker.targetX, picker.targetY - step); break
-            case Qt.Key_Down: picker.setTarget(picker.targetX, picker.targetY + step); break
-            case Qt.Key_Return:
-            case Qt.Key_Enter: picker.confirm(); break
-            default: return
-            }
-            event.accepted = true
-        }
-    }
+    Shortcut { enabled: picker.visible; sequences: [StandardKey.Cancel]; onActivated: picker.finish() }
+    // Window shortcuts work even when Wayland changes the focused Quick item.
+    // Keep them scoped to this window so they cannot affect the host controls.
+    Item { id: keyboard; focus: true }
+    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequences: ["Return", "Enter"]; context: Qt.WindowShortcut; onActivated: picker.confirm() }
+    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-1, 0) }
+    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(1, 0) }
+    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -1) }
+    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 1) }
+    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-10, 0) }
+    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(10, 0) }
+    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -10) }
+    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 10) }
 }

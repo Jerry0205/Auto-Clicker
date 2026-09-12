@@ -16,14 +16,15 @@ TestCase {
     SignalSpy { id: picked; target: picker; signalName: "picked" }
 
     function init() { picked.clear(); cancelled.clear(); finished.clear(); host.show() }
-    function cleanup() { testCase.parent = null; picker.finish(); picked.clear() }
+    function cleanup() { picker.finish(); picked.clear() }
     function begin() {
+        host.requestActivate()
+        tryVerify(function() { return host.active })
         picker.begin(host.screen, 100, 150, false, false)
         tryCompare(picker, "inputReady", true)
-        compare(host.visible, false)
-        testCase.parent = picker.contentItem
         tryVerify(function() { return picker.active })
         wait(20)
+        tryCompare(host, "visible", false)
         picker.setTarget(100, 150)
     }
 
@@ -39,6 +40,39 @@ TestCase {
         compare(picked.signalArguments[0][1], 160)
         compare(picker.visible, false)
         compare(host.visible, true)
+    }
+
+    function test_click_then_keyboard_adjustment_keeps_picker_open() {
+        begin()
+        mouseClick(picker.contentItem, 120, 180)
+        compare(picked.count, 0)
+        verify(picker.visible)
+        compare(picker.targetX, 120)
+        compare(picker.targetY, 180)
+        mouseMove(picker.contentItem, 300, 300)
+        compare(picker.targetX, 120)
+        compare(picker.targetY, 180)
+        keyClick(Qt.Key_Right)
+        keyClick(Qt.Key_Up)
+        compare(picker.targetX, 121)
+        compare(picker.targetY, 179)
+        keyClick(Qt.Key_Return)
+        compare(picked.count, 1)
+        compare(picked.signalArguments[0][0], 121)
+        compare(picked.signalArguments[0][1], 179)
+        compare(host.visible, true)
+    }
+
+    function test_click_recovers_keyboard_focus() {
+        begin()
+        const other = Qt.createQmlObject('import QtQuick; Item { focus: true }', picker.contentItem)
+        other.forceActiveFocus()
+        mouseClick(picker.contentItem, 120, 180)
+        keyClick(Qt.Key_Right)
+        compare(picker.targetX, 121)
+        keyClick(Qt.Key_Return)
+        compare(picked.count, 1)
+        other.destroy()
     }
 
     function test_cancel_does_not_pick() {
@@ -60,8 +94,39 @@ TestCase {
         compare(picker.targetY, picker.height - 1)
         verify(!picker.hintAtBottom)
         mouseClick(picker.contentItem, picker.width / 2, 25)
+        compare(picked.count, 0)
+        verify(picker.visible)
+        keyClick(Qt.Key_Return)
         compare(picked.count, 1)
         compare(picked.signalArguments[0][1], 25)
+    }
+
+    function test_fresh_picker_transfers_focus_and_returns_coordinates_on_each_monitor() {
+        const component = Qt.createComponent("../../qml/PositionPicker.qml")
+        compare(component.status, Component.Ready)
+        const screens = Qt.application.screens
+        for (let i = 0; i < screens.length; ++i) {
+            host.show()
+            host.requestActivate()
+            tryVerify(function() { return host.active })
+            const fresh = createTemporaryObject(component, host, { hostWindow: host, screen: screens[i] })
+            verify(fresh !== null)
+            let result = null
+            fresh.picked.connect(function(x, y) { result = { x: x, y: y } })
+            fresh.begin(screens[i], 40, 50, false, false)
+            tryCompare(fresh, "inputReady", true)
+            tryVerify(function() { return fresh.active })
+            compare(fresh.screen.name, screens[i].name)
+            tryCompare(host, "visible", false)
+            mouseClick(fresh.contentItem, 140, 160)
+            verify(fresh.visible)
+            keyClick(Qt.Key_Right)
+            keyClick(Qt.Key_Return)
+            compare(result.x, 141)
+            compare(result.y, 160)
+            fresh.destroy()
+            compare(host.visible, true)
+        }
     }
 
     function test_preview_does_not_modify_position() {
@@ -80,7 +145,6 @@ TestCase {
         tryCompare(picker, "inputReady", true)
         verify(picker.captureError.length > 0)
         verify(!picker.magnifierReady)
-        testCase.parent = picker.contentItem
         tryVerify(function() { return picker.active })
         wait(20)
         keyClick(Qt.Key_Return)
@@ -97,7 +161,6 @@ TestCase {
         compare(cancelled.signalArguments[0][0], requestId)
         picker.acceptScreenshot(requestId, "", "late response")
         verify(picker.captureError.indexOf("zu lange") >= 0)
-        testCase.parent = picker.contentItem
         tryVerify(function() { return picker.active })
         wait(20)
         keyClick(Qt.Key_Escape)

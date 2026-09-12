@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Run against an isolated KWin compositor; never change the running desktop.
+set -euo pipefail
+
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+qml_runner="${QMLTESTRUNNER:-/usr/lib/qt6/bin/qmltestrunner}"
+for dependency in kwin_wayland kscreen-doctor dbus-run-session timeout "$qml_runner"; do
+  command -v "$dependency" >/dev/null || { printf 'Missing dependency: %s\n' "$dependency" >&2; exit 1; }
+done
+
+test_dir="$(mktemp -d)"
+trap 'rm -rf -- "$test_dir"' EXIT
+mkdir -m 700 "$test_dir/runtime" "$test_dir/config"
+export PICKER_TEST_DIR="$test_dir" PICKER_TEST_REPO="$repo_dir" PICKER_TEST_RUNNER="$qml_runner"
+cat > "$test_dir/run.sh" <<'SESSION'
+#!/usr/bin/env bash
+set -euo pipefail
+export QT_QPA_PLATFORM=wayland QT_QUICK_BACKEND=software
+kscreen-doctor output.Virtual-0.position.0,1080 output.Virtual-1.position.1920,1080 output.Virtual-2.position.0,0 > "$PICKER_TEST_DIR/outputs.log" 2>&1
+"$PICKER_TEST_RUNNER" -input "$PICKER_TEST_REPO/tests/qml" > "$PICKER_TEST_DIR/tests.log" 2>&1
+SESSION
+chmod +x "$test_dir/run.sh"
+status=0
+timeout 60s dbus-run-session -- env \
+  XDG_RUNTIME_DIR="$test_dir/runtime" XDG_CONFIG_HOME="$test_dir/config" \
+  QT_QPA_PLATFORM=offscreen KWIN_COMPOSE=Q \
+  kwin_wayland --virtual --width 1920 --height 1080 --scale 1 --output-count 3 \
+  --no-lockscreen --no-global-shortcuts --no-kactivities \
+  --exit-with-session "$test_dir/run.sh" > "$test_dir/kwin.log" 2>&1 || status=$?
+if [[ -f "$test_dir/tests.log" ]]; then cat "$test_dir/tests.log"; fi
+if ((status != 0)); then
+  cat "$test_dir/kwin.log" >&2
+  if [[ -f "$test_dir/outputs.log" ]]; then cat "$test_dir/outputs.log" >&2; fi
+fi
+exit "$status"
