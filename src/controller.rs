@@ -133,7 +133,7 @@ impl Default for AppControllerRust {
             fixed_x: i64::from(config.fixed_x),
             fixed_y: i64::from(config.fixed_y),
             monitor_identity: QString::from(&config.monitor_identity),
-            fixed_position_confirmed: config.position_mode == PositionMode::CurrentCursor,
+            fixed_position_confirmed: false,
             monitor_x: 0,
             monitor_y: 0,
             monitor_width: 0,

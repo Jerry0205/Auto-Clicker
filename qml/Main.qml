@@ -73,7 +73,7 @@ Kirigami.ApplicationWindow {
             }
         }
 
-        if (!controller.current_position) controller.fixed_position_confirmed = false
+        controller.fixed_position_confirmed = false
         for (let index = 0; index < screens.length; ++index) {
             if (screens[index] === root.screen) {
                 selectedMonitor = screens[index]
