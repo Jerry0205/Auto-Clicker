@@ -342,7 +342,11 @@ impl qobject::AppController {
             fixed_x: u32::try_from(*self.fixed_x()).unwrap_or(0),
             fixed_y: u32::try_from(*self.fixed_y()).unwrap_or(0),
             hotkey: self.hotkey().to_string(),
-            monitor_identity: self.monitor_identity().to_string(),
+            monitor_identity: if *self.fixed_position_confirmed() {
+                self.monitor_identity().to_string()
+            } else {
+                String::new()
+            },
         };
         config::save(&config).map_err(|error| error.to_string())
     }
