@@ -5,6 +5,8 @@ import org.kde.kirigami as Kirigami
 Window {
     id: picker
 
+    MonitorSelection { id: monitors }
+
     required property Window hostWindow
     property int captureId: 0
     property bool inputReady: false
@@ -244,7 +246,7 @@ Window {
             text: picker.previewOnly
                 ? qsTr("Zielposition · X: %1 · Y: %2").arg(picker.targetX).arg(picker.targetY)
                 : qsTr("%1 · X: %2 · Y: %3\nKlicken / Enter: übernehmen · Pfeiltasten: 1 Schritt · Umschalt: 10 · Esc / Rechtsklick: abbrechen")
-                    .arg(picker.screen.name).arg(picker.targetX).arg(picker.targetY)
+                    .arg(monitors.displayName(picker.screen, Qt.application.screens)).arg(picker.targetX).arg(picker.targetY)
                     + (picker.magnifierReady ? qsTr("\nLupe 4× · Standbild") : "")
                     + (picker.captureError.length ? "\n" + picker.captureError : "")
         }

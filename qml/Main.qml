@@ -13,6 +13,14 @@ Kirigami.ApplicationWindow {
     property var positionPicker: null
     property int captureSequence: 0
     property bool monitorRestored: false
+    readonly property var monitorOptions: {
+        const screens = Qt.application.screens
+        const options = []
+        for (let i = 0; i < screens.length; ++i) {
+            options.push({ screen: screens[i], label: monitors.displayName(screens[i], screens) })
+        }
+        return options
+    }
 
     function finishPicker(restoreHost) {
         if (positionPicker) positionPicker.finish(restoreHost)
@@ -310,13 +318,14 @@ Kirigami.ApplicationWindow {
                         Controls.ComboBox {
                             id: monitorInput
                             Layout.fillWidth: true
-                            model: Qt.application.screens
-                            textRole: "name"
+                            model: root.monitorOptions
+                            textRole: "label"
+                            onModelChanged: Qt.callLater(root.ensureMonitorSelection)
                             Component.onCompleted: {
                                 root.monitorSelectionReady = true
                                 root.ensureMonitorSelection()
                             }
-                            onActivated: { root.selectedMonitor = Qt.application.screens[currentIndex]; root.confirmMonitor() }
+                            onActivated: { root.selectedMonitor = model[currentIndex].screen; root.confirmMonitor() }
                             Accessible.name: qsTr("Monitor für die feste Position")
                         }
                     }
@@ -351,7 +360,7 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                         visible: !controller.current_position
                         text: qsTr("%1 · X: %2 · Y: %3")
-                            .arg(root.selectedMonitor ? root.selectedMonitor.name : qsTr("Kein Monitor"))
+                            .arg(monitors.displayName(root.selectedMonitor, Qt.application.screens))
                             .arg(controller.fixed_x).arg(controller.fixed_y)
                         wrapMode: Text.WordWrap
                     }

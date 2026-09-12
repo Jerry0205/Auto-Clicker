@@ -71,6 +71,7 @@ Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So
 
 - Das kleinste Intervall beträgt 10 Millisekunden. Mehr als 100 Klicks pro Sekunde sind nicht möglich.
 - Eine feste Position gilt immer für den Bildschirm, den du im KDE-Dialog ausgewählt hast.
+- Die Monitorauswahl zeigt Hersteller und Modell aus den Systemdaten. Bei gleichen Modellen oder fehlenden Modellangaben wird der Anschluss zur Unterscheidung ergänzt.
 - Der Positionswähler öffnet sich auf dem Bildschirm, den du zuvor in Klickmeister ausgewählt hast.
 - Klickmeister ist nur für Wayland gedacht. Ein X11- oder `xdotool`-Ersatz ist nicht eingebaut.
 - Gespeichert werden nur deine Einstellungen. Es gibt keine Statistiken, keine Nutzungsdaten und keine Telemetrie.
