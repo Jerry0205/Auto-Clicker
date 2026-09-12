@@ -7,15 +7,16 @@ Window {
 
     required property Window hostWindow
     property bool inputReady: false
+    property bool finishing: false
 
     signal picked(int x, int y)
+    signal finished()
 
-    function begin(targetScreen) {
+    function begin() {
         if (picker.visible) {
             return
         }
 
-        picker.screen = targetScreen || hostWindow.screen
         inputReady = false
         picker.showFullScreen()
         picker.raise()
@@ -35,14 +36,25 @@ Window {
     }
 
     function finish() {
+        if (finishing) {
+            return
+        }
+
+        finishing = true
         inputReady = false
         picker.hide()
+        picker.finished()
     }
 
     visible: false
     transientParent: null
     flags: Qt.FramelessWindowHint
     color: "transparent"
+
+    onClosing: function(close) {
+        close.accepted = false
+        picker.finish()
+    }
 
     Connections {
         target: picker

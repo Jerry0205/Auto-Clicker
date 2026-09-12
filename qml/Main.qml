@@ -10,6 +10,7 @@ Kirigami.ApplicationWindow {
     property bool smokeTest: false
     property bool monitorSelectionReady: false
     property var selectedMonitor: null
+    property var positionPicker: null
 
     function ensureMonitorSelection() {
         if (!monitorSelectionReady) {
@@ -47,13 +48,23 @@ Kirigami.ApplicationWindow {
         id: controller
     }
 
-    PositionPicker {
-        id: positionPicker
-        hostWindow: root
-        onPicked: function(x, y) {
-            controller.fixed_x = x
-            controller.fixed_y = y
-            controller.current_position = false
+    Component {
+        id: positionPickerComponent
+
+        PositionPicker {
+            id: picker
+            hostWindow: root
+            onPicked: function(x, y) {
+                controller.fixed_x = x
+                controller.fixed_y = y
+                controller.current_position = false
+            }
+            onFinished: {
+                if (root.positionPicker === picker) {
+                    root.positionPicker = null
+                }
+                picker.destroy()
+            }
         }
     }
 
@@ -72,7 +83,9 @@ Kirigami.ApplicationWindow {
     }
     onScreenChanged: ensureMonitorSelection()
     onClosing: function(close) {
-        positionPicker.finish()
+        if (positionPicker) {
+            positionPicker.finish()
+        }
         controller.shutdown()
         close.accepted = true
     }
@@ -246,12 +259,22 @@ Kirigami.ApplicationWindow {
                         text: qsTr("Position auf dem Bildschirm auswählen …")
                         icon.name: "crosshairs"
                         onClicked: {
+                            if (positionPicker) {
+                                return
+                            }
+
                             const screens = Qt.application.screens
                             const selectedScreen = monitorInput.currentIndex >= 0
                                 && monitorInput.currentIndex < screens.length
                                 ? screens[monitorInput.currentIndex]
                                 : root.screen
-                            positionPicker.begin(selectedScreen)
+                            const picker = positionPickerComponent.createObject(root, {
+                                "screen": selectedScreen
+                            })
+                            if (picker) {
+                                positionPicker = picker
+                                picker.begin()
+                            }
                         }
                     }
                     Controls.Label {
