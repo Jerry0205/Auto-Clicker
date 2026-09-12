@@ -530,6 +530,7 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "futures-util",
+ "getrandom",
  "serde",
  "thiserror 2.0.20",
  "tokio",

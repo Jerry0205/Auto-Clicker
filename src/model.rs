@@ -92,6 +92,7 @@ pub enum ValidationError {
 }
 
 impl ClickSettings {
+    /// Validate timing, repeat limits and fixed coordinates against their monitor.
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_interval(self.interval_ms)?;
         if let Some(repeat) = self.repeat
@@ -119,15 +120,18 @@ impl ClickSettings {
         Ok(())
     }
 
+    /// Return the configured delay as a scheduler duration.
     pub const fn interval(&self) -> Duration {
         Duration::from_millis(self.interval_ms)
     }
 
+    /// Return the number of click cycles scheduled per second.
     pub fn cps(&self) -> f64 {
         1_000.0 / self.interval_ms as f64
     }
 }
 
+/// Enforce the supported interval range and maximum click rate.
 pub fn validate_interval(interval_ms: u64) -> Result<(), ValidationError> {
     if interval_ms < MIN_INTERVAL_MS {
         Err(ValidationError::IntervalTooShort)

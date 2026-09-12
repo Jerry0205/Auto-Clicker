@@ -62,6 +62,7 @@ struct MonitorStream {
 }
 
 impl PortalClickSession {
+    /// Request pointer permission and verify any fixed-position monitor geometry.
     pub async fn create(monitor: Option<MonitorGeometry>) -> Result<Self, PortalError> {
         let fixed_position = monitor.is_some();
         let portal = RemoteDesktop::new()
@@ -146,6 +147,7 @@ impl PortalClickSession {
         })
     }
 
+    /// Reuse a session only when its granted monitor matches current settings.
     pub fn matches_monitor(&self, monitor: Option<MonitorGeometry>) -> bool {
         match (self.stream, monitor) {
             (None, None) => true,
@@ -156,6 +158,7 @@ impl PortalClickSession {
         }
     }
 
+    /// Move within the verified monitor if needed and emit a bounded click cycle.
     pub async fn click(&self, settings: &ClickSettings) -> Result<(), PortalError> {
         if let Some((x, y)) = settings.position {
             let stream = self.stream.ok_or(PortalError::MissingMonitorStream)?;
@@ -234,6 +237,7 @@ impl PortalClickSession {
         Ok(())
     }
 
+    /// Retry releasing a button when the first release failed.
     async fn best_effort_release(&self, button: i32) {
         let _ = timeout(
             EVENT_TIMEOUT,
@@ -247,11 +251,13 @@ impl PortalClickSession {
         .await;
     }
 
+    /// Close the portal session after clicking stops or permissions change.
     pub async fn close(self) {
         let _ = self.session.close().await;
     }
 }
 
+/// Reject missing, mismatched or invalid monitor metadata before clicking.
 fn validate_monitor(
     expected: MonitorGeometry,
     position: Option<(i32, i32)>,

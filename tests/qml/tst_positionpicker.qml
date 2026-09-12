@@ -11,9 +11,11 @@ TestCase {
 
     Window { id: host; width: 400; height: 300; visible: true }
     PositionPicker { id: picker; hostWindow: host }
+    SignalSpy { id: cancelled; target: picker; signalName: "screenshotCancelled" }
+    SignalSpy { id: finished; target: picker; signalName: "finished" }
     SignalSpy { id: picked; target: picker; signalName: "picked" }
 
-    function init() { picked.clear(); host.show() }
+    function init() { picked.clear(); cancelled.clear(); finished.clear(); host.show() }
     function cleanup() { testCase.parent = null; picker.finish(); picked.clear() }
     function begin() {
         picker.begin(host.screen, 100, 150, false, false)
@@ -78,8 +80,39 @@ TestCase {
         tryCompare(picker, "inputReady", true)
         verify(picker.captureError.length > 0)
         verify(!picker.magnifierReady)
-        picker.confirm()
+        testCase.parent = picker.contentItem
+        tryVerify(function() { return picker.active })
+        wait(20)
+        keyClick(Qt.Key_Return)
         compare(picked.count, 1)
+        compare(host.visible, true)
+    }
+
+    function test_capture_timeout_restores_interactive_selection() {
+        picker.begin(host.screen, 20, 30, false, true)
+        const requestId = picker.captureId
+        tryCompare(picker, "inputReady", true, 4000)
+        compare(picker.waitingForScreenshot, false)
+        compare(cancelled.count, 1)
+        compare(cancelled.signalArguments[0][0], requestId)
+        picker.acceptScreenshot(requestId, "", "late response")
+        verify(picker.captureError.indexOf("zu lange") >= 0)
+        testCase.parent = picker.contentItem
+        tryVerify(function() { return picker.active })
+        wait(20)
+        keyClick(Qt.Key_Escape)
+        tryCompare(picker, "selecting", false)
+        compare(host.visible, true)
+        compare(picked.count, 0)
+    }
+
+    function test_finish_is_idempotent_and_cancels_capture() {
+        picker.begin(host.screen, 20, 30, false, true)
+        picker.finish()
+        picker.finish()
+        compare(cancelled.count, 1)
+        compare(finished.count, 1)
+        compare(host.visible, true)
     }
 
     function test_capture_enables_magnifier_and_clears_on_finish() {

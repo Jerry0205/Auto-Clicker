@@ -15,7 +15,7 @@ Nicht angefordert werden `KEYBOARD`, `TOUCHSCREEN`, Clipboard, Kamera, Mikrofon,
 
 - `org.freedesktop.portal.GlobalShortcuts`: `CreateSession`, `BindShortcuts`, `ConfigureShortcuts`, `Activated`, `ShortcutsChanged` und `Session.Close`.
 - `org.freedesktop.portal.RemoteDesktop`: `CreateSession`, `SelectDevices`, `Start`, `NotifyPointerButton`, optional `NotifyPointerMotionAbsolute` und `Session.Close`.
-- `org.freedesktop.portal.Screenshot`: `Screenshot`, ausschließlich für die optionale Lupe; nur lokale Datei-URIs werden geladen.
+- `org.freedesktop.portal.Screenshot`: `Screenshot` und `Request.Close`, ausschließlich für die optionale Lupe; nur lokale Datei-URIs werden geladen.
 - `org.freedesktop.portal.ScreenCast`: nur `SelectSources` auf derselben RemoteDesktop-Sitzung. `OpenPipeWireRemote` wird nicht aufgerufen.
 
 Sitzungen verwenden `PersistMode::Application`: keine anwendungsseitig gespeicherten Restore-Tokens und keine dauerhafte Berechtigung nach Prozessende.
@@ -26,7 +26,7 @@ Keine. Der Produktionscode enthält keine HTTP-, TCP-, UDP- oder DNS-API. D-Bus 
 
 ## 4. Gespeicherte Daten
 
-Nur `config.toml` im XDG-Konfigurationsverzeichnis der Anwendung. Gespeichert werden Intervall, Maustaste, Klicktyp, Wiederholungsmodus/-zahl, Positionsmodus, X/Y und sichtbare Hotkeybeschreibung. Der Austausch erfolgt über eine temporäre Datei im selben Verzeichnis und `rename`. Auf Unix wird die Datei mit Modus 0600 erstellt.
+Nur `config.toml` im XDG-Konfigurationsverzeichnis der Anwendung. Gespeichert werden Intervall, Maustaste, Klicktyp, Wiederholungsmodus/-zahl, Positionsmodus, X/Y, Monitoridentität einschließlich Geometrie/Skalierung und sichtbare Hotkeybeschreibung. Der Austausch erfolgt über eine temporäre Datei im selben Verzeichnis und `rename`. Auf Unix wird die Datei mit Modus 0600 erstellt.
 
 Die optionale Lupe lädt eine vom Screenshot-Portal bereitgestellte Bilddatei; das Portal kann diese temporär speichern. Klickmeister leert die Bildquelle beim Beenden der Auswahl und führt kein Screenshot-Archiv.
 

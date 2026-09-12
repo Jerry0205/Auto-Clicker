@@ -14,7 +14,7 @@ Zwischen beiden Richtungen laufen begrenzte Nachrichtenkanäle beziehungsweise i
 - `org.freedesktop.portal.Screenshot`: Optional für die 4×-Lupe. Lädt ein Standbild des virtuellen Desktops; die Auswahl und Lupe verwenden dieselbe Aufnahme. Ohne Aufnahme bleibt der transparente Picker nutzbar.
 - `org.freedesktop.portal.GlobalShortcuts`: Bindet eine Toggle-Aktion mit Pause als bevorzugtem Trigger. KWin entscheidet über die tatsächliche Belegung und zeigt seinen eigenen Berechtigungsdialog.
 
-Die D-Bus-Aufrufe sind über `ashpd` typisiert. Es gibt kein X11-Backend, kein `xdotool` und kein `/dev/uinput`.
+RemoteDesktop und GlobalShortcuts verwenden `ashpd`. Screenshot nutzt dessen `zbus`-Reexport mit typisierten Antworten und einem vorab bekannten Request-Pfad: ashpd 0.13 gibt den Request erst nach der Antwort zurück und erlaubt damit kein rechtzeitiges `Request.Close` bei Abbruch. Die Screenshot-Verbindung ist separat; Abbruch, Ersetzen und Shutdown schließen die Anfrage und anschließend die Verbindung mit begrenzter Wartezeit. Es gibt kein X11-Backend, kein `xdotool` und kein `/dev/uinput`.
 
 ## Scheduler
 

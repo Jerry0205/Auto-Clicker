@@ -18,7 +18,7 @@ use ashpd::desktop::{
 use futures_util::{Stream, StreamExt, future};
 use tokio::{
     runtime::Builder,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     task::JoinHandle,
     time::{Instant, sleep_until, timeout},
 };
@@ -40,6 +40,7 @@ pub enum Command {
     Stop,
     ConfigureHotkey,
     CaptureScreenshot(i32),
+    CancelScreenshot(i32),
     Shutdown,
 }
 
@@ -165,6 +166,21 @@ async fn setup_hotkey(
     Ok((portal, session, actual))
 }
 
+/// Signal cancellation and allow the capture owner to close its portal handle.
+async fn cancel_capture(
+    task: &mut Option<JoinHandle<Result<String, String>>>,
+    cancel: &mut Option<oneshot::Sender<()>>,
+) {
+    if let Some(cancel) = cancel.take() {
+        let _ = cancel.send(());
+    }
+    if let Some(task) = task.take() {
+        // Screenshot cleanup has its own bounded Close and disconnect calls.
+        let _ = task.await;
+    }
+}
+
+/// Create a portal session for the selected monitor or current cursor.
 async fn setup_click_session(
     monitor: Option<MonitorGeometry>,
 ) -> Result<PortalClickSession, String> {
@@ -194,6 +210,7 @@ async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task
     }
 }
 
+/// Serialize clicks, permissions, shortcut events and cancellable captures.
 async fn run_worker(
     mut commands: mpsc::Receiver<Command>,
     mut latest_settings: ClickSettings,
@@ -210,6 +227,7 @@ async fn run_worker(
     let mut hotkey: Option<HotkeyState> = None;
     let mut screenshot_task: Option<JoinHandle<Result<String, String>>> = None;
     let mut screenshot_id = 0;
+    let mut screenshot_cancel = None;
 
     (emit)(WorkerEvent::Status(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
@@ -252,24 +270,16 @@ async fn run_worker(
                         stop_run(&mut machine, &mut active, &emit);
                     }
                     Command::CaptureScreenshot(request_id) => {
-                        if let Some(task) = screenshot_task.take() {
-                            task.abort();
-                        }
+                        cancel_capture(&mut screenshot_task, &mut screenshot_cancel).await;
                         screenshot_id = request_id;
-                        screenshot_task = Some(tokio::spawn(async {
-                            timeout(Duration::from_secs(30), async {
-                                let shot = ashpd::desktop::screenshot::Screenshot::request()
-                                    .interactive(false)
-                                    .send().await
-                                    .and_then(|request| request.response())
-                                    .map_err(|error| error.to_string())?;
-                                let uri = shot.uri().as_str();
-                                if !uri.starts_with("file://") {
-                                    return Err("Die Bildschirmaufnahme ist keine lokale Datei.".to_owned());
-                                }
-                                Ok(uri.to_owned())
-                            }).await.unwrap_or_else(|_| Err("Zeitüberschreitung bei der Bildschirmaufnahme".to_owned()))
-                        }));
+                        let (tx, rx) = oneshot::channel();
+                        screenshot_cancel = Some(tx);
+                        screenshot_task = Some(tokio::spawn(crate::screenshot::capture(rx)));
+                    }
+                    Command::CancelScreenshot(request_id) => {
+                        if request_id == screenshot_id {
+                            cancel_capture(&mut screenshot_task, &mut screenshot_cancel).await;
+                        }
                     }
                     Command::ConfigureHotkey => {
                         if configure_task.is_some() {
@@ -297,6 +307,7 @@ async fn run_worker(
             }
             result = wait_task(&mut screenshot_task), if screenshot_task.is_some() => {
                 screenshot_task = None;
+                screenshot_cancel = None;
                 (emit)(WorkerEvent::Screenshot(screenshot_id, result.unwrap_or_else(|error| Err(error.to_string()))));
             }
             result = wait_task(&mut start_task), if start_task.is_some() => {
@@ -433,9 +444,7 @@ async fn run_worker(
 
     machine.close();
     closing.store(true, Ordering::Release);
-    if let Some(task) = screenshot_task {
-        task.abort();
-    }
+    cancel_capture(&mut screenshot_task, &mut screenshot_cancel).await;
     if let Some(task) = start_task {
         task.abort();
     }

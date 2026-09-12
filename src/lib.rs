@@ -4,5 +4,6 @@ pub mod model;
 pub mod portal;
 pub mod qml_runtime;
 pub mod scheduler;
+mod screenshot;
 pub mod state;
 pub mod worker;

@@ -49,9 +49,9 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 
 Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür ausgeblendet. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Klicken oder Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. „Position anzeigen“ markiert das gespeicherte Ziel kurz, ohne zu klicken.
 
-Optional verwendet „Mit 4×-Lupe auswählen“ eine über das Screenshot-Portal freigegebene Bildschirmaufnahme als Standbild. Bei Ablehnung oder Fehler funktioniert die Auswahl ohne Lupe weiter. Die Aufnahme ist keine Live-Vorschau.
+Optional verwendet „Mit 4×-Lupe auswählen“ eine über das Screenshot-Portal freigegebene Bildschirmaufnahme als Standbild. Bei Ablehnung, Fehler oder nach spätestens drei Sekunden Wartezeit funktioniert die Auswahl ohne Lupe weiter. Ausstehende Screenshot-Anfragen werden dabei geschlossen. Die Aufnahme ist keine Live-Vorschau.
 
-Beim Start fragt KDE, auf welchem Bildschirm geklickt werden darf. Wähle dort denselben Bildschirm aus. Position und Größe des freigegebenen Monitors werden vor dem ersten Klick geprüft. Ein anderer Monitor oder fehlende Zuordnungsdaten führen zu einer Fehlermeldung. Nach einem Monitorwechsel wird eine passende Freigabe erneut angefragt.
+Beim Start fragt KDE, auf welchem Bildschirm geklickt werden darf. Wähle dort denselben Bildschirm aus. Position und Größe des freigegebenen Monitors werden vor dem ersten Klick geprüft. Ein anderer Monitor oder fehlende Zuordnungsdaten führen zu einer Fehlermeldung. Nach einem Monitorwechsel wird eine passende Freigabe erneut angefragt. Monitoridentität, Größe und Skalierung werden mit den Koordinaten gespeichert. Nach einem Neustart wird nur eine eindeutige Übereinstimmung wiederhergestellt; andernfalls müssen Monitor und Koordinaten bestätigt oder neu gewählt werden.
 
 ## Warum fragt KDE nach Berechtigungen?
 
@@ -83,6 +83,7 @@ Du möchtest Klickmeister selbst bauen, verändern oder überprüfen? Die wichti
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
+dbus-run-session -- cargo test --locked closes_real_dbus_request -- --ignored
 cargo build --locked --release
 bash tests/qml-smoke.sh target/release/klickmeister
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software /usr/lib/qt6/bin/qmltestrunner -input tests/qml

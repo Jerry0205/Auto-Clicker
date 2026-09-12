@@ -31,6 +31,8 @@ pub mod qobject {
         #[qproperty(bool, current_position)]
         #[qproperty(i64, fixed_x)]
         #[qproperty(i64, fixed_y)]
+        #[qproperty(QString, monitor_identity)]
+        #[qproperty(bool, fixed_position_confirmed)]
         #[qproperty(i32, monitor_x)]
         #[qproperty(i32, monitor_y)]
         #[qproperty(i32, monitor_width)]
@@ -48,6 +50,9 @@ pub mod qobject {
 
         #[qinvokable]
         fn capture_screenshot(self: Pin<&mut AppController>, request_id: i32);
+
+        #[qinvokable]
+        fn cancel_screenshot(self: Pin<&mut AppController>, request_id: i32);
 
         #[qinvokable]
         fn initialize(self: Pin<&mut AppController>);
@@ -88,6 +93,8 @@ pub struct AppControllerRust {
     current_position: bool,
     fixed_x: i64,
     fixed_y: i64,
+    monitor_identity: QString,
+    fixed_position_confirmed: bool,
     monitor_x: i32,
     monitor_y: i32,
     monitor_width: i32,
@@ -98,6 +105,7 @@ pub struct AppControllerRust {
 }
 
 impl Default for AppControllerRust {
+    /// Load saved controls while requiring fixed-position monitor restoration.
     fn default() -> Self {
         let (config, startup_error) = match config::load() {
             Ok(config) => (config, None),
@@ -124,6 +132,8 @@ impl Default for AppControllerRust {
             current_position: config.position_mode == PositionMode::CurrentCursor,
             fixed_x: i64::from(config.fixed_x),
             fixed_y: i64::from(config.fixed_y),
+            monitor_identity: QString::from(&config.monitor_identity),
+            fixed_position_confirmed: config.position_mode == PositionMode::CurrentCursor,
             monitor_x: 0,
             monitor_y: 0,
             monitor_width: 0,
@@ -136,6 +146,7 @@ impl Default for AppControllerRust {
 }
 
 impl Drop for AppControllerRust {
+    /// Shut down the worker before destroying the Qt controller.
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
             worker.shutdown();
@@ -144,6 +155,7 @@ impl Drop for AppControllerRust {
 }
 
 impl qobject::AppController {
+    /// Start the worker and hotkey even if saved coordinates need confirmation.
     pub fn initialize(mut self: Pin<&mut Self>) {
         if self.rust().worker.is_some() {
             return;
@@ -151,12 +163,15 @@ impl qobject::AppController {
         if let Some(error) = self.as_mut().rust_mut().get_mut().startup_error.take() {
             self.as_mut().set_error_message(QString::from(&error));
         }
-        let settings = match self.as_ref().settings() {
-            Ok(settings) => settings,
-            Err(error) => {
-                self.as_mut().show_error(&error);
-                return;
-            }
+        // The worker must remain available even when restored fixed coordinates
+        // need confirmation. Every actual start still validates the current UI.
+        let settings = ClickSettings {
+            interval_ms: 100,
+            button: MouseButton::Left,
+            click_type: ClickType::Single,
+            repeat: None,
+            position: None,
+            monitor: None,
         };
         let preferred_hotkey = self.hotkey().to_string();
         let qt_thread = self.qt_thread();
@@ -168,6 +183,7 @@ impl qobject::AppController {
         self.as_mut().rust_mut().get_mut().worker = Some(worker);
     }
 
+    /// Request a screenshot and report queue failures back to the picker.
     pub fn capture_screenshot(mut self: Pin<&mut Self>, request_id: i32) {
         let result = self
             .rust()
@@ -181,6 +197,13 @@ impl qobject::AppController {
         }
     }
 
+    /// Cancels only the screenshot belonging to the picker being closed.
+    pub fn cancel_screenshot(mut self: Pin<&mut Self>, request_id: i32) {
+        self.as_mut()
+            .send_command(Command::CancelScreenshot(request_id));
+    }
+
+    /// Validate and save current controls before requesting a click run.
     pub fn start(mut self: Pin<&mut Self>) {
         if *self.selecting_position() {
             return;
@@ -199,10 +222,12 @@ impl qobject::AppController {
         self.as_mut().send_command(Command::Start(settings));
     }
 
+    /// Stop a run or an outstanding start request.
     pub fn stop(mut self: Pin<&mut Self>) {
         self.as_mut().send_command(Command::Stop);
     }
 
+    /// Toggle clicking using the latest controls rather than cached settings.
     pub fn toggle(mut self: Pin<&mut Self>) {
         if *self.running() || *self.busy() {
             self.as_mut().stop();
@@ -211,14 +236,17 @@ impl qobject::AppController {
         }
     }
 
+    /// Open the desktop portal configuration for the global shortcut.
     pub fn configure_hotkey(mut self: Pin<&mut Self>) {
         self.as_mut().send_command(Command::ConfigureHotkey);
     }
 
+    /// Dismiss the current user-visible error message.
     pub fn clear_error(mut self: Pin<&mut Self>) {
         self.as_mut().set_error_message(QString::default());
     }
 
+    /// Join the worker and clear running indicators during window closure.
     pub fn shutdown(mut self: Pin<&mut Self>) {
         if let Some(worker) = self.as_mut().rust_mut().get_mut().worker.take() {
             worker.shutdown();
@@ -227,6 +255,7 @@ impl qobject::AppController {
         self.as_mut().set_busy(false);
     }
 
+    /// Send through the bounded worker channel and surface delivery failures.
     fn send_command(mut self: Pin<&mut Self>, command: Command) {
         let result = self
             .rust()
@@ -239,7 +268,11 @@ impl qobject::AppController {
         }
     }
 
+    /// Build validated settings; unconfirmed fixed positions cannot start.
     fn settings(self: Pin<&Self>) -> Result<ClickSettings, String> {
+        if !*self.current_position() && !*self.fixed_position_confirmed() {
+            return Err("Bitte den Monitor und die feste Position erneut bestätigen.".to_owned());
+        }
         let button = match *self.mouse_button() {
             0 => MouseButton::Left,
             1 => MouseButton::Right,
@@ -288,6 +321,7 @@ impl qobject::AppController {
         Ok(settings)
     }
 
+    /// Persist monitor identity together with monitor-relative coordinates.
     fn save_config(self: Pin<&Self>) -> Result<(), String> {
         let settings = self.settings()?;
         let config = AppConfig {
@@ -308,10 +342,12 @@ impl qobject::AppController {
             fixed_x: u32::try_from(*self.fixed_x()).unwrap_or(0),
             fixed_y: u32::try_from(*self.fixed_y()).unwrap_or(0),
             hotkey: self.hotkey().to_string(),
+            monitor_identity: self.monitor_identity().to_string(),
         };
         config::save(&config).map_err(|error| error.to_string())
     }
 
+    /// Display an error and reset the running and busy indicators.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
         self.as_mut().set_running(false);
         self.as_mut().set_busy(false);
@@ -319,6 +355,7 @@ impl qobject::AppController {
         self.as_mut().set_error_message(QString::from(message));
     }
 
+    /// Apply worker results on the Qt thread and route capture responses.
     fn handle_worker_event(mut self: Pin<&mut Self>, event: WorkerEvent) {
         match event {
             WorkerEvent::Screenshot(request_id, result) => {

@@ -18,6 +18,8 @@ Window {
     property rect desktopBounds: Qt.rect(0, 0, 1, 1)
     property bool hintAtBottom: false
     readonly property bool magnifierReady: snapshot.status === Image.Ready
+    signal finished()
+    signal screenshotCancelled(int requestId)
     signal picked(int x, int y)
     signal screenshotRequested(int requestId)
 
@@ -32,6 +34,7 @@ Window {
     function begin(targetScreen, x, y, preview, magnifier) {
         if (selecting || !targetScreen) return
         captureId += 1
+        // Main creates a fresh native window with its screen set before begin().
         screen = targetScreen
         hostVisibility = hostWindow.visibility
         previewOnly = preview
@@ -54,7 +57,10 @@ Window {
         }
         hostWindow.hide()
         waitingForScreenshot = magnifier && !preview
-        if (waitingForScreenshot) captureDelay.start()
+        if (waitingForScreenshot) {
+            captureDelay.start()
+            captureFallback.start()
+        }
         else showPicker()
     }
 
@@ -71,6 +77,7 @@ Window {
     function acceptScreenshot(requestId, uri, error) {
         if (!selecting || !waitingForScreenshot || requestId !== captureId) return
         captureDelay.stop()
+        captureFallback.stop()
         waitingForScreenshot = false
         captureError = error.length > 0 ? qsTr("Bildschirmaufnahme nicht verfügbar – Auswahl ohne Lupe") : ""
         snapshot.source = uri
@@ -93,7 +100,9 @@ Window {
         if (!selecting) return
         selecting = false
         inputReady = false
+        if (waitingForScreenshot) screenshotCancelled(captureId)
         waitingForScreenshot = false
+        captureFallback.stop()
         captureDelay.stop()
         previewTimer.stop()
         hide()
@@ -105,6 +114,7 @@ Window {
             hostWindow.raise()
             hostWindow.requestActivate()
         }
+        finished()
     }
 
     visible: false
@@ -114,6 +124,18 @@ Window {
     onClosing: function(close) { close.accepted = false; finish() }
 
     Timer { id: captureDelay; interval: 250; onTriggered: picker.screenshotRequested(picker.captureId) }
+    Timer {
+        id: captureFallback
+        interval: 3000
+        onTriggered: {
+            if (!picker.selecting || !picker.waitingForScreenshot) return
+            captureDelay.stop()
+            picker.waitingForScreenshot = false
+            picker.screenshotCancelled(picker.captureId)
+            picker.captureError = qsTr("Bildschirmaufnahme dauert zu lange – Auswahl ohne Lupe")
+            picker.showPicker()
+        }
+    }
     Timer { id: previewTimer; interval: 1800; onTriggered: picker.finish() }
 
     Connections {
