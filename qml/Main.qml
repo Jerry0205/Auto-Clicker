@@ -11,6 +11,19 @@ Kirigami.ApplicationWindow {
     property bool monitorSelectionReady: false
     property var selectedMonitor: null
 
+    function syncMonitor() {
+        const screen = selectedMonitor
+        if (controller.running || controller.busy) controller.stop()
+        controller.monitor_x = screen ? screen.virtualX : 0
+        controller.monitor_y = screen ? screen.virtualY : 0
+        controller.monitor_width = screen ? screen.width : 0
+        controller.monitor_height = screen ? screen.height : 0
+        controller.fixed_x = Math.max(0, Math.min(controller.fixed_x, xInput.to))
+        controller.fixed_y = Math.max(0, Math.min(controller.fixed_y, yInput.to))
+    }
+
+    onSelectedMonitorChanged: syncMonitor()
+
     function ensureMonitorSelection() {
         if (!monitorSelectionReady) {
             return
@@ -50,6 +63,8 @@ Kirigami.ApplicationWindow {
     PositionPicker {
         id: positionPicker
         hostWindow: root
+        onSelectingChanged: controller.selecting_position = selecting
+        onScreenshotRequested: function(requestId) { controller.capture_screenshot(requestId) }
         onPicked: function(x, y) {
             controller.fixed_x = x
             controller.fixed_y = y
@@ -60,6 +75,7 @@ Kirigami.ApplicationWindow {
     Connections {
         target: controller
 
+        function onScreenshot_ready(requestId, uri, error) { positionPicker.acceptScreenshot(requestId, uri, error) }
         function onFixed_xChanged() { xInput.value = controller.fixed_x }
         function onFixed_yChanged() { yInput.value = controller.fixed_y }
     }
@@ -71,8 +87,23 @@ Kirigami.ApplicationWindow {
         }
     }
     onScreenChanged: ensureMonitorSelection()
+    Connections {
+        target: Qt.application
+        function onScreensChanged() {
+            positionPicker.finish()
+            root.ensureMonitorSelection()
+            root.syncMonitor()
+        }
+    }
+    Connections {
+        target: root.selectedMonitor
+        function onWidthChanged() { positionPicker.finish(); root.syncMonitor() }
+        function onHeightChanged() { positionPicker.finish(); root.syncMonitor() }
+        function onVirtualXChanged() { positionPicker.finish(); root.syncMonitor() }
+        function onVirtualYChanged() { positionPicker.finish(); root.syncMonitor() }
+    }
     onClosing: function(close) {
-        positionPicker.finish()
+        positionPicker.finish(false)
         controller.shutdown()
         close.accepted = true
     }
@@ -208,7 +239,7 @@ Kirigami.ApplicationWindow {
                             id: xInput
                             Layout.fillWidth: true
                             from: 0
-                            to: 100000
+                            to: Math.max(0, controller.monitor_width - 1)
                             editable: true
                             value: controller.fixed_x
                             onValueModified: controller.fixed_x = value
@@ -218,7 +249,7 @@ Kirigami.ApplicationWindow {
                             id: yInput
                             Layout.fillWidth: true
                             from: 0
-                            to: 100000
+                            to: Math.max(0, controller.monitor_height - 1)
                             editable: true
                             value: controller.fixed_y
                             onValueModified: controller.fixed_y = value
@@ -243,7 +274,7 @@ Kirigami.ApplicationWindow {
                     Controls.Button {
                         Layout.fillWidth: true
                         enabled: !controller.current_position && !controller.running && !controller.busy
-                        text: qsTr("Position auf dem Bildschirm auswählen …")
+                        text: qsTr("Position wählen / Neu wählen …")
                         icon.name: "crosshairs"
                         onClicked: {
                             const screens = Qt.application.screens
@@ -251,15 +282,38 @@ Kirigami.ApplicationWindow {
                                 && monitorInput.currentIndex < screens.length
                                 ? screens[monitorInput.currentIndex]
                                 : root.screen
-                            positionPicker.begin(selectedScreen)
+                            positionPicker.begin(selectedScreen, controller.fixed_x, controller.fixed_y, false, magnifierOption.checked)
                         }
+                    }
+                    Controls.CheckBox {
+                        id: magnifierOption
+                        visible: !controller.current_position
+                        enabled: !controller.running && !controller.busy
+                        text: qsTr("Mit 4×-Lupe auswählen (Bildschirmaufnahme)")
+                        Controls.ToolTip.visible: hovered
+                        Controls.ToolTip.text: qsTr("Die Auswahl verwendet ein Standbild. Die Bildschirmaufnahme kann eine zusätzliche Freigabe erfordern.")
+                    }
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        visible: !controller.current_position
+                        text: qsTr("%1 · X: %2 · Y: %3")
+                            .arg(root.selectedMonitor ? root.selectedMonitor.name : qsTr("Kein Monitor"))
+                            .arg(controller.fixed_x).arg(controller.fixed_y)
+                        wrapMode: Text.WordWrap
+                    }
+                    Controls.Button {
+                        visible: !controller.current_position
+                        enabled: !!root.selectedMonitor && !controller.running && !controller.busy
+                        text: qsTr("Position anzeigen")
+                        icon.name: "view-preview"
+                        onClicked: positionPicker.begin(root.selectedMonitor, controller.fixed_x, controller.fixed_y, true, false)
                     }
                     Controls.Label {
                         Layout.fillWidth: true
                         visible: !controller.current_position
                         wrapMode: Text.WordWrap
                         color: Kirigami.Theme.disabledTextColor
-                        text: qsTr("Koordinaten sind relativ zum oben gewählten Monitor. Wähle beim Start im KWin-Dialog denselben Monitor aus.")
+                        text: qsTr("Koordinaten gelten innerhalb dieses Monitors. Wähle beim Start im KWin-Dialog denselben Monitor; die Freigabe wird vor dem Klicken geprüft.")
                     }
                 }
             }

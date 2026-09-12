@@ -2,7 +2,7 @@ use std::pin::Pin;
 
 use crate::{
     config::{self, AppConfig},
-    model::{ClickSettings, ClickType, MouseButton, PositionMode, RepeatMode},
+    model::{ClickSettings, ClickType, MonitorGeometry, MouseButton, PositionMode, RepeatMode},
     worker::{Command, WorkerEvent, WorkerHandle},
 };
 use cxx_qt::{CxxQtType, Threading};
@@ -31,7 +31,23 @@ pub mod qobject {
         #[qproperty(bool, current_position)]
         #[qproperty(i64, fixed_x)]
         #[qproperty(i64, fixed_y)]
+        #[qproperty(i32, monitor_x)]
+        #[qproperty(i32, monitor_y)]
+        #[qproperty(i32, monitor_width)]
+        #[qproperty(i32, monitor_height)]
+        #[qproperty(bool, selecting_position)]
         type AppController = super::AppControllerRust;
+
+        #[qsignal]
+        fn screenshot_ready(
+            self: Pin<&mut AppController>,
+            request_id: i32,
+            uri: QString,
+            error: QString,
+        );
+
+        #[qinvokable]
+        fn capture_screenshot(self: Pin<&mut AppController>, request_id: i32);
 
         #[qinvokable]
         fn initialize(self: Pin<&mut AppController>);
@@ -72,6 +88,11 @@ pub struct AppControllerRust {
     current_position: bool,
     fixed_x: i64,
     fixed_y: i64,
+    monitor_x: i32,
+    monitor_y: i32,
+    monitor_width: i32,
+    monitor_height: i32,
+    selecting_position: bool,
     worker: Option<WorkerHandle>,
     startup_error: Option<String>,
 }
@@ -103,6 +124,11 @@ impl Default for AppControllerRust {
             current_position: config.position_mode == PositionMode::CurrentCursor,
             fixed_x: i64::from(config.fixed_x),
             fixed_y: i64::from(config.fixed_y),
+            monitor_x: 0,
+            monitor_y: 0,
+            monitor_width: 0,
+            monitor_height: 0,
+            selecting_position: false,
             worker: None,
             startup_error,
         }
@@ -142,7 +168,23 @@ impl qobject::AppController {
         self.as_mut().rust_mut().get_mut().worker = Some(worker);
     }
 
+    pub fn capture_screenshot(mut self: Pin<&mut Self>, request_id: i32) {
+        let result = self
+            .rust()
+            .worker
+            .as_ref()
+            .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")
+            .and_then(|worker| worker.send(Command::CaptureScreenshot(request_id)));
+        if let Err(error) = result {
+            self.as_mut()
+                .screenshot_ready(request_id, QString::default(), QString::from(error));
+        }
+    }
+
     pub fn start(mut self: Pin<&mut Self>) {
+        if *self.selecting_position() {
+            return;
+        }
         self.as_mut().clear_error();
         let settings = match self.as_ref().settings() {
             Ok(settings) => settings,
@@ -235,6 +277,12 @@ impl qobject::AppController {
             click_type,
             repeat,
             position,
+            monitor: position.map(|_| MonitorGeometry {
+                x: *self.monitor_x(),
+                y: *self.monitor_y(),
+                width: *self.monitor_width(),
+                height: *self.monitor_height(),
+            }),
         };
         settings.validate().map_err(|error| error.to_string())?;
         Ok(settings)
@@ -273,6 +321,17 @@ impl qobject::AppController {
 
     fn handle_worker_event(mut self: Pin<&mut Self>, event: WorkerEvent) {
         match event {
+            WorkerEvent::Screenshot(request_id, result) => {
+                let (uri, error) = match result {
+                    Ok(uri) => (uri, String::new()),
+                    Err(error) => (String::new(), error),
+                };
+                self.as_mut().screenshot_ready(
+                    request_id,
+                    QString::from(&uri),
+                    QString::from(&error),
+                );
+            }
             WorkerEvent::Status(status) => {
                 let busy = status.contains("Warte auf Wayland");
                 self.as_mut().set_busy(busy);

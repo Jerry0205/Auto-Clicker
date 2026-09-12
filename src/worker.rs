@@ -24,7 +24,7 @@ use tokio::{
 };
 
 use crate::{
-    model::ClickSettings,
+    model::{ClickSettings, MonitorGeometry},
     portal::PortalClickSession,
     scheduler::Schedule,
     state::{RunState, StateMachine},
@@ -39,6 +39,7 @@ pub enum Command {
     Start(ClickSettings),
     Stop,
     ConfigureHotkey,
+    CaptureScreenshot(i32),
     Shutdown,
 }
 
@@ -48,6 +49,7 @@ pub enum WorkerEvent {
     Running(bool),
     Hotkey(String),
     StartRequested,
+    Screenshot(i32, Result<String, String>),
     Error(String),
 }
 
@@ -163,8 +165,10 @@ async fn setup_hotkey(
     Ok((portal, session, actual))
 }
 
-async fn setup_click_session(fixed: bool) -> Result<PortalClickSession, String> {
-    PortalClickSession::create(fixed)
+async fn setup_click_session(
+    monitor: Option<MonitorGeometry>,
+) -> Result<PortalClickSession, String> {
+    PortalClickSession::create(monitor)
         .await
         .map_err(|error| error.to_string())
 }
@@ -204,6 +208,8 @@ async fn run_worker(
     let mut hotkey_task = Some(tokio::spawn(setup_hotkey(preferred_hotkey)));
     let mut configure_task: Option<JoinHandle<Result<(), String>>> = None;
     let mut hotkey: Option<HotkeyState> = None;
+    let mut screenshot_task: Option<JoinHandle<Result<String, String>>> = None;
+    let mut screenshot_id = 0;
 
     (emit)(WorkerEvent::Status(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
@@ -229,15 +235,14 @@ async fn run_worker(
                         if !machine.request_start() {
                             continue;
                         }
-                        let needs_fixed = settings.position.is_some();
-                        if click_session.as_ref().is_some_and(|session| session.supports_fixed_position() == needs_fixed) {
+                        if click_session.as_ref().is_some_and(|session| session.matches_monitor(settings.monitor)) {
                             start_run(&mut machine, &mut active, settings, &emit);
                         } else {
                             if let Some(old_session) = click_session.take() {
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, old_session.close()).await;
                             }
                             (emit)(WorkerEvent::Status("Warte auf Wayland-Berechtigung …".to_owned()));
-                            start_task = Some(tokio::spawn(setup_click_session(needs_fixed)));
+                            start_task = Some(tokio::spawn(setup_click_session(settings.monitor)));
                         }
                     }
                     Command::Stop => {
@@ -245,6 +250,26 @@ async fn run_worker(
                             task.abort();
                         }
                         stop_run(&mut machine, &mut active, &emit);
+                    }
+                    Command::CaptureScreenshot(request_id) => {
+                        if let Some(task) = screenshot_task.take() {
+                            task.abort();
+                        }
+                        screenshot_id = request_id;
+                        screenshot_task = Some(tokio::spawn(async {
+                            timeout(Duration::from_secs(30), async {
+                                let shot = ashpd::desktop::screenshot::Screenshot::request()
+                                    .interactive(false)
+                                    .send().await
+                                    .and_then(|request| request.response())
+                                    .map_err(|error| error.to_string())?;
+                                let uri = shot.uri().as_str();
+                                if !uri.starts_with("file://") {
+                                    return Err("Die Bildschirmaufnahme ist keine lokale Datei.".to_owned());
+                                }
+                                Ok(uri.to_owned())
+                            }).await.unwrap_or_else(|_| Err("Zeitüberschreitung bei der Bildschirmaufnahme".to_owned()))
+                        }));
                     }
                     Command::ConfigureHotkey => {
                         if configure_task.is_some() {
@@ -269,6 +294,10 @@ async fn run_worker(
                     }
                     Command::Shutdown => break,
                 }
+            }
+            result = wait_task(&mut screenshot_task), if screenshot_task.is_some() => {
+                screenshot_task = None;
+                (emit)(WorkerEvent::Screenshot(screenshot_id, result.unwrap_or_else(|error| Err(error.to_string()))));
             }
             result = wait_task(&mut start_task), if start_task.is_some() => {
                 start_task = None;
@@ -404,6 +433,9 @@ async fn run_worker(
 
     machine.close();
     closing.store(true, Ordering::Release);
+    if let Some(task) = screenshot_task {
+        task.abort();
+    }
     if let Some(task) = start_task {
         task.abort();
     }
