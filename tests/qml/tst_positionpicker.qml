@@ -24,8 +24,37 @@ TestCase {
         tryCompare(picker, "inputReady", true)
         tryVerify(function() { return picker.active })
         wait(20)
-        tryCompare(host, "visible", false)
+        compare(host.visible, true)
         picker.setTarget(100, 150)
+    }
+
+    function test_restores_window_geometry_data() {
+        return [
+            { tag: "confirm", cancel: false, maximized: false },
+            { tag: "cancel", cancel: true, maximized: false },
+            { tag: "maximized", cancel: false, maximized: true }
+        ]
+    }
+
+    function test_restores_window_geometry(data) {
+        host.showNormal()
+        host.width = 530
+        host.height = 370
+        if (data.maximized) host.showMaximized()
+        host.requestActivate()
+        tryVerify(function() { return host.active })
+        wait(100) // Let the compositor finish configuring the host before saving geometry.
+        const original = { x: host.x, y: host.y, width: host.width, height: host.height,
+                           visibility: host.visibility }
+        begin()
+        keyClick(data.cancel ? Qt.Key_Escape : Qt.Key_Return)
+        tryCompare(host, "active", true)
+        tryCompare(host, "visibility", original.visibility)
+        tryCompare(host, "width", original.width)
+        tryCompare(host, "height", original.height)
+        compare(host.x, original.x)
+        compare(host.y, original.y)
+        host.showNormal()
     }
 
     function test_keyboard_confirm_and_restore() {
@@ -117,7 +146,7 @@ TestCase {
             tryCompare(fresh, "inputReady", true)
             tryVerify(function() { return fresh.active })
             compare(fresh.screen.name, screens[i].name)
-            tryCompare(host, "visible", false)
+            compare(host.visible, true)
             mouseClick(fresh.contentItem, 140, 160)
             verify(fresh.visible)
             keyClick(Qt.Key_Right)

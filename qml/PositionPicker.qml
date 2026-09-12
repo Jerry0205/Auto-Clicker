@@ -66,7 +66,7 @@ Window {
         }
         waitingForScreenshot = magnifier && !preview
         if (waitingForScreenshot) {
-            hostWindow.hide()
+            hostWindow.showMinimized()
             captureDelay.start()
             captureFallback.start()
         }
@@ -83,12 +83,13 @@ Window {
         if (previewOnly) previewTimer.start()
     }
 
-    // KWin grants activation asynchronously. Keep the host mapped until the
-    // picker owns focus, rather than letting another application take it first.
+    // KWin grants activation asynchronously. Minimize only after focus transfers.
+    // Keep the native host surface mapped: hiding/recreating it lets Wayland
+    // choose a new placement and loses the user's window geometry.
     function focusSelection() {
         if (!selecting || !visible || !active) return
         keyboard.forceActiveFocus()
-        hostWindow.hide()
+        hostWindow.showMinimized()
     }
 
     function acceptScreenshot(requestId, uri, error) {
