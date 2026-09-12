@@ -9,7 +9,7 @@ use ashpd::desktop::{
 use thiserror::Error;
 use tokio::time::{Duration, timeout};
 
-use crate::model::{ClickSettings, ClickType};
+use crate::model::{ClickSettings, ClickType, MonitorGeometry};
 
 const EVENT_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -23,6 +23,14 @@ pub enum PortalError {
     PointerNotGranted,
     #[error("Für die feste Position wurde kein Monitor-Stream freigegeben.")]
     MissingMonitorStream,
+    #[error(
+        "Der freigegebene Monitor stimmt nicht mit der Positionsauswahl überein. Bitte beim nächsten Start denselben Monitor wie in der App freigeben."
+    )]
+    MonitorMismatch,
+    #[error(
+        "Das Portal liefert keine eindeutige Monitorposition. Die feste Position kann nicht sicher zugeordnet werden."
+    )]
+    MonitorUnverifiable,
     #[error(
         "Die feste Position ({x}, {y}) liegt außerhalb des freigegebenen Monitors ({width} × {height})."
     )]
@@ -50,10 +58,13 @@ struct MonitorStream {
     node_id: u32,
     width: i32,
     height: i32,
+    position: Option<(i32, i32)>,
 }
 
 impl PortalClickSession {
-    pub async fn create(fixed_position: bool) -> Result<Self, PortalError> {
+    /// Request pointer permission and verify any fixed-position monitor geometry.
+    pub async fn create(monitor: Option<MonitorGeometry>) -> Result<Self, PortalError> {
+        let fixed_position = monitor.is_some();
         let portal = RemoteDesktop::new()
             .await
             .map_err(PortalError::Unavailable)?;
@@ -113,8 +124,15 @@ impl PortalClickSession {
                 let _ = session.close().await;
                 return Err(PortalError::MissingMonitorStream);
             };
+            if let Some(expected) = monitor
+                && let Err(error) = validate_monitor(expected, stream.position(), (width, height))
+            {
+                let _ = session.close().await;
+                return Err(error);
+            }
             Some(MonitorStream {
                 node_id: stream.pipe_wire_node_id(),
+                position: stream.position(),
                 width,
                 height,
             })
@@ -129,10 +147,18 @@ impl PortalClickSession {
         })
     }
 
-    pub const fn supports_fixed_position(&self) -> bool {
-        self.stream.is_some()
+    /// Reuse a session only when its granted monitor matches current settings.
+    pub fn matches_monitor(&self, monitor: Option<MonitorGeometry>) -> bool {
+        match (self.stream, monitor) {
+            (None, None) => true,
+            (Some(stream), Some(expected)) => {
+                validate_monitor(expected, stream.position, (stream.width, stream.height)).is_ok()
+            }
+            _ => false,
+        }
     }
 
+    /// Move within the verified monitor if needed and emit a bounded click cycle.
     pub async fn click(&self, settings: &ClickSettings) -> Result<(), PortalError> {
         if let Some((x, y)) = settings.position {
             let stream = self.stream.ok_or(PortalError::MissingMonitorStream)?;
@@ -211,6 +237,7 @@ impl PortalClickSession {
         Ok(())
     }
 
+    /// Retry releasing a button when the first release failed.
     async fn best_effort_release(&self, button: i32) {
         let _ = timeout(
             EVENT_TIMEOUT,
@@ -224,7 +251,53 @@ impl PortalClickSession {
         .await;
     }
 
+    /// Close the portal session after clicking stops or permissions change.
     pub async fn close(self) {
         let _ = self.session.close().await;
+    }
+}
+
+/// Reject missing, mismatched or invalid monitor metadata before clicking.
+fn validate_monitor(
+    expected: MonitorGeometry,
+    position: Option<(i32, i32)>,
+    size: (i32, i32),
+) -> Result<(), PortalError> {
+    let position = position.ok_or(PortalError::MonitorUnverifiable)?;
+    if position != (expected.x, expected.y)
+        || size != (expected.width, expected.height)
+        || expected.width <= 0
+        || expected.height <= 0
+    {
+        return Err(PortalError::MonitorMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitor_matching_checks_origin_size_and_missing_metadata() {
+        let monitor = MonitorGeometry {
+            x: -1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        assert!(validate_monitor(monitor, Some((-1920, 0)), (1920, 1080)).is_ok());
+        assert!(matches!(
+            validate_monitor(monitor, Some((0, 0)), (1920, 1080)),
+            Err(PortalError::MonitorMismatch)
+        ));
+        assert!(matches!(
+            validate_monitor(monitor, Some((-1920, 0)), (1280, 720)),
+            Err(PortalError::MonitorMismatch)
+        ));
+        assert!(matches!(
+            validate_monitor(monitor, None, (1920, 1080)),
+            Err(PortalError::MonitorUnverifiable)
+        ));
     }
 }

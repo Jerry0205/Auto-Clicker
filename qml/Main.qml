@@ -11,6 +11,50 @@ Kirigami.ApplicationWindow {
     property bool monitorSelectionReady: false
     property var selectedMonitor: null
     property var positionPicker: null
+    property int captureSequence: 0
+    property bool monitorRestored: false
+    readonly property var monitorOptions: {
+        const screens = Qt.application.screens
+        const options = []
+        for (let i = 0; i < screens.length; ++i) {
+            options.push({ screen: screens[i], label: monitors.displayName(screens[i], screens) })
+        }
+        return options
+    }
+
+    function finishPicker(restoreHost) {
+        if (positionPicker) positionPicker.finish(restoreHost)
+    }
+
+    function beginPicker(preview) {
+        if (positionPicker || !selectedMonitor) return
+        captureSequence += 1
+        const picker = positionPickerComponent.createObject(root, {
+            "screen": selectedMonitor, "captureId": captureSequence
+        })
+        if (!picker) return
+        positionPicker = picker
+        picker.begin(selectedMonitor, controller.fixed_x, controller.fixed_y, preview, magnifierOption.checked)
+    }
+
+    function confirmMonitor() {
+        syncMonitor()
+        controller.fixed_position_confirmed = !!selectedMonitor
+    }
+
+    function syncMonitor() {
+        const screen = selectedMonitor
+        if (controller.running || controller.busy) controller.stop()
+        controller.monitor_identity = screen ? monitors.identity(screen) : ""
+        controller.monitor_x = screen ? screen.virtualX : 0
+        controller.monitor_y = screen ? screen.virtualY : 0
+        controller.monitor_width = screen ? screen.width : 0
+        controller.monitor_height = screen ? screen.height : 0
+        controller.fixed_x = Math.max(0, Math.min(controller.fixed_x, xInput.to))
+        controller.fixed_y = Math.max(0, Math.min(controller.fixed_y, yInput.to))
+    }
+
+    onSelectedMonitorChanged: syncMonitor()
 
     function ensureMonitorSelection() {
         if (!monitorSelectionReady) {
@@ -18,6 +62,18 @@ Kirigami.ApplicationWindow {
         }
 
         const screens = Qt.application.screens
+        if (!monitorRestored) {
+            monitorRestored = true
+            const restored = monitors.restoreIndex(screens, controller.monitor_identity)
+            if (restored >= 0) {
+                const screen = screens[restored]
+                const valid = controller.fixed_x < screen.width && controller.fixed_y < screen.height
+                selectedMonitor = screen
+                monitorInput.currentIndex = restored
+                controller.fixed_position_confirmed = valid
+                return
+            }
+        }
         for (let index = 0; index < screens.length; ++index) {
             if (screens[index] === selectedMonitor) {
                 monitorInput.currentIndex = index
@@ -25,6 +81,7 @@ Kirigami.ApplicationWindow {
             }
         }
 
+        controller.fixed_position_confirmed = false
         for (let index = 0; index < screens.length; ++index) {
             if (screens[index] === root.screen) {
                 selectedMonitor = screens[index]
@@ -44,25 +101,28 @@ Kirigami.ApplicationWindow {
     visible: true
     title: qsTr("Klickmeister %1").arg(Qt.application.version)
 
+    MonitorSelection { id: monitors }
+
     AppController {
         id: controller
     }
 
     Component {
         id: positionPickerComponent
-
         PositionPicker {
             id: picker
             hostWindow: root
+            onSelectingChanged: controller.selecting_position = selecting
+            onScreenshotRequested: function(requestId) { controller.capture_screenshot(requestId) }
+            onScreenshotCancelled: function(requestId) { controller.cancel_screenshot(requestId) }
             onPicked: function(x, y) {
                 controller.fixed_x = x
                 controller.fixed_y = y
                 controller.current_position = false
+                controller.fixed_position_confirmed = true
             }
             onFinished: {
-                if (root.positionPicker === picker) {
-                    root.positionPicker = null
-                }
+                if (root.positionPicker === picker) root.positionPicker = null
                 picker.destroy()
             }
         }
@@ -71,6 +131,7 @@ Kirigami.ApplicationWindow {
     Connections {
         target: controller
 
+        function onScreenshot_ready(requestId, uri, error) { if (positionPicker) positionPicker.acceptScreenshot(requestId, uri, error) }
         function onFixed_xChanged() { xInput.value = controller.fixed_x }
         function onFixed_yChanged() { yInput.value = controller.fixed_y }
     }
@@ -82,10 +143,24 @@ Kirigami.ApplicationWindow {
         }
     }
     onScreenChanged: ensureMonitorSelection()
-    onClosing: function(close) {
-        if (positionPicker) {
-            positionPicker.finish()
+    Connections {
+        target: Qt.application
+        function onScreensChanged() {
+            root.finishPicker()
+            root.ensureMonitorSelection()
+            root.syncMonitor()
         }
+    }
+    Connections {
+        target: root.selectedMonitor
+        function onWidthChanged() { controller.fixed_position_confirmed = false; root.finishPicker(); root.syncMonitor() }
+        function onHeightChanged() { controller.fixed_position_confirmed = false; root.finishPicker(); root.syncMonitor() }
+        function onDevicePixelRatioChanged() { controller.fixed_position_confirmed = false; root.finishPicker(); root.syncMonitor() }
+        function onVirtualXChanged() { root.finishPicker(); root.syncMonitor() }
+        function onVirtualYChanged() { root.finishPicker(); root.syncMonitor() }
+    }
+    onClosing: function(close) {
+        root.finishPicker(false)
         controller.shutdown()
         close.accepted = true
     }
@@ -221,7 +296,7 @@ Kirigami.ApplicationWindow {
                             id: xInput
                             Layout.fillWidth: true
                             from: 0
-                            to: 100000
+                            to: Math.max(0, controller.monitor_width - 1)
                             editable: true
                             value: controller.fixed_x
                             onValueModified: controller.fixed_x = value
@@ -231,7 +306,7 @@ Kirigami.ApplicationWindow {
                             id: yInput
                             Layout.fillWidth: true
                             from: 0
-                            to: 100000
+                            to: Math.max(0, controller.monitor_height - 1)
                             editable: true
                             value: controller.fixed_y
                             onValueModified: controller.fixed_y = value
@@ -243,46 +318,65 @@ Kirigami.ApplicationWindow {
                         Controls.ComboBox {
                             id: monitorInput
                             Layout.fillWidth: true
-                            model: Qt.application.screens
-                            textRole: "name"
+                            model: root.monitorOptions
+                            textRole: "label"
+                            onModelChanged: Qt.callLater(root.ensureMonitorSelection)
                             Component.onCompleted: {
                                 root.monitorSelectionReady = true
                                 root.ensureMonitorSelection()
                             }
-                            onActivated: root.selectedMonitor = Qt.application.screens[currentIndex]
+                            onActivated: { root.selectedMonitor = model[currentIndex].screen; root.confirmMonitor() }
                             Accessible.name: qsTr("Monitor für die feste Position")
                         }
                     }
                     Controls.Button {
                         Layout.fillWidth: true
                         enabled: !controller.current_position && !controller.running && !controller.busy
-                        text: qsTr("Position auf dem Bildschirm auswählen …")
+                        text: qsTr("Position wählen / Neu wählen …")
                         icon.name: "crosshairs"
-                        onClicked: {
-                            if (positionPicker) {
-                                return
-                            }
-
-                            const screens = Qt.application.screens
-                            const selectedScreen = monitorInput.currentIndex >= 0
-                                && monitorInput.currentIndex < screens.length
-                                ? screens[monitorInput.currentIndex]
-                                : root.screen
-                            const picker = positionPickerComponent.createObject(root, {
-                                "screen": selectedScreen
-                            })
-                            if (picker) {
-                                positionPicker = picker
-                                picker.begin()
-                            }
-                        }
+                        onClicked: root.beginPicker(false)
+                    }
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        visible: !controller.current_position && !controller.fixed_position_confirmed
+                        text: qsTr("Gespeicherte Position nicht zugeordnet. Bitte Monitor bestätigen oder eine neue Position wählen.")
+                        wrapMode: Text.WordWrap
+                    }
+                    Controls.Button {
+                        visible: !controller.current_position && !controller.fixed_position_confirmed
+                        enabled: !!root.selectedMonitor && !controller.running && !controller.busy
+                        text: qsTr("Monitor und Koordinaten bestätigen")
+                        onClicked: root.confirmMonitor()
+                    }
+                    Controls.CheckBox {
+                        id: magnifierOption
+                        visible: !controller.current_position
+                        enabled: !controller.running && !controller.busy
+                        text: qsTr("Mit 4×-Lupe auswählen (Bildschirmaufnahme)")
+                        Controls.ToolTip.visible: hovered
+                        Controls.ToolTip.text: qsTr("Die Auswahl verwendet ein Standbild. Die Bildschirmaufnahme kann eine zusätzliche Freigabe erfordern.")
+                    }
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        visible: !controller.current_position
+                        text: qsTr("%1 · X: %2 · Y: %3")
+                            .arg(monitors.displayName(root.selectedMonitor, Qt.application.screens))
+                            .arg(controller.fixed_x).arg(controller.fixed_y)
+                        wrapMode: Text.WordWrap
+                    }
+                    Controls.Button {
+                        visible: !controller.current_position
+                        enabled: !!root.selectedMonitor && controller.fixed_position_confirmed && !controller.running && !controller.busy
+                        text: qsTr("Position anzeigen")
+                        icon.name: "view-preview"
+                        onClicked: root.beginPicker(true)
                     }
                     Controls.Label {
                         Layout.fillWidth: true
                         visible: !controller.current_position
                         wrapMode: Text.WordWrap
                         color: Kirigami.Theme.disabledTextColor
-                        text: qsTr("Koordinaten sind relativ zum oben gewählten Monitor. Wähle beim Start im KWin-Dialog denselben Monitor aus.")
+                        text: qsTr("Koordinaten gelten innerhalb dieses monitors. Wähle beim Start im KWin-Dialog denselben Monitor; die Freigabe wird vor dem Klicken geprüft.")
                     }
                 }
             }

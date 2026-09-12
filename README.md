@@ -47,7 +47,11 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 4. Starte den Klicker mit dem Hotkey.
 5. Drücke den Hotkey erneut, um ihn zu stoppen.
 
-Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Beim Start fragt KDE, auf welchem Bildschirm geklickt werden darf. Wähle dort denselben Bildschirm aus.
+Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. „Position anzeigen“ markiert das gespeicherte Ziel kurz, ohne zu klicken.
+
+Optional verwendet „Mit 4×-Lupe auswählen“ eine über das Screenshot-Portal freigegebene Bildschirmaufnahme als Standbild. Bei Ablehnung, Fehler oder nach spätestens drei Sekunden Wartezeit funktioniert die Auswahl ohne Lupe weiter. Ausstehende Screenshot-Anfragen werden dabei geschlossen. Die Aufnahme ist keine Live-Vorschau.
+
+Beim Start fragt KDE, auf welchem Bildschirm geklickt werden darf. Wähle dort denselben Bildschirm aus. Position und Größe des freigegebenen Monitors werden vor dem ersten Klick geprüft. Ein anderer Monitor oder fehlende Zuordnungsdaten führen zu einer Fehlermeldung. Nach einem Monitorwechsel wird eine passende Freigabe erneut angefragt. Monitoridentität, Größe und Skalierung werden mit den Koordinaten gespeichert. Nach einem Neustart wird nur eine eindeutige Übereinstimmung wiederhergestellt; andernfalls müssen Monitor und Koordinaten bestätigt oder neu gewählt werden.
 
 ## Warum fragt KDE nach Berechtigungen?
 
@@ -59,7 +63,7 @@ Klickmeister benötigt die Erlaubnis:
 - Mausklicks auszuführen
 - bei einer festen Position den ausgewählten Bildschirm zuzuordnen
 
-Das Programm liest keine Tastatureingaben, Passwörter oder Zwischenablagen mit. Auch die Bildschirminhalte werden nicht aufgezeichnet. Alle Freigaben enden, sobald du Klickmeister schließt.
+Das Programm liest keine Tastatureingaben, Passwörter oder Zwischenablagen mit. Nur die optional aktivierte Lupe lädt eine Bildschirmaufnahme über das Screenshot-Portal. Diese wird nach der Auswahl aus der Anzeige entfernt; das Portal kann dafür eine temporäre Bilddatei erzeugen. Es wird kein Bildschirmvideo aufgenommen. Alle Freigaben enden, sobald du Klickmeister schließt.
 
 Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So kannst du ihn immer sicher anhalten.
 
@@ -67,6 +71,7 @@ Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So
 
 - Das kleinste Intervall beträgt 10 Millisekunden. Mehr als 100 Klicks pro Sekunde sind nicht möglich.
 - Eine feste Position gilt immer für den Bildschirm, den du im KDE-Dialog ausgewählt hast.
+- Die Monitorauswahl zeigt Hersteller und Modell aus den Systemdaten. Bei gleichen Modellen oder fehlenden Modellangaben wird der Anschluss zur Unterscheidung ergänzt.
 - Der Positionswähler öffnet sich auf dem Bildschirm, den du zuvor in Klickmeister ausgewählt hast.
 - Klickmeister ist nur für Wayland gedacht. Ein X11- oder `xdotool`-Ersatz ist nicht eingebaut.
 - Gespeichert werden nur deine Einstellungen. Es gibt keine Statistiken, keine Nutzungsdaten und keine Telemetrie.
@@ -79,8 +84,11 @@ Du möchtest Klickmeister selbst bauen, verändern oder überprüfen? Die wichti
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
+dbus-run-session -- cargo test --locked closes_real_dbus_request -- --ignored
 cargo build --locked --release
 bash tests/qml-smoke.sh target/release/klickmeister
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software /usr/lib/qt6/bin/qmltestrunner -input tests/qml
+bash tests/qml-wayland.sh # isolierter KWin mit drei Monitoren (benötigt kscreen-doctor)
 ```
 
 Mehr über den Aufbau und die Sicherheitsentscheidungen findest du in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md).

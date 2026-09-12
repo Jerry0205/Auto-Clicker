@@ -18,13 +18,13 @@ use ashpd::desktop::{
 use futures_util::{Stream, StreamExt, future};
 use tokio::{
     runtime::Builder,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     task::JoinHandle,
     time::{Instant, sleep_until, timeout},
 };
 
 use crate::{
-    model::ClickSettings,
+    model::{ClickSettings, MonitorGeometry},
     portal::PortalClickSession,
     scheduler::Schedule,
     state::{RunState, StateMachine},
@@ -39,6 +39,8 @@ pub enum Command {
     Start(ClickSettings),
     Stop,
     ConfigureHotkey,
+    CaptureScreenshot(i32),
+    CancelScreenshot(i32),
     Shutdown,
 }
 
@@ -48,6 +50,7 @@ pub enum WorkerEvent {
     Running(bool),
     Hotkey(String),
     StartRequested,
+    Screenshot(i32, Result<String, String>),
     Error(String),
 }
 
@@ -163,8 +166,25 @@ async fn setup_hotkey(
     Ok((portal, session, actual))
 }
 
-async fn setup_click_session(fixed: bool) -> Result<PortalClickSession, String> {
-    PortalClickSession::create(fixed)
+/// Signal cancellation and allow the capture owner to close its portal handle.
+async fn cancel_capture(
+    task: &mut Option<JoinHandle<Result<String, String>>>,
+    cancel: &mut Option<oneshot::Sender<()>>,
+) {
+    if let Some(cancel) = cancel.take() {
+        let _ = cancel.send(());
+    }
+    if let Some(task) = task.take() {
+        // Screenshot cleanup has its own bounded Close and disconnect calls.
+        let _ = task.await;
+    }
+}
+
+/// Create a portal session for the selected monitor or current cursor.
+async fn setup_click_session(
+    monitor: Option<MonitorGeometry>,
+) -> Result<PortalClickSession, String> {
+    PortalClickSession::create(monitor)
         .await
         .map_err(|error| error.to_string())
 }
@@ -190,6 +210,7 @@ async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task
     }
 }
 
+/// Serialize clicks, permissions, shortcut events and cancellable captures.
 async fn run_worker(
     mut commands: mpsc::Receiver<Command>,
     mut latest_settings: ClickSettings,
@@ -204,6 +225,9 @@ async fn run_worker(
     let mut hotkey_task = Some(tokio::spawn(setup_hotkey(preferred_hotkey)));
     let mut configure_task: Option<JoinHandle<Result<(), String>>> = None;
     let mut hotkey: Option<HotkeyState> = None;
+    let mut screenshot_task: Option<JoinHandle<Result<String, String>>> = None;
+    let mut screenshot_id = 0;
+    let mut screenshot_cancel = None;
 
     (emit)(WorkerEvent::Status(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
@@ -229,15 +253,14 @@ async fn run_worker(
                         if !machine.request_start() {
                             continue;
                         }
-                        let needs_fixed = settings.position.is_some();
-                        if click_session.as_ref().is_some_and(|session| session.supports_fixed_position() == needs_fixed) {
+                        if click_session.as_ref().is_some_and(|session| session.matches_monitor(settings.monitor)) {
                             start_run(&mut machine, &mut active, settings, &emit);
                         } else {
                             if let Some(old_session) = click_session.take() {
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, old_session.close()).await;
                             }
                             (emit)(WorkerEvent::Status("Warte auf Wayland-Berechtigung …".to_owned()));
-                            start_task = Some(tokio::spawn(setup_click_session(needs_fixed)));
+                            start_task = Some(tokio::spawn(setup_click_session(settings.monitor)));
                         }
                     }
                     Command::Stop => {
@@ -245,6 +268,18 @@ async fn run_worker(
                             task.abort();
                         }
                         stop_run(&mut machine, &mut active, &emit);
+                    }
+                    Command::CaptureScreenshot(request_id) => {
+                        cancel_capture(&mut screenshot_task, &mut screenshot_cancel).await;
+                        screenshot_id = request_id;
+                        let (tx, rx) = oneshot::channel();
+                        screenshot_cancel = Some(tx);
+                        screenshot_task = Some(tokio::spawn(crate::screenshot::capture(rx)));
+                    }
+                    Command::CancelScreenshot(request_id) => {
+                        if request_id == screenshot_id {
+                            cancel_capture(&mut screenshot_task, &mut screenshot_cancel).await;
+                        }
                     }
                     Command::ConfigureHotkey => {
                         if configure_task.is_some() {
@@ -269,6 +304,11 @@ async fn run_worker(
                     }
                     Command::Shutdown => break,
                 }
+            }
+            result = wait_task(&mut screenshot_task), if screenshot_task.is_some() => {
+                screenshot_task = None;
+                screenshot_cancel = None;
+                (emit)(WorkerEvent::Screenshot(screenshot_id, result.unwrap_or_else(|error| Err(error.to_string()))));
             }
             result = wait_task(&mut start_task), if start_task.is_some() => {
                 start_task = None;
@@ -404,6 +444,7 @@ async fn run_worker(
 
     machine.close();
     closing.store(true, Ordering::Release);
+    cancel_capture(&mut screenshot_task, &mut screenshot_cancel).await;
     if let Some(task) = start_task {
         task.abort();
     }

@@ -25,6 +25,7 @@ pub struct AppConfig {
     pub fixed_x: u32,
     pub fixed_y: u32,
     pub hotkey: String,
+    pub monitor_identity: String,
 }
 
 impl Default for AppConfig {
@@ -39,6 +40,7 @@ impl Default for AppConfig {
             fixed_x: 0,
             fixed_y: 0,
             hotkey: "Pause".to_owned(),
+            monitor_identity: String::new(),
         }
     }
 }
@@ -153,10 +155,19 @@ mod tests {
             fixed_x: 640,
             fixed_y: 480,
             hotkey: "F8".to_owned(),
+            monitor_identity: "monitor-serial-123".to_owned(),
         };
         assert!(save_to(&path, &config).is_ok());
         assert_eq!(load_from(&path).ok(), Some(config));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_config_has_no_implicit_monitor_identity() {
+        let config = toml::from_str::<AppConfig>(
+            "position_mode = \"fixed\"\nfixed_x = 640\nfixed_y = 480\n",
+        );
+        assert!(config.is_ok_and(|config| config.monitor_identity.is_empty()));
     }
 
     #[test]
