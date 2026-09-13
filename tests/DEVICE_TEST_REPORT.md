@@ -6,7 +6,7 @@ Die erreichbare Gerätesitzung verwendet Ubuntu 26.04.1, XFCE und X11. Rust, Qt 
 
 | Prüfung | Ergebnis |
 | --- | --- |
-| Rust-Unit-Tests | 21 bestanden |
+| Rust-Unit-Tests | 24 bestanden |
 | Screenshot-Abbruch über echten privaten D-Bus | Bestanden |
 | Echter Rust-Worker gegen simulierte D-Bus-Portale | Bestanden |
 | Laden des eingebetteten Hauptfensters im gebauten Programm | Bestanden |
@@ -27,6 +27,7 @@ Der Worker-Test prüft alle drei Maustasten, Einzel- und Doppelklick, genau drei
 1. Ein weiterer Startbefehl konnte die Einstellungen einer noch laufenden Berechtigungsanfrage überschreiben. Ein ungültiger weiterer Start konnte sogar den Zustandsautomaten in `Error` versetzen, während der bestehende Scheduler weiterlief; ein nachfolgender Stop griff dann nicht mehr. Doppelte Starts werden jetzt vor Validierung und Einstellungsübernahme verworfen.
 2. Das `Closed`-Signal der GlobalShortcuts-Sitzung wurde nicht beobachtet. Der Worker überwacht diese Sitzung jetzt vor Freigabe des Starts und beendet beim Sitzungsende den laufenden Klicker bzw. eine ausstehende Startaufgabe.
 3. Nach Widerruf einer Maussitzung wurde beim erneuten Start dieselbe ungültige Sitzung wiederverwendet. Der neue Regressionstest reproduzierte diesen Fehler. Nach einem Klickfehler wird die Sitzung jetzt geschlossen und verworfen, damit der nächste Start eine neue Freigabe anfordert.
+4. Im CodeRabbit-Review wurde eine unbegrenzte Wartezeit beim Anmelden der Hotkey-Sitzungsüberwachung gefunden. Die Registrierung ist jetzt auf eine Sekunde begrenzt. Drei zusätzliche Tests prüfen Timeout, eine bereits beendete Sitzung und die weiterhin funktionierende Überwachung nach erfolgreicher Registrierung.
 
 Die Eingabe- und Skalierungsprüfungen deckten zusätzlich Fehler in der Testumgebung auf: einen vom Programm abweichenden Qt-Control-Stil und überlappende virtuelle Ausgänge bei erhöhter Skalierung. Die Tests verwenden jetzt explizit den App-Stil und konfigurieren die Ausgabeskalierung. Der Picker-Test wartet außerdem auf Fensteraktivierung und die asynchrone Bestätigung unter Wayland. Am Verhalten der Eingabefelder und des Positionswählers waren dafür keine Änderungen erforderlich.
 

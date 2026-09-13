@@ -211,6 +211,21 @@ async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task
     }
 }
 
+/// Bound signal registration without limiting the subsequent session lifetime.
+async fn register_hotkey_watcher(
+    ready: oneshot::Receiver<()>,
+    closed: impl std::future::Future<Output = HotkeySignal>,
+) -> bool {
+    timeout(PORTAL_CLOSE_TIMEOUT, async {
+        tokio::select! {
+            result = ready => result.is_ok(),
+            _ = closed => false,
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Serialize clicks, permissions, shortcut events and cancellable captures.
 async fn run_worker(
     mut commands: mpsc::Receiver<Command>,
@@ -341,7 +356,7 @@ async fn run_worker(
                             (Ok(activations), Ok(changes)) => {
                                 let session = Arc::new(session);
                                 let watched_session = Arc::clone(&session);
-                                let (ready_tx, mut ready_rx) = oneshot::channel();
+                                let (ready_tx, ready_rx) = oneshot::channel();
                                 let mut closed = Box::pin(async move {
                                     if let Ok(events) = watched_session.receive_closed().await {
                                         let _ = ready_tx.send(());
@@ -351,10 +366,7 @@ async fn run_worker(
                                     HotkeySignal::Closed
                                 });
                                 // Register the Closed signal before any start can be accepted.
-                                let watching = tokio::select! {
-                                    result = &mut ready_rx => result.is_ok(),
-                                    _ = &mut closed => false,
-                                };
+                                let watching = register_hotkey_watcher(ready_rx, &mut closed).await;
                                 if !watching {
                                     let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                     (emit)(WorkerEvent::Error("Die Hotkey-Sitzung kann nicht überwacht werden.".to_owned()));
@@ -539,6 +551,40 @@ fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stalled_hotkey_registration_times_out() {
+        let (_ready_tx, ready_rx) = oneshot::channel();
+        let result = timeout(
+            PORTAL_CLOSE_TIMEOUT * 2,
+            register_hotkey_watcher(ready_rx, future::pending()),
+        )
+        .await;
+        assert_eq!(result.ok(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn registered_hotkey_watcher_still_delivers_session_closure() {
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let (close_tx, close_rx) = oneshot::channel();
+        let mut closed = Box::pin(async move {
+            let _ = ready_tx.send(());
+            let _ = close_rx.await;
+            HotkeySignal::Closed
+        });
+        assert!(register_hotkey_watcher(ready_rx, &mut closed).await);
+        assert!(close_tx.send(()).is_ok());
+        assert!(matches!(
+            timeout(PORTAL_CLOSE_TIMEOUT, closed).await,
+            Ok(HotkeySignal::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn session_closed_before_registration_is_not_ready() {
+        let (_ready_tx, ready_rx) = oneshot::channel();
+        assert!(!register_hotkey_watcher(ready_rx, async { HotkeySignal::Closed }).await);
+    }
 
     fn settings() -> ClickSettings {
         ClickSettings {
