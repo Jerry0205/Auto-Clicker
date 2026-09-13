@@ -105,6 +105,7 @@ Kirigami.ApplicationWindow {
 
     AppController {
         id: controller
+        objectName: "controller"
     }
 
     Component {
@@ -189,6 +190,7 @@ Kirigami.ApplicationWindow {
                     anchors.fill: parent
                     Controls.SpinBox {
                         id: intervalInput
+                        objectName: "intervalInput"
                         Layout.fillWidth: true
                         from: 10
                         to: 86400000
@@ -258,6 +260,7 @@ Kirigami.ApplicationWindow {
                             onToggled: if (checked) controller.repeat_until_stopped = false
                         }
                         Controls.SpinBox {
+                            objectName: "repeatInput"
                             Layout.fillWidth: true
                             from: 1
                             to: 10000000
@@ -294,6 +297,7 @@ Kirigami.ApplicationWindow {
                         Controls.Label { text: qsTr("X") }
                         Controls.SpinBox {
                             id: xInput
+                            objectName: "xInput"
                             Layout.fillWidth: true
                             from: 0
                             to: Math.max(0, controller.monitor_width - 1)
@@ -304,6 +308,7 @@ Kirigami.ApplicationWindow {
                         Controls.Label { text: qsTr("Y") }
                         Controls.SpinBox {
                             id: yInput
+                            objectName: "yInput"
                             Layout.fillWidth: true
                             from: 0
                             to: Math.max(0, controller.monitor_height - 1)
@@ -317,6 +322,7 @@ Kirigami.ApplicationWindow {
                         Controls.Label { text: qsTr("Monitor") }
                         Controls.ComboBox {
                             id: monitorInput
+                            objectName: "monitorInput"
                             Layout.fillWidth: true
                             model: root.monitorOptions
                             textRole: "label"
