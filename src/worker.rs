@@ -24,7 +24,7 @@ use tokio::{
 };
 
 use crate::{
-    model::{ClickSettings, MonitorGeometry},
+    model::{ClickSettings, MonitorGeometry, ValidationError},
     portal::PortalClickSession,
     scheduler::Schedule,
     state::{RunState, StateMachine},
@@ -129,6 +129,7 @@ struct HotkeyState {
 enum HotkeySignal {
     Activated(Activated),
     Changed(ShortcutsChanged),
+    Closed,
 }
 
 struct ActiveRun {
@@ -240,18 +241,17 @@ async fn run_worker(
                 let Some(command) = command else { break; };
                 match command {
                     Command::Start(settings) => {
-                        latest_settings = settings.clone();
                         if hotkey.is_none() {
                             (emit)(WorkerEvent::Error("Vor dem Start muss der globale Stop-Hotkey von KWin bestätigt sein.".to_owned()));
                             continue;
                         }
-                        if let Err(error) = settings.validate() {
-                            machine.fail();
-                            (emit)(WorkerEvent::Error(error.to_string()));
-                            continue;
-                        }
-                        if !machine.request_start() {
-                            continue;
+                        match request_validated_start(&mut machine, &settings) {
+                            Ok(true) => latest_settings = settings.clone(),
+                            Ok(false) => continue,
+                            Err(error) => {
+                                (emit)(WorkerEvent::Error(error.to_string()));
+                                continue;
+                            }
                         }
                         if click_session.as_ref().is_some_and(|session| session.matches_monitor(settings.monitor)) {
                             start_run(&mut machine, &mut active, settings, &emit);
@@ -339,13 +339,37 @@ async fn run_worker(
                         let changed_stream = portal.receive_shortcuts_changed().await;
                         match (activation_stream, changed_stream) {
                             (Ok(activations), Ok(changes)) => {
+                                let session = Arc::new(session);
+                                let watched_session = Arc::clone(&session);
+                                let (ready_tx, mut ready_rx) = oneshot::channel();
+                                let mut closed = Box::pin(async move {
+                                    if let Ok(events) = watched_session.receive_closed().await {
+                                        let _ = ready_tx.send(());
+                                        futures_util::pin_mut!(events);
+                                        let _ = events.next().await;
+                                    }
+                                    HotkeySignal::Closed
+                                });
+                                // Register the Closed signal before any start can be accepted.
+                                let watching = tokio::select! {
+                                    result = &mut ready_rx => result.is_ok(),
+                                    _ = &mut closed => false,
+                                };
+                                if !watching {
+                                    let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
+                                    (emit)(WorkerEvent::Error("Die Hotkey-Sitzung kann nicht überwacht werden.".to_owned()));
+                                    continue;
+                                }
                                 let events = futures_util::stream::select(
-                                    activations.map(HotkeySignal::Activated),
-                                    changes.map(HotkeySignal::Changed),
+                                    futures_util::stream::select(
+                                        activations.map(HotkeySignal::Activated),
+                                        changes.map(HotkeySignal::Changed),
+                                    ),
+                                    futures_util::stream::once(closed),
                                 );
                                 hotkey = Some(HotkeyState {
                                     portal: Arc::new(portal),
-                                    session: Arc::new(session),
+                                    session,
                                     events: Box::pin(events),
                                 });
                                 (emit)(WorkerEvent::Hotkey(actual));
@@ -395,6 +419,7 @@ async fn run_worker(
                         if let Some(shortcut) = changed.shortcuts().iter().find(|shortcut| shortcut.id() == HOTKEY_ID) {
                             (emit)(WorkerEvent::Hotkey(shortcut.trigger_description().to_owned()));
                         } else {
+                            if let Some(task) = start_task.take() { task.abort(); }
                             stop_run(&mut machine, &mut active, &emit);
                             machine.fail();
                             if let Some(state) = hotkey.take() {
@@ -404,7 +429,8 @@ async fn run_worker(
                         }
                     }
                     Some(HotkeySignal::Activated(_)) => {}
-                    None => {
+                    Some(HotkeySignal::Closed) | None => {
+                        if let Some(task) = start_task.take() { task.abort(); }
                         stop_run(&mut machine, &mut active, &emit);
                         machine.fail();
                         (emit)(WorkerEvent::Error("Die globale Hotkey-Sitzung wurde beendet.".to_owned()));
@@ -429,6 +455,10 @@ async fn run_worker(
                     active = None;
                     (emit)(WorkerEvent::Running(false));
                     (emit)(WorkerEvent::Error(error.to_string()));
+                    // A revoked or failed session cannot safely be reused on retry.
+                    if let Some(failed_session) = click_session.take() {
+                        let _ = timeout(PORTAL_CLOSE_TIMEOUT, failed_session.close()).await;
+                    }
                     continue;
                 }
                 if run.schedule.is_finished() {
@@ -463,6 +493,21 @@ async fn run_worker(
     (emit)(WorkerEvent::Running(false));
 }
 
+/// Ignore duplicate starts before they can change a run or its pending settings.
+fn request_validated_start(
+    machine: &mut StateMachine,
+    settings: &ClickSettings,
+) -> Result<bool, ValidationError> {
+    if !machine.request_start() {
+        return Ok(false);
+    }
+    if let Err(error) = settings.validate() {
+        machine.fail();
+        return Err(error);
+    }
+    Ok(true)
+}
+
 fn start_run(
     machine: &mut StateMachine,
     active: &mut Option<ActiveRun>,
@@ -494,6 +539,52 @@ fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settings() -> ClickSettings {
+        ClickSettings {
+            interval_ms: 100,
+            button: crate::model::MouseButton::Left,
+            click_type: crate::model::ClickType::Single,
+            repeat: Some(3),
+            position: None,
+            monitor: None,
+        }
+    }
+
+    #[test]
+    fn duplicate_start_keeps_pending_settings_and_active_run_stoppable() {
+        for clicking in [false, true] {
+            let mut machine = StateMachine::default();
+            assert_eq!(request_validated_start(&mut machine, &settings()), Ok(true));
+            if clicking {
+                assert!(machine.started());
+            }
+            let expected = machine.state();
+            for interval_ms in [0, 250] {
+                let duplicate = ClickSettings {
+                    interval_ms,
+                    ..settings()
+                };
+                assert_eq!(request_validated_start(&mut machine, &duplicate), Ok(false));
+                assert_eq!(machine.state(), expected);
+            }
+            assert!(machine.stop());
+            assert!(!machine.started());
+        }
+    }
+
+    #[test]
+    fn invalid_initial_start_can_be_corrected() {
+        let mut machine = StateMachine::default();
+        let invalid = ClickSettings {
+            interval_ms: 0,
+            ..settings()
+        };
+        assert!(request_validated_start(&mut machine, &invalid).is_err());
+        assert_eq!(machine.state(), RunState::Error);
+        assert_eq!(request_validated_start(&mut machine, &settings()), Ok(true));
+        assert!(machine.started());
+    }
 
     #[test]
     fn failed_portal_connection_leaves_no_active_run() {

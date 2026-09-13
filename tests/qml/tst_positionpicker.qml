@@ -15,7 +15,12 @@ TestCase {
     SignalSpy { id: finished; target: picker; signalName: "finished" }
     SignalSpy { id: picked; target: picker; signalName: "picked" }
 
-    function init() { picked.clear(); cancelled.clear(); finished.clear(); host.show() }
+    function init() {
+        picked.clear(); cancelled.clear(); finished.clear()
+        host.show()
+        host.requestActivate()
+        tryCompare(host, "active", true)
+    }
     function cleanup() { picker.finish(); picked.clear() }
     function begin() {
         host.requestActivate()
@@ -177,7 +182,7 @@ TestCase {
         tryVerify(function() { return picker.active })
         wait(20)
         keyClick(Qt.Key_Return)
-        compare(picked.count, 1)
+        tryCompare(picked, "count", 1)
         compare(host.visible, true)
     }
 
