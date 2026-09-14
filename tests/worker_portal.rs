@@ -30,8 +30,15 @@ struct Observed {
     buttons: Vec<(i32, u32)>,
     release_failures: usize,
     closed: usize,
+    stall_close: bool,
+    close_releases: Vec<Arc<Notify>>,
+    remote_owner: String,
+    hotkey_owner: String,
     fixed_stream: bool,
     motions: Vec<(u32, f64, f64)>,
+    delay_hotkey: bool,
+    hotkey_seen: Arc<Notify>,
+    hotkey_release: Arc<Notify>,
     delay_start: bool,
     start_seen: Arc<Notify>,
     start_release: Arc<Notify>,
@@ -84,8 +91,22 @@ async fn respond(
 struct FakeSession(Shared);
 #[zbus::interface(name = "org.freedesktop.portal.Session", crate = "ashpd::zbus")]
 impl FakeSession {
+    /// Record each close and optionally hold its reply until the test releases it.
     async fn close(&self) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).closed += 1;
+        let release = {
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.closed += 1;
+            if state.stall_close {
+                let release = Arc::new(Notify::new());
+                state.close_releases.push(release.clone());
+                Some(release)
+            } else {
+                None
+            }
+        };
+        if let Some(release) = release {
+            release.notified().await;
+        }
     }
     #[zbus(property)]
     fn version(&self) -> u32 {
@@ -116,6 +137,18 @@ async fn create(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remote_session = Some(session.clone());
+    }
+    {
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        let owner = header
+            .sender()
+            .ok_or_else(|| failed("missing owner"))?
+            .to_string();
+        if hotkey {
+            state.hotkey_owner = owner;
+        } else {
+            state.remote_owner = owner;
+        }
     }
     let results = HashMap::from([(
         "session_handle".into(),
@@ -150,6 +183,18 @@ impl FakeHotkeys {
         #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
+        let (delay, seen, release) = {
+            let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                state.delay_hotkey,
+                state.hotkey_seen.clone(),
+                state.hotkey_release.clone(),
+            )
+        };
+        if delay {
+            seen.notify_one();
+            release.notified().await;
+        }
         let shortcuts = vec![(
             "toggle-clicking",
             HashMap::from([
@@ -436,9 +481,12 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         worker.send(Command::Start(fixed.clone()))?;
         timeout(Duration::from_secs(3), seen.notified()).await?;
         worker.send(Command::Start(ClickSettings { position: Some((100, 150)), ..fixed.clone() }))?;
+        let closed_before_stop = observed.lock().unwrap_or_else(|e| e.into_inner()).closed;
         // This subsequent worker roundtrip proves the duplicate was processed.
         worker.send(Command::Stop)?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).closed > closed_before_stop,
+            "Stop must close the pending RemoteDesktop session before confirming it");
         release.notify_one();
         sleep(Duration::from_millis(80)).await;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len(), before);
@@ -544,11 +592,70 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 .len(),
             count
         );
+        // Cover both permission dialogs, with responsive and stalled Session.Close.
+        for hotkey_pending in [true, false] {
+            for stall_close in [false, true] {
+                let (seen, release, closed_before) = {
+                    let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+                    state.delay_hotkey = hotkey_pending;
+                    state.delay_start = !hotkey_pending;
+                    state.stall_close = stall_close;
+                    let (seen, release) = if hotkey_pending {
+                        (state.hotkey_seen.clone(), state.hotkey_release.clone())
+                    } else {
+                        (state.start_seen.clone(), state.start_release.clone())
+                    };
+                    (seen, release, state.closed)
+                };
+                let (tx, mut pending_events) = mpsc::unbounded_channel();
+                let settings = ClickSettings {
+                    interval_ms: 100, button: MouseButton::Left, click_type: ClickType::Single,
+                    repeat: Some(1), position: None, monitor: None,
+                };
+                let pending_worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+                    let _ = tx.send(event);
+                });
+                if !hotkey_pending {
+                    event(&mut pending_events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+                    pending_worker.send(Command::Start(settings))?;
+                }
+                timeout(Duration::from_secs(3), seen.notified()).await?;
+                let owner = {
+                    let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+                    if hotkey_pending { state.hotkey_owner.clone() } else { state.remote_owner.clone() }
+                };
+                let before = std::time::Instant::now();
+                timeout(Duration::from_secs(4), tokio::task::spawn_blocking(move || pending_worker.shutdown())).await??;
+                eprintln!("Pending {} shutdown, stalled Close={stall_close}: {:?}",
+                    if hotkey_pending { "hotkey" } else { "mouse" }, before.elapsed());
+                assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).closed > closed_before,
+                    "Shutdown must close its pending permission session");
+                let bus = zbus::fdo::DBusProxy::new(&service).await?;
+                assert!(!bus.name_has_owner(owner.as_str().try_into()?).await?,
+                    "Permission owner must disconnect even when Session.Close stalls");
+                release.notify_one();
+                // Mouse shutdown also closes the hotkey session. Give every
+                // stalled close its own retained permit, including late waiters.
+                let close_releases = std::mem::take(
+                    &mut observed.lock().unwrap_or_else(|e| e.into_inner()).close_releases,
+                );
+                for close_release in close_releases {
+                    close_release.notify_one();
+                }
+                sleep(Duration::from_millis(30)).await;
+                while let Ok(event) = pending_events.try_recv() {
+                    assert!(!matches!(event, WorkerEvent::Running(true)),
+                        "A late permission response must not start clicking");
+                }
+                observed.lock().unwrap_or_else(|e| e.into_inner()).stall_close = false;
+            }
+        }
         Ok(())
     }
     .await;
     tokio::task::spawn_blocking(move || worker.shutdown()).await?;
     assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).closed >= 1);
+    result?;
     service.close().await?;
-    result
+    Ok(())
 }

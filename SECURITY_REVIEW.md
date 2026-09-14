@@ -1,6 +1,6 @@
 # Security Review
 
-Stand: 2026-09-12, Version 0.1.1 (Positionsauswahl erweitert)
+Stand: 2026-09-14, Version 0.1.2 (Portal-Bereinigung; native Geräteprüfung siehe Testbericht zu 0.1.1)
 
 ## 1. Benötigte Berechtigungen
 
@@ -42,7 +42,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 
 - Ohne bestätigten globalen Hotkey wird Start abgewiesen.
 - Hotkey und Stop-Button setzen den einzigen aktiven Run auf `Stopped` und entfernen seinen Termin.
-- Fenster-Schließen ruft synchron `shutdown` auf, beendet den Worker und schließt beide Portal-Sitzungen.
+- Fenster-Schließen ruft synchron `shutdown` auf, beendet den Worker und schließt beide Portal-Sitzungen. Ausstehende RemoteDesktop- und Hotkey-Anfragen werden kooperativ abgebrochen. Jede Anfrage besitzt ihre D-Bus-Verbindung, die nach begrenztem `Session.Close` ebenfalls getrennt wird; die Bereinigung wird vor der Stop-/Shutdown-Bestätigung abgewartet.
 - Ein Prozessende trennt zusätzlich automatisch den D-Bus-Client; es gibt keinen separaten Clickerprozess.
 - Nach erfolgreichem Button-Press wird immer ein Release versucht. Schlägt Release fehl, folgt ein zweiter Best-Effort-Release und der Scheduler geht in Fehlerzustand.
 - Verpasste Timings werden nicht nachgeholt; dadurch entsteht kein Event-Burst.
@@ -52,6 +52,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 - Ein echtes globales Auslesen der Cursorposition ist unter Wayland absichtlich nicht möglich. Der Picker nutzt ein eigenes Vollbildfenster.
 - Für absolute Positionen muss der Benutzer im KWin-Dialog denselben Monitor wählen. Position und Größe werden vor Nutzung mit der Auswahl abgeglichen; fehlende Metadaten verhindern den Start. Displayänderungen können die Sitzung ungültig machen und führen dann zum Stop mit Fehlermeldung.
 - Portal-Dialoge sind derzeit nicht an einen exportierten Wayland-Fensterhandle gekoppelt und können daher als separates KWin-Dialogfenster erscheinen.
+- Auf dem geprüften xdg-desktop-portal 1.22.1 bleibt eine unbeantwortete Screenshot-Erstfreigabe trotz Request.Close und getrennter App-Verbindung offen und kann weitere Portal-Aufrufe blockieren. Der Picker fällt nach drei Sekunden auf Auswahl ohne Lupe zurück; der verbliebene KDE-Dialog musste regulär abgelehnt werden. Erfolgreiche Zustimmung vor dem Timeout funktioniert. Diese Desktop-Einschränkung ist mit Reproduktion und Quellen in [DEVICE_TEST_REPORT.md](tests/DEVICE_TEST_REPORT.md) dokumentiert.
 - `SIGKILL` verhindert anwendungsseitiges RAII-Cleanup; der D-Bus-Verbindungsabbruch beendet die compositorseitige Sitzung dennoch.
 - Die D-Bus-Notify-Methode ist bei 100 CPS bewusst konservativer als das empfohlene EIS-Protokoll. Sie vermeidet eine weitere native FFI-Abhängigkeit und ist für das gesetzte Limit ausreichend.
 

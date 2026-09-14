@@ -23,6 +23,11 @@
   <content_rating type="oars-1.1" />
   <url type="homepage">https://github.com/jerry0205/Auto-Clicker</url>
   <releases>
+    <release version="0.1.2" date="2026-09-14">
+      <description>
+        <p>Clean up cancelled pointer and hotkey permission requests and restore saved coordinate values in the main window.</p>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-08-31">
       <description>
         <p>Fix hotkey starts using stale settings and make fixed-position selection and version information easier to find.</p>

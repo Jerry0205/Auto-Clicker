@@ -117,6 +117,16 @@ TestCase {
         compare(host.visible, true)
     }
 
+    function test_right_click_cancels_without_changing_target() {
+        begin()
+        mouseClick(picker.contentItem, 120, 180, Qt.RightButton)
+        tryCompare(picker, "selecting", false)
+        compare(picked.count, 0)
+        compare(picker.targetX, 100)
+        compare(picker.targetY, 150)
+        compare(host.visible, true)
+    }
+
     function test_edges_and_hint_are_selectable() {
         begin()
         picker.setTarget(-10, -20)
