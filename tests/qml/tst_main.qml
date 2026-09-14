@@ -22,6 +22,13 @@ TestCase {
     }
     function cleanup() { main.close() }
 
+    function test_saved_coordinates_are_visible_after_monitor_initialization() {
+        compare(controller.fixed_x, 80)
+        compare(controller.fixed_y, 150)
+        compare(findChild(main, "xInput").value, controller.fixed_x)
+        compare(findChild(main, "yInput").value, controller.fixed_y)
+    }
+
     function test_typed_values_reach_hotkey_without_focus_loss_data() {
         return [
             { tag: "interval", input: "intervalInput", property: "interval_ms", value: 250 },

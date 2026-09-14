@@ -13,8 +13,9 @@ QtObject {
     property bool repeat_until_stopped: true
     property double repeat_count: 100
     property bool current_position: true
-    property double fixed_x: 0
-    property double fixed_y: 0
+    // Nonzero saved coordinates expose initialization/clamping regressions.
+    property double fixed_x: 80
+    property double fixed_y: 150
     property string monitor_identity: ""
     property bool fixed_position_confirmed: false
     property int monitor_x: 0

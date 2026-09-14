@@ -7,14 +7,20 @@ use ashpd::desktop::{
     screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
 };
 use thiserror::Error;
-use tokio::time::{Duration, timeout};
+use tokio::{
+    sync::oneshot,
+    time::{Duration, timeout},
+};
 
 use crate::model::{ClickSettings, ClickType, MonitorGeometry};
 
 const EVENT_TIMEOUT: Duration = Duration::from_millis(250);
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Error)]
 pub enum PortalError {
+    #[error("Die Portal-Anfrage wurde abgebrochen.")]
+    Cancelled,
     #[error("Das XDG RemoteDesktop-Portal ist nicht verfügbar: {0}")]
     Unavailable(#[source] ashpd::Error),
     #[error("Die Portal-Anfrage wurde abgelehnt oder abgebrochen: {0}")]
@@ -48,6 +54,7 @@ pub enum PortalError {
 
 #[derive(Debug)]
 pub struct PortalClickSession {
+    connection: ashpd::zbus::Connection,
     portal: RemoteDesktop,
     session: Session<RemoteDesktop>,
     stream: Option<MonitorStream>,
@@ -63,9 +70,48 @@ struct MonitorStream {
 
 impl PortalClickSession {
     /// Request pointer permission and verify any fixed-position monitor geometry.
-    pub async fn create(monitor: Option<MonitorGeometry>) -> Result<Self, PortalError> {
+    pub async fn create(
+        monitor: Option<MonitorGeometry>,
+        mut cancel: oneshot::Receiver<()>,
+    ) -> Result<Self, PortalError> {
+        // Own the connection so cancellation also cleans up a CreateSession
+        // request whose session handle has not arrived yet.
+        let connection = tokio::select! {
+            biased;
+            _ = &mut cancel => return Err(PortalError::Cancelled),
+            result = ashpd::zbus::Connection::session() =>
+                result.map_err(|error| PortalError::Unavailable(error.into()))?,
+        };
+        let mut session = None;
+        let result = tokio::select! {
+            biased;
+            _ = &mut cancel => Err(PortalError::Cancelled),
+            result = Self::create_on(&connection, &mut session, monitor) => result,
+        };
+        match result {
+            Ok((portal, stream)) => Ok(Self {
+                connection,
+                portal,
+                session: session.ok_or(PortalError::Cancelled)?,
+                stream,
+            }),
+            Err(error) => {
+                if let Some(session) = session {
+                    let _ = timeout(CLOSE_TIMEOUT, session.close()).await;
+                }
+                let _ = timeout(CLOSE_TIMEOUT, connection.close()).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn create_on(
+        connection: &ashpd::zbus::Connection,
+        owned_session: &mut Option<Session<RemoteDesktop>>,
+        monitor: Option<MonitorGeometry>,
+    ) -> Result<(RemoteDesktop, Option<MonitorStream>), PortalError> {
         let fixed_position = monitor.is_some();
-        let portal = RemoteDesktop::new()
+        let portal = RemoteDesktop::with_connection(connection.clone())
             .await
             .map_err(PortalError::Unavailable)?;
         let available = portal
@@ -76,13 +122,16 @@ impl PortalClickSession {
             return Err(PortalError::PointerNotGranted);
         }
 
-        let session = portal
-            .create_session(Default::default())
-            .await
-            .map_err(PortalError::Unavailable)?;
+        *owned_session = Some(
+            portal
+                .create_session(Default::default())
+                .await
+                .map_err(PortalError::Unavailable)?,
+        );
+        let session = owned_session.as_ref().ok_or(PortalError::Cancelled)?;
         portal
             .select_devices(
-                &session,
+                session,
                 SelectDevicesOptions::default()
                     .set_devices(Some(DeviceType::Pointer.into()))
                     .set_persist_mode(PersistMode::Application),
@@ -91,10 +140,12 @@ impl PortalClickSession {
             .map_err(PortalError::Unavailable)?;
 
         if fixed_position {
-            let screencast = Screencast::new().await.map_err(PortalError::Unavailable)?;
+            let screencast = Screencast::with_connection(connection.clone())
+                .await
+                .map_err(PortalError::Unavailable)?;
             screencast
                 .select_sources(
-                    &session,
+                    session,
                     SelectSourcesOptions::default()
                         .set_sources(Some(SourceType::Monitor.into()))
                         .set_multiple(false)
@@ -105,29 +156,25 @@ impl PortalClickSession {
         }
 
         let selected = portal
-            .start(&session, None, Default::default())
+            .start(session, None, Default::default())
             .await
             .map_err(PortalError::Unavailable)?
             .response()
             .map_err(PortalError::Denied)?;
         if !selected.devices().contains(DeviceType::Pointer) {
-            let _ = session.close().await;
             return Err(PortalError::PointerNotGranted);
         }
 
         let stream = if fixed_position {
             let Some(stream) = selected.streams().first() else {
-                let _ = session.close().await;
                 return Err(PortalError::MissingMonitorStream);
             };
             let Some((width, height)) = stream.size() else {
-                let _ = session.close().await;
                 return Err(PortalError::MissingMonitorStream);
             };
             if let Some(expected) = monitor
                 && let Err(error) = validate_monitor(expected, stream.position(), (width, height))
             {
-                let _ = session.close().await;
                 return Err(error);
             }
             Some(MonitorStream {
@@ -140,11 +187,7 @@ impl PortalClickSession {
             None
         };
 
-        Ok(Self {
-            portal,
-            session,
-            stream,
-        })
+        Ok((portal, stream))
     }
 
     /// Reuse a session only when its granted monitor matches current settings.
@@ -253,7 +296,8 @@ impl PortalClickSession {
 
     /// Close the portal session after clicking stops or permissions change.
     pub async fn close(self) {
-        let _ = self.session.close().await;
+        let _ = timeout(CLOSE_TIMEOUT, self.session.close()).await;
+        let _ = timeout(CLOSE_TIMEOUT, self.connection.close()).await;
     }
 }
 

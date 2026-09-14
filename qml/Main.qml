@@ -52,6 +52,10 @@ Kirigami.ApplicationWindow {
         controller.monitor_height = screen ? screen.height : 0
         controller.fixed_x = Math.max(0, Math.min(controller.fixed_x, xInput.to))
         controller.fixed_y = Math.max(0, Math.min(controller.fixed_y, yInput.to))
+        // SpinBox initially clamps saved coordinates to its zero-sized monitor.
+        // Restore the display even when the controller's coordinate is unchanged.
+        xInput.value = controller.fixed_x
+        yInput.value = controller.fixed_y
     }
 
     onSelectedMonitorChanged: syncMonitor()
