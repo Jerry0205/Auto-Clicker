@@ -1,6 +1,6 @@
 # Security Review
 
-Stand: 2026-09-14, Version 0.1.1 (native Geräteprüfung und Portal-Bereinigung)
+Stand: 2026-09-14, Version 0.1.2 (Portal-Bereinigung; native Geräteprüfung siehe Testbericht zu 0.1.1)
 
 ## 1. Benötigte Berechtigungen
 

@@ -31,7 +31,7 @@ struct Observed {
     release_failures: usize,
     closed: usize,
     stall_close: bool,
-    close_release: Arc<Notify>,
+    close_releases: Vec<Arc<Notify>>,
     remote_owner: String,
     hotkey_owner: String,
     fixed_stream: bool,
@@ -91,13 +91,20 @@ async fn respond(
 struct FakeSession(Shared);
 #[zbus::interface(name = "org.freedesktop.portal.Session", crate = "ashpd::zbus")]
 impl FakeSession {
+    /// Record each close and optionally hold its reply until the test releases it.
     async fn close(&self) {
-        let (stall, release) = {
+        let release = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             state.closed += 1;
-            (state.stall_close, state.close_release.clone())
+            if state.stall_close {
+                let release = Arc::new(Notify::new());
+                state.close_releases.push(release.clone());
+                Some(release)
+            } else {
+                None
+            }
         };
-        if stall {
+        if let Some(release) = release {
             release.notified().await;
         }
     }
@@ -588,7 +595,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         // Cover both permission dialogs, with responsive and stalled Session.Close.
         for hotkey_pending in [true, false] {
             for stall_close in [false, true] {
-                let (seen, release, closed_before, close_release) = {
+                let (seen, release, closed_before) = {
                     let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
                     state.delay_hotkey = hotkey_pending;
                     state.delay_start = !hotkey_pending;
@@ -598,7 +605,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                     } else {
                         (state.start_seen.clone(), state.start_release.clone())
                     };
-                    (seen, release, state.closed, state.close_release.clone())
+                    (seen, release, state.closed)
                 };
                 let (tx, mut pending_events) = mpsc::unbounded_channel();
                 let settings = ClickSettings {
@@ -627,7 +634,14 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 assert!(!bus.name_has_owner(owner.as_str().try_into()?).await?,
                     "Permission owner must disconnect even when Session.Close stalls");
                 release.notify_one();
-                close_release.notify_waiters();
+                // Mouse shutdown also closes the hotkey session. Give every
+                // stalled close its own retained permit, including late waiters.
+                let close_releases = std::mem::take(
+                    &mut observed.lock().unwrap_or_else(|e| e.into_inner()).close_releases,
+                );
+                for close_release in close_releases {
+                    close_release.notify_one();
+                }
                 sleep(Duration::from_millis(30)).await;
                 while let Ok(event) = pending_events.try_recv() {
                     assert!(!matches!(event, WorkerEvent::Running(true)),

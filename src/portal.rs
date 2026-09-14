@@ -105,6 +105,7 @@ impl PortalClickSession {
         }
     }
 
+    /// Negotiate permission while exposing the session to cancellation cleanup.
     async fn create_on(
         connection: &ashpd::zbus::Connection,
         owned_session: &mut Option<Session<RemoteDesktop>>,

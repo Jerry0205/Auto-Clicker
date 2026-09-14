@@ -148,6 +148,7 @@ struct HotkeyRegistration {
     actual: String,
 }
 
+/// Bind the stop hotkey on an owned connection and clean up failed or cancelled requests.
 async fn setup_hotkey(
     preferred_hotkey: String,
     mut cancel: oneshot::Receiver<()>,
@@ -212,6 +213,7 @@ async fn setup_hotkey(
     }
 }
 
+/// Cancel registration and close even a session completed just before cancellation.
 async fn cancel_hotkey(
     task: &mut Option<JoinHandle<Result<HotkeyRegistration, String>>>,
     cancel: &mut Option<oneshot::Sender<()>>,
