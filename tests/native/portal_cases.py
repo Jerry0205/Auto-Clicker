@@ -80,15 +80,24 @@ def probe_driver(name):
     mark(name, passed=True, independent_portal_ms=(time.monotonic() - started) * 1000)
 
 
-def close_picker():
+def focus_picker():
     kwin("focus_picker")
+    wait_for(
+        lambda: any(w["kind"] == "picker" and w["active"] for w in kwin("snapshot"))
+    )
+    # KWin activation reaches the Qt Wayland client asynchronously.
+    time.sleep(0.15)
+
+
+def close_picker():
+    focus_picker()
     key(0xFF1B)
     wait_for(lambda: not any("Esc / Rechtsklick" in n.get_name() for n, _ in nodes()))
 
 
 def pin_target():
     # A fresh picker follows the pointer: explicitly pin and verify every time.
-    kwin("focus_picker")
+    focus_picker()
     rpc("driver", cmd="move", x=80, y=400)
     rpc("driver", cmd="click")
     wait_for(lambda: "X: 80 · Y: 400" in picker_text())

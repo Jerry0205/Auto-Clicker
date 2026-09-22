@@ -1,5 +1,7 @@
 """Guard regression tests: no desktop or real mouse input needed."""
 
+import os
+import select
 import subprocess
 import sys
 import tempfile
@@ -12,7 +14,7 @@ from guard import supervise, terminate
 
 class GuardTests(unittest.TestCase):
     def spawn(self, code):
-        p = subprocess.Popen([sys.executable, "-c", code])
+        p = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
         self.addCleanup(terminate, p)
         return p
 
@@ -45,6 +47,42 @@ class GuardTests(unittest.TestCase):
             supervise(app, target, scenario, 2, lost)
         self.assertIsNotNone(app.poll())
         self.assertIsNone(target.poll())
+
+    def test_failure_cleanup_stops_descendants_even_after_parent_exit(self):
+        for parent_exits in (False, True):
+            with (
+                self.subTest(parent_exits=parent_exits),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                pid_file = Path(directory) / "child.pid"
+                # The direct fixture owns a session; descendants must inherit
+                # its group, just like kwin.py/spectacle launched by a scenario.
+                parent = self.spawn(
+                    "import subprocess, sys, time\n"
+                    "from pathlib import Path\n"
+                    'child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])\n'
+                    f"path = Path({str(pid_file)!r})\n"
+                    'path.with_suffix(".tmp").write_text(str(child.pid))\n'
+                    'path.with_suffix(".tmp").replace(path)\n'
+                    + ("" if parent_exits else "time.sleep(30)\n")
+                )
+                deadline = time.monotonic() + 5
+                while not pid_file.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(pid_file.exists(), "descendant did not start")
+                fd = os.pidfd_open(int(pid_file.read_text()))
+                try:
+                    if parent_exits:
+                        parent.wait(timeout=5)
+                    self.assertEqual(select.select([fd], [], [], 0)[0], [])
+                    terminate(parent)
+                    self.assertIsNotNone(parent.poll())
+                    # pidfd readiness proves exit even before the orphan reaper
+                    # has removed a killed descendant's /proc entry.
+                    self.assertEqual(select.select([fd], [], [], 5)[0], [fd])
+                    terminate(parent)  # Repeated cleanup must also be harmless.
+                finally:
+                    os.close(fd)
 
     def test_scenario_failure_stops_app_before_target(self):
         app = self.spawn("import time; time.sleep(20)")

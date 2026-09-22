@@ -4,7 +4,7 @@ import sys
 import gi
 
 gi.require_version("Atspi", "2.0")
-from gi.repository import Atspi, GLib
+from gi.repository import Atspi, GLib  # noqa: E402 -- require the version before import
 
 
 def apps():

@@ -37,7 +37,7 @@ def main():
         log = (base / f"{name}.log").open("w")
         logs.append(log)
         processes[name] = subprocess.Popen(
-            command, stdout=log, stderr=subprocess.STDOUT
+            command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
         )
         return processes[name]
 

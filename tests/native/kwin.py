@@ -55,6 +55,7 @@ if(op==='focus_picker'&&picker) workspace.activeWindow=picker;
 if(op==='close_app'&&app) app.closeWindow();
 const output=windows.filter(w=>w===app||w===target||w===picker||String(w.resourceName).includes('portal')).map(w=>({
 caption:w.caption,resource:String(w.resourceName),active:w.active,pid:w.pid,
+kind:w===app?"app":w===target?"target":w===picker?"picker":"portal",
 geometry:{x:w.frameGeometry.x,y:w.frameGeometry.y,width:w.frameGeometry.width,height:w.frameGeometry.height}}));
 callDBus('io.github.klickmeister.NativeTestInspector','/NativeTest','io.github.klickmeister.NativeTestInspector','Report',JSON.stringify(output));
 """.replace("OP", json.dumps(op))

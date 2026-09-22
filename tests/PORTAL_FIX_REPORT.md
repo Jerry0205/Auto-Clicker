@@ -35,7 +35,7 @@ Alle Button-Ereignisse wurden am Testziel aufgezeichnet.
 
 Reproduzierbarer Lauf:
 `python tests/native/run.py tests/native/portal_cases.py`.
-Vollständige lokale Artefakte: `/tmp/klickmeister-native-n79vfrn6/`.
+Vollständige lokale Artefakte: `/tmp/klickmeister-native-84jf_pzd/`.
 Die wichtigen Belege sind im Repository gesichert:
 [Ergebnisse](native/evidence/portal-results.jsonl),
 [echter KDE-Dialog](native/evidence/screenshot-dialog.png),
@@ -47,7 +47,7 @@ Die wichtigen Belege sind im Repository gesichert:
 | Unabhängiger bereits freigegebener Portal-Client | antwortet während des Dialogs und nach Timeout/Ablehnung/Shutdown |
 | Screenshot ablehnen | Auswahl ohne Lupe benutzbar, Escape beendet sie |
 | Screenshot rechtzeitig bestätigen | echtes Bild; 4×-Lupe visuell am Kreuz bei (80, 400) geprüft |
-| App bei offener Screenshot-Anfrage schließen | Prozess und Dialog verschwinden, ca. 256 ms inklusive Teststeuerung |
+| App bei offener Screenshot-Anfrage schließen | Prozess und Dialog verschwinden, ca. 249 ms inklusive Teststeuerung |
 | Klicks nach Fehlerfällen | drei Zyklen mit sechs passenden Button-Ereignissen |
 | Start/Stop nach Fehlerfällen | Stop bestätigt, danach 300 ms ohne weiteres Ereignis |
 | Links/rechts/mitte × einfach/doppelt | je drei Zyklen; 6 bzw. 12 Ereignisse und richtige Koordinaten |
@@ -56,9 +56,9 @@ Die wichtigen Belege sind im Repository gesichert:
 
 Der separate native Ausfalltest `target_loss.py` beendet absichtlich das echte
 Testziel bei ruhendem Klicker. Der Starter erkannte den Ausfall und beendete alle
-eigenen Prozesse mit Fehlerstatus (`/tmp/klickmeister-native-644ab5oq/`, anschließend
-alle PIDs geprüft). Drei Wächter-Regressionstests prüfen zusätzlich einen laufenden
-Ereigniserzeuger, verschwundenes Ziel und Szenariofehler ohne reale Desktop-Klicks.
+eigenen Prozesse mit Fehlerstatus (`/tmp/klickmeister-native-ep4269b8/`, anschließend
+alle PIDs geprüft). Vier Wächter-Regressionstests prüfen zusätzlich einen laufenden
+Ereigniserzeuger, verschwundenes Ziel und Szenariofehler sowie mitbeendete Kindprozesse ohne reale Desktop-Klicks.
 Die Sichtbarkeitsprüfung ist begrenzt, aber keine Echtzeitgarantie gegen jeden
 zusätzlichen Klick bei einem abrupten Prozessausfall.
 
@@ -71,7 +71,7 @@ zusätzlichen Klick bei einem abrupten Prozessausfall.
 - Release-Build und `tests/qml-smoke.sh`: bestanden.
 - QML offscreen und isolierter KWin mit drei virtuellen Monitoren: jeweils
   35 bestanden, kein Fehler. Synthetische Bilder nur in diesen QML-Tests.
-- `python -m unittest discover -s tests/native -p test_guard.py`: 3 bestanden.
+- `python -m unittest discover -s tests/native -p test_guard.py`: 4 bestanden.
 
 Qt/CXX-Qt-Headerwarnungen bleiben unverändert. Physischer Hotkey, weitere echte
 Monitore, Stundenbetrieb und Paketinstallation wurden für diesen Fix nicht neu

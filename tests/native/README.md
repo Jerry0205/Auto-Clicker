@@ -36,7 +36,9 @@ Die aus den temporären Hilfsskripten übernommenen Korrekturen sind fest enthal
 - App-Schließen adressiert das Hauptfenster anhand der vom Starter erzeugten PID.
 - Der Wächter überwacht das Ziel mit Linux-pidfd und zusätzlich seine Sichtbarkeit.
   Bei Zielausfall, fehlender Antwort, Szenariofehler oder Zeitüberschreitung wird
-  die eigene Test-App ohne D-Bus-/Fokusabhängigkeit beendet. Ein Prozessausfall weckt
+  die eigene Test-App ohne D-Bus-/Fokusabhängigkeit beendet. Alle gestarteten
+  Prozesse besitzen eigene Prozessgruppen; die Bereinigung erfasst auch deren
+  Kindprozesse und funktioniert nach dem Ende des Gruppenleiters. Ein Prozessausfall weckt
   den Wächter sofort; Sichtbarkeit wird alle 250 ms mit 100-ms-Antwortgrenze geprüft.
   Dies ist keine Echtzeitgarantie und erkennt keine Überdeckung durch fremde Fenster.
 - Wächtertests verwenden einen schreibenden Ersatzprozess, um einen laufenden

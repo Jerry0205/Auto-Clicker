@@ -2,12 +2,17 @@
 
 import os
 import selectors
+import signal
 import time
 
 
 def terminate(process):
-    if process.poll() is None:
-        process.kill()
+    # Every owned Popen starts a new session. Its children inherit this group;
+    # they still need cleanup when the group leader has already exited.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
     process.wait(timeout=5)
 
 

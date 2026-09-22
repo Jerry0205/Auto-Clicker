@@ -19,7 +19,10 @@ screen = dbus.Interface(portal, "org.freedesktop.portal.ScreenCast")
 loop = GLib.MainLoop()
 state = {"ready": False, "session": None, "streams": []}
 pending = {}
-empty = lambda: dbus.Dictionary({}, signature="sv")
+
+
+def empty():
+    return dbus.Dictionary({}, signature="sv")
 
 
 def output(row):
