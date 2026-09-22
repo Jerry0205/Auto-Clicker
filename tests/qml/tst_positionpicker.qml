@@ -205,6 +205,8 @@ TestCase {
         compare(cancelled.signalArguments[0][0], requestId)
         picker.acceptScreenshot(requestId, "", "late response")
         verify(picker.captureError.indexOf("zu lange") >= 0)
+        verify(picker.captureError.indexOf("Deny") >= 0)
+        verify(picker.captureError.indexOf("Verweigern") >= 0)
         tryVerify(function() { return picker.active })
         wait(20)
         keyClick(Qt.Key_Escape)

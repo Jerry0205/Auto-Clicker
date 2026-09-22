@@ -49,7 +49,7 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 
 Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. „Position anzeigen“ markiert das gespeicherte Ziel kurz, ohne zu klicken.
 
-Optional verwendet „Mit 4×-Lupe auswählen“ eine über das Screenshot-Portal freigegebene Bildschirmaufnahme als Standbild. Bei Ablehnung, Fehler oder nach spätestens drei Sekunden Wartezeit funktioniert die Auswahl ohne Lupe weiter. Die App versucht dabei, ausstehende Screenshot-Anfragen zu schließen. Unter xdg-desktop-portal 1.22.1 kann ein unbeantworteter erster Freigabedialog trotzdem offen bleiben und weitere Portal-Aufrufe blockieren; lehne den verbliebenen KDE-Dialog dann ab. Details stehen im [Testbericht](tests/DEVICE_TEST_REPORT.md). Die Aufnahme ist keine Live-Vorschau.
+Optional verwendet „Mit 4×-Lupe auswählen“ eine über das interaktive Screenshot-Portal freigegebene Bildschirmaufnahme als Standbild. Wähle im KDE-Dialog **Vollbild**, dann **Übernehmen** (je nach Übersetzung „Aufnehmen“) und **Speichern**. Bei Ablehnung, Fehler oder nach spätestens drei Sekunden Wartezeit funktioniert die Auswahl ohne Lupe weiter; die ausstehende Anfrage wird geschlossen. Dieser Ablauf umgeht die blockierende nichtinteraktive Erstfreigabe von xdg-desktop-portal 1.22.1 und wurde mit echten KDE-Dialogen geprüft. Falls dennoch ein alter KDE-Freigabedialog offen bleibt, schließe ihn mit „Deny“/„Verweigern“. Details stehen im [Regressionstestbericht](tests/PORTAL_FIX_REPORT.md). Die Aufnahme ist keine Live-Vorschau.
 
 Beim Start fragt KDE, auf welchem Bildschirm geklickt werden darf. Wähle dort denselben Bildschirm aus. Position und Größe des freigegebenen Monitors werden vor dem ersten Klick geprüft. Ein anderer Monitor oder fehlende Zuordnungsdaten führen zu einer Fehlermeldung. Nach einem Monitorwechsel wird eine passende Freigabe erneut angefragt. Monitoridentität, Größe und Skalierung werden mit den Koordinaten gespeichert. Nach einem Neustart wird nur eine eindeutige Übereinstimmung wiederhergestellt; andernfalls müssen Monitor und Koordinaten bestätigt oder neu gewählt werden.
 
@@ -93,6 +93,8 @@ KLICKMEISTER_TEST_SCALE=1.5 bash tests/qml-wayland.sh
 ```
 
 Die QML-Tests verwenden denselben KDE-Control-Stil wie die App und für das Hauptfenster einen Controller-Testersatz. Die separaten D-Bus-Tests prüfen den echten Rust-Worker gegen simulierte Portale, einschließlich Klickfolgen, Stop-Hotkey, Sitzungsende und Button-Release-Fehlern. Sie erzeugen keine tatsächlichen Mausklicks auf dem Desktop. Echte KDE-Freigabedialoge und die Zeigersteuerung auf physischen Monitoren müssen zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft werden.
+
+Die abgesicherten nativen Testwerkzeuge und ihre Voraussetzungen sind unter [tests/native](tests/native/README.md) dokumentiert.
 
 Mehr über den Aufbau und die Sicherheitsentscheidungen findest du in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md).
 

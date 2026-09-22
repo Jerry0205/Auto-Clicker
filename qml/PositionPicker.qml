@@ -165,7 +165,7 @@ Window {
             captureDelay.stop()
             picker.waitingForScreenshot = false
             picker.screenshotCancelled(picker.captureId)
-            picker.captureError = qsTr("Bildschirmaufnahme dauert zu lange – Auswahl ohne Lupe")
+            picker.captureError = qsTr("Bildschirmaufnahme dauert zu lange – Auswahl ohne Lupe. Falls ein KDE-Freigabedialog offen bleibt: mit „Deny“/„Verweigern“ schließen.")
             picker.showPicker()
         }
     }

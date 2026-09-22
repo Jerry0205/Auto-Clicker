@@ -2,6 +2,8 @@
 //!
 //! ashpd 0.13 waits for the response before exposing its Request. Using the
 //! underlying typed D-Bus calls here lets cancellation close the active dialog.
+//! Interactive capture avoids the synchronous first-permission AccessDialog in
+//! xdg-desktop-portal 1.22.1, which holds the lock needed by Request.Close.
 use std::{collections::HashMap, future::Future, time::Duration};
 
 use ashpd::zbus::{
@@ -71,7 +73,7 @@ async fn capture_on(
         .map_err(|error| error.to_string())?;
         let options = HashMap::from([
             ("handle_token", Value::from(token.as_str())),
-            ("interactive", Value::from(false)),
+            ("interactive", Value::from(true)),
         ]);
         let returned: OwnedObjectPath = portal
             .call("Screenshot", &("", options))
@@ -204,6 +206,13 @@ mod tests {
             #[zbus(connection)] connection: &zbus::Connection,
             #[zbus(header)] header: zbus::message::Header<'_>,
         ) -> zbus::fdo::Result<OwnedObjectPath> {
+            assert_eq!(
+                options
+                    .get("interactive")
+                    .and_then(|value| bool::try_from(value).ok()),
+                Some(true),
+                "non-interactive first permission can deadlock the desktop portal"
+            );
             let sender = header
                 .sender()
                 .ok_or_else(|| zbus::fdo::Error::Failed("missing sender".into()))?

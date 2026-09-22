@@ -1,5 +1,10 @@
 # Geräteprüfung auf CachyOS / Plasma Wayland – 13.–14.09.2026
 
+> Nachtrag 22.09.2026: Der unten dokumentierte Screenshot-Befund wird inzwischen
+> durch den nativ geprüften interaktiven Ablauf umgangen. Siehe
+> [Portal-Fix-Bericht](PORTAL_FIX_REPORT.md). Dieser Bericht bleibt als historische
+> Reproduktion und Ursachenanalyse erhalten.
+
 ## Stand und Ergebnisgrenze
 
 Geprüft wurde Version **0.1.1**, ausgehend von Commit
