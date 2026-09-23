@@ -47,7 +47,7 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 4. Starte den Klicker mit dem Hotkey.
 5. Drücke den Hotkey erneut, um ihn zu stoppen.
 
-Nach einem Stop über die Schaltfläche werden noch unterwegs befindliche Hotkey-Signale verworfen. Falls der Hotkey unmittelbar danach nicht startet, lass die Taste los und drücke sie erneut.
+Nach einem Stop über die Schaltfläche werden noch unterwegs befindliche Hotkey-Signale verworfen. Die nächste Hotkey-Betätigung kann deshalb ohne Start bleiben; lass die Taste los und drücke sie erneut.
 
 Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. „Position anzeigen“ markiert das gespeicherte Ziel kurz, ohne zu klicken.
 
