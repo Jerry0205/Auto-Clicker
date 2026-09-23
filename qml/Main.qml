@@ -13,6 +13,7 @@ Kirigami.ApplicationWindow {
     property var positionPicker: null
     property int captureSequence: 0
     property bool monitorRestored: false
+    property bool discardSettingsOnClose: false
     readonly property var monitorOptions: {
         const screens = Qt.application.screens
         const options = []
@@ -40,6 +41,7 @@ Kirigami.ApplicationWindow {
     function confirmMonitor() {
         syncMonitor()
         controller.fixed_position_confirmed = !!selectedMonitor
+        controller.mark_settings_changed()
     }
 
     function syncMonitor() {
@@ -125,6 +127,7 @@ Kirigami.ApplicationWindow {
                 controller.fixed_y = y
                 controller.current_position = false
                 controller.fixed_position_confirmed = true
+                controller.mark_settings_changed()
             }
             onFinished: {
                 if (root.positionPicker === picker) root.positionPicker = null
@@ -167,7 +170,55 @@ Kirigami.ApplicationWindow {
     onClosing: function(close) {
         root.finishPicker(false)
         controller.shutdown()
+        if (!root.discardSettingsOnClose && !controller.save_config()) {
+            close.accepted = false
+            if (root.visibility === Window.Minimized || root.visibility === Window.Hidden)
+                root.showNormal()
+            root.raise()
+            root.requestActivate()
+            saveFailureDialog.open()
+            return
+        }
         close.accepted = true
+    }
+
+    Controls.Dialog {
+        id: saveFailureDialog
+        objectName: "saveFailureDialog"
+        modal: true
+        closePolicy: Controls.Popup.NoAutoClose
+        title: qsTr("Einstellungen konnten nicht gespeichert werden")
+        width: Math.min(root.width - 32, 440)
+        x: (root.width - width) / 2
+        y: (root.height - height) / 2
+
+        ColumnLayout {
+            Controls.Label {
+                Layout.fillWidth: true
+                text: controller.error_message
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                Controls.Button {
+                    objectName: "continueEditingButton"
+                    text: qsTr("Weiter bearbeiten")
+                    onClicked: {
+                        saveFailureDialog.close()
+                        controller.initialize()
+                    }
+                }
+                Controls.Button {
+                    objectName: "discardSettingsButton"
+                    text: qsTr("Ohne Speichern schließen")
+                    onClicked: {
+                        saveFailureDialog.close()
+                        root.discardSettingsOnClose = true
+                        root.close()
+                    }
+                }
+            }
+        }
     }
 
     pageStack.initialPage: Kirigami.ScrollablePage {
@@ -202,7 +253,7 @@ Kirigami.ApplicationWindow {
                         editable: true
                         value: controller.interval_ms
                         enabled: !controller.running && !controller.busy
-                        onValueModified: controller.interval_ms = value
+                        onValueModified: { controller.interval_ms = value; controller.mark_settings_changed() }
                         textFromValue: function(value) { return value.toLocaleString(Qt.locale(), 'f', 0) }
                         valueFromText: function(text) {
                             return Number.fromLocaleString(Qt.locale(), text)
@@ -230,7 +281,7 @@ Kirigami.ApplicationWindow {
                         model: [qsTr("Links"), qsTr("Rechts"), qsTr("Mitte")]
                         currentIndex: controller.mouse_button
                         enabled: !controller.running && !controller.busy
-                        onActivated: controller.mouse_button = currentIndex
+                        onActivated: { controller.mouse_button = currentIndex; controller.mark_settings_changed() }
                         Accessible.name: qsTr("Maustaste")
                     }
                     Controls.ComboBox {
@@ -238,7 +289,7 @@ Kirigami.ApplicationWindow {
                         model: [qsTr("Einfach"), qsTr("Doppelt")]
                         currentIndex: controller.click_type
                         enabled: !controller.running && !controller.busy
-                        onActivated: controller.click_type = currentIndex
+                        onActivated: { controller.click_type = currentIndex; controller.mark_settings_changed() }
                         Accessible.name: qsTr("Klicktyp")
                     }
                 }
@@ -255,6 +306,7 @@ Kirigami.ApplicationWindow {
                         checked: controller.repeat_until_stopped
                         enabled: !controller.running && !controller.busy
                         onToggled: if (checked) controller.repeat_until_stopped = true
+                        onClicked: controller.mark_settings_changed()
                     }
                     RowLayout {
                         Controls.RadioButton {
@@ -262,6 +314,7 @@ Kirigami.ApplicationWindow {
                             checked: !controller.repeat_until_stopped
                             enabled: !controller.running && !controller.busy
                             onToggled: if (checked) controller.repeat_until_stopped = false
+                            onClicked: controller.mark_settings_changed()
                         }
                         Controls.SpinBox {
                             objectName: "repeatInput"
@@ -271,7 +324,7 @@ Kirigami.ApplicationWindow {
                             editable: true
                             value: controller.repeat_count
                             enabled: !controller.repeat_until_stopped && !controller.running && !controller.busy
-                            onValueModified: controller.repeat_count = value
+                            onValueModified: { controller.repeat_count = value; controller.mark_settings_changed() }
                             Accessible.name: qsTr("Anzahl der Klickzyklen")
                         }
                     }
@@ -289,12 +342,14 @@ Kirigami.ApplicationWindow {
                         checked: controller.current_position
                         enabled: !controller.running && !controller.busy
                         onToggled: if (checked) controller.current_position = true
+                        onClicked: controller.mark_settings_changed()
                     }
                     Controls.RadioButton {
                         text: qsTr("Feste Position")
                         checked: !controller.current_position
                         enabled: !controller.running && !controller.busy
                         onToggled: if (checked) controller.current_position = false
+                        onClicked: controller.mark_settings_changed()
                     }
                     RowLayout {
                         enabled: !controller.current_position && !controller.running && !controller.busy
@@ -307,7 +362,7 @@ Kirigami.ApplicationWindow {
                             to: Math.max(0, controller.monitor_width - 1)
                             editable: true
                             value: controller.fixed_x
-                            onValueModified: controller.fixed_x = value
+                            onValueModified: { controller.fixed_x = value; controller.mark_settings_changed() }
                         }
                         Controls.Label { text: qsTr("Y") }
                         Controls.SpinBox {
@@ -318,7 +373,7 @@ Kirigami.ApplicationWindow {
                             to: Math.max(0, controller.monitor_height - 1)
                             editable: true
                             value: controller.fixed_y
-                            onValueModified: controller.fixed_y = value
+                            onValueModified: { controller.fixed_y = value; controller.mark_settings_changed() }
                         }
                     }
                     RowLayout {
