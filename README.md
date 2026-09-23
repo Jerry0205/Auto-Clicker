@@ -94,6 +94,8 @@ KLICKMEISTER_TEST_SCALE=1.5 bash tests/qml-wayland.sh
 
 Die QML-Tests verwenden denselben KDE-Control-Stil wie die App und für das Hauptfenster einen Controller-Testersatz. Die separaten D-Bus-Tests prüfen den echten Rust-Worker gegen simulierte Portale, einschließlich Klickfolgen, Stop-Hotkey, Sitzungsende und Button-Release-Fehlern. Sie erzeugen keine tatsächlichen Mausklicks auf dem Desktop. Echte KDE-Freigabedialoge und die Zeigersteuerung auf physischen Monitoren müssen zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft werden.
 
+Beim Start setzt die App den Qt-Desktop-Dateinamen auf `io.github.jerry0205.klickmeister`, passend zur installierten `.desktop`-Datei. Der QML-Smoke-Test prüft diesen Wert am gebauten Programm. Diese Qt-Einstellung ordnet das Fenster dem Desktop-Eintrag zu; die [Portal-Anwendungs-ID](https://flatpak.github.io/xdg-desktop-portal/docs/api-reference) wird für die separaten D-Bus-Verbindungen anhand des Startkontexts bestimmt. Ein direkter Start der Entwicklungs-Binärdatei kann daher in Portal-Dialogen anders benannt werden als ein Start über das Anwendungsmenü.
+
 Die abgesicherten nativen Testwerkzeuge und ihre Voraussetzungen sind unter [tests/native](tests/native/README.md) dokumentiert.
 
 Mehr über den Aufbau und die Sicherheitsentscheidungen findest du in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md).
