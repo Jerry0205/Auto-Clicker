@@ -59,4 +59,35 @@ TestCase {
             controller[state] = false
         }
     }
+
+    function test_rate_and_status_distinguish_cycles_from_clicks() {
+        const rateLabel = findChild(main, "rateLabel")
+        const statusLabel = findChild(main, "statusLabel")
+        verify(rateLabel !== null)
+        verify(statusLabel !== null)
+        const twoAndHalf = Number(2.5).toLocaleString(Qt.locale(), 'f', 1)
+        const scenarios = [
+            { interval: 10, type: 0, expected: "100 Zyklen/s · 100 Klicks/s" },
+            { interval: 10, type: 1, expected: "100 Zyklen/s · 200 Klicks/s" },
+            { interval: 1000, type: 0, expected: "1 Zyklus/s · 1 Klick/s" },
+            { interval: 1000, type: 1, expected: "1 Zyklus/s · 2 Klicks/s" },
+            { interval: 999, type: 0, expected: "1 Zyklus/s · 1 Klick/s" },
+            { interval: 5000, type: 0, expected: "1 Zyklus alle 5 s · 1 Klick alle 5 s" },
+            { interval: 5000, type: 1, expected: "1 Zyklus alle 5 s · 2 Klicks alle 5 s" },
+            { interval: 2500, type: 1, expected: "1 Zyklus alle " + twoAndHalf + " s · 2 Klicks alle " + twoAndHalf + " s" }
+        ]
+        for (const scenario of scenarios) {
+            controller.interval_ms = scenario.interval
+            controller.click_type = scenario.type
+            tryCompare(rateLabel, "text", scenario.expected)
+            controller.status = "Klickt"
+            controller.running = true
+            compare(statusLabel.text, "Status: Klickt · " + scenario.expected)
+            controller.running = false
+        }
+    }
+
+    function test_repeat_count_is_labeled_as_cycles() {
+        compare(findChild(main, "repeatCountLabel").text, "Klickzyklen")
+    }
 }

@@ -18,7 +18,7 @@ RemoteDesktop und GlobalShortcuts verwenden `ashpd` und jeweils eine eigene D-Bu
 
 ## Scheduler
 
-`tokio::time::Instant` ist monoton. Der nächste Termin wird vom vorherigen Solltermin abgeleitet. Falls ein Portalaufruf länger als das Intervall dauert, werden verpasste Termine verworfen statt als Burst nachgeholt. Das Mindestintervall beträgt 10 ms (100 CPS). Es gibt keine Busy-Wait-Schleife.
+`tokio::time::Instant` ist monoton. Der nächste Termin wird vom vorherigen Solltermin abgeleitet. Falls ein Portalaufruf länger als das Intervall dauert, werden verpasste Termine verworfen statt als Burst nachgeholt. Das Mindestintervall beträgt 10 ms (100 Klickzyklen/s). Es gibt keine Busy-Wait-Schleife.
 
 ## Lebensdauer
 
