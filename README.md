@@ -80,6 +80,8 @@ Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So
 
 Du möchtest Klickmeister selbst bauen, verändern oder überprüfen? Die wichtigsten Befehle sind:
 
+Für die QML-Codevervollständigung und Fehleranzeige mit `qmlls` zuerst `cargo build --locked` ausführen und danach `bash scripts/setup-qmlls.sh`. Das Skript schreibt die lokale, von Git ignorierte `.qmlls.ini` mit dem Buildpfad dieses Checkouts. Bei einem eigenen `CARGO_TARGET_DIR` denselben Wert für Build und Skript verwenden. Nach einem Wechsel des Buildverzeichnisses das Skript erneut ausführen.
+
 ```bash
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
