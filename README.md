@@ -12,8 +12,10 @@ Du entscheidest, wie geklickt werden soll:
 - Einzel- oder Doppelklick
 - an der aktuellen Mausposition oder an einer festen Stelle
 - feste Positionen per Vollbild-Positionswähler auf einem ausgewählten Bildschirm
-- so lange, bis du stoppst, oder nur eine bestimmte Anzahl
-- langsam oder bis zu 100 Klicks pro Sekunde
+- so lange, bis du stoppst, oder nur eine bestimmte Anzahl von Klickzyklen
+- langsam oder bis zu 100 Klickzyklen pro Sekunde
+
+Ein Klickzyklus erzeugt bei „Einfach“ einen Klick, bei „Doppelt“ zwei einzelne Klicks. Bei einem Intervall von 10 ms sind höchstens 100 Zyklen pro Sekunde vorgesehen: 100 einzelne Klicks im Einfachmodus oder 200 im Doppelklickmodus. Die Wiederholungszahl 3 bedeutet drei Zyklen, also im Doppelklickmodus insgesamt sechs einzelne Klicks. Bei Intervallen über einer Sekunde zeigt die Oberfläche stattdessen an, wie viele Sekunden zwischen den Zyklen liegen.
 
 Gestartet und gestoppt wird Klickmeister über einen globalen Hotkey. Standardmäßig ist dafür die `Pause`-Taste vorgesehen. Du kannst den Klicker jederzeit über den Hotkey oder den Stop-Button beenden.
 
@@ -69,7 +71,7 @@ Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So
 
 ## Gut zu wissen
 
-- Das kleinste Intervall beträgt 10 Millisekunden. Mehr als 100 Klicks pro Sekunde sind nicht möglich.
+- Das kleinste Intervall beträgt 10 Millisekunden. Der Scheduler plant höchstens 100 Klickzyklen pro Sekunde; im Doppelklickmodus sind das bis zu 200 einzelne Klicks pro Sekunde.
 - Eine feste Position gilt immer für den Bildschirm, den du im KDE-Dialog ausgewählt hast.
 - Die Monitorauswahl zeigt Hersteller und Modell aus den Systemdaten. Bei gleichen Modellen oder fehlenden Modellangaben wird der Anschluss zur Unterscheidung ergänzt.
 - Der Positionswähler öffnet sich auf dem Bildschirm, den du zuvor in Klickmeister ausgewählt hast.

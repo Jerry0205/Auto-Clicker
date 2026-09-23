@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 
-pub const MAX_CPS: u32 = 100;
-pub const MIN_INTERVAL_MS: u64 = 1_000 / MAX_CPS as u64;
+pub const MAX_CYCLES_PER_SECOND: u32 = 100;
+pub const MIN_INTERVAL_MS: u64 = 1_000 / MAX_CYCLES_PER_SECOND as u64;
 pub const MAX_INTERVAL_MS: u64 = 86_400_000;
 pub const MAX_REPEAT_COUNT: u64 = 10_000_000;
 
@@ -77,7 +77,9 @@ pub struct ClickSettings {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ValidationError {
-    #[error("Das Intervall muss mindestens {MIN_INTERVAL_MS} ms betragen ({MAX_CPS} CPS).")]
+    #[error(
+        "Das Intervall muss mindestens {MIN_INTERVAL_MS} ms betragen ({MAX_CYCLES_PER_SECOND} Klickzyklen/s)."
+    )]
     IntervalTooShort,
     #[error("Das Intervall darf höchstens 24 Stunden betragen.")]
     IntervalTooLong,
@@ -124,14 +126,9 @@ impl ClickSettings {
     pub const fn interval(&self) -> Duration {
         Duration::from_millis(self.interval_ms)
     }
-
-    /// Return the number of click cycles scheduled per second.
-    pub fn cps(&self) -> f64 {
-        1_000.0 / self.interval_ms as f64
-    }
 }
 
-/// Enforce the supported interval range and maximum click rate.
+/// Enforce the supported interval range and maximum click cycle rate.
 pub fn validate_interval(interval_ms: u64) -> Result<(), ValidationError> {
     if interval_ms < MIN_INTERVAL_MS {
         Err(ValidationError::IntervalTooShort)

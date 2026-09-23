@@ -620,14 +620,13 @@ fn start_run(
         return;
     }
     let schedule = Schedule::new(settings.interval(), settings.repeat);
-    let cps = settings.cps();
     *active = Some(ActiveRun {
         settings,
         schedule,
         next_tick: Instant::now(),
     });
     (emit)(WorkerEvent::Running(true));
-    (emit)(WorkerEvent::Status(format!("Klickt • {cps:.0} CPS")));
+    (emit)(WorkerEvent::Status("Klickt".to_owned()));
 }
 
 fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &Emitter) {
