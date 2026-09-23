@@ -11,8 +11,8 @@ use std::{
 use ashpd::desktop::{
     Session,
     global_shortcuts::{
-        Activated, BindShortcutsOptions, ConfigureShortcutsOptions, GlobalShortcuts, NewShortcut,
-        ShortcutsChanged,
+        Activated, BindShortcutsOptions, ConfigureShortcutsOptions, Deactivated, GlobalShortcuts,
+        NewShortcut, ShortcutsChanged,
     },
 };
 use futures_util::{Stream, StreamExt, future};
@@ -168,11 +168,18 @@ struct HotkeyState {
     connection: ashpd::zbus::Connection,
     portal: Arc<GlobalShortcuts>,
     session: Arc<Session<GlobalShortcuts>>,
-    events: Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>,
+    events: mpsc::Receiver<QueuedHotkeySignal>,
+    event_task: JoinHandle<()>,
+}
+
+struct QueuedHotkeySignal {
+    signal: HotkeySignal,
+    generation: u64,
 }
 
 enum HotkeySignal {
     Activated(Activated),
+    Deactivated(Deactivated),
     Changed(ShortcutsChanged),
     Closed,
 }
@@ -320,11 +327,38 @@ async fn wait_for_tick(deadline: Option<Instant>) {
     }
 }
 
-async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<HotkeySignal> {
+async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<QueuedHotkeySignal> {
     match stream {
-        Some(state) => state.events.next().await,
+        Some(state) => state.events.recv().await,
         None => future::pending().await,
     }
+}
+
+/// Keep receiving portal signals while the worker waits for a click or cleanup.
+fn queue_hotkey_events(
+    mut events: Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>,
+    mut control: watch::Receiver<ControlState>,
+) -> (mpsc::Receiver<QueuedHotkeySignal>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
+    let task = tokio::spawn(async move {
+        let mut generation = control.borrow_and_update().generation;
+        loop {
+            tokio::select! {
+                biased;
+                signal = events.next() => {
+                    let Some(signal) = signal else { break; };
+                    if tx.send(QueuedHotkeySignal { signal, generation }).await.is_err() {
+                        break;
+                    }
+                }
+                changed = control.changed() => {
+                    if changed.is_err() { break; }
+                    generation = control.borrow_and_update().generation;
+                }
+            }
+        }
+    });
+    (rx, task)
 }
 
 async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task::JoinError> {
@@ -371,6 +405,8 @@ async fn run_worker(
     let mut screenshot_task: Option<JoinHandle<Result<String, String>>> = None;
     let mut screenshot_id = 0;
     let mut screenshot_cancel = None;
+    let mut hotkey_rearm_required = false;
+    let mut ignored_activation = false;
 
     (emit)(WorkerEvent::Status(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
@@ -386,6 +422,10 @@ async fn run_worker(
                 }
                 cancel_start(&mut start_task, &mut start_cancel).await;
                 stop_run(&mut machine, &mut active, &emit);
+                // A portal activation already in flight must not toggle the
+                // stopped run back on. Require its release before rearming.
+                hotkey_rearm_required = true;
+                ignored_activation = false;
             }
             queued = commands.recv() => {
                 let Some(QueuedCommand { command, generation }) = queued else { break; };
@@ -399,7 +439,11 @@ async fn run_worker(
                             continue;
                         }
                         match request_validated_start(&mut machine, &settings) {
-                            Ok(true) => latest_settings = settings.clone(),
+                            Ok(true) => {
+                                latest_settings = settings.clone();
+                                hotkey_rearm_required = false;
+                                ignored_activation = false;
+                            }
                             Ok(false) => continue,
                             Err(error) => {
                                 (emit)(WorkerEvent::Error(error.to_string()));
@@ -489,11 +533,12 @@ async fn run_worker(
                     Ok(Ok(HotkeyRegistration { connection, portal, session, actual })) => {
                         let streams = timeout(PORTAL_CLOSE_TIMEOUT, async {
                             let activations = portal.receive_activated().await.map_err(|error| error.to_string())?;
+                            let deactivations = portal.receive_deactivated().await.map_err(|error| error.to_string())?;
                             let changes = portal.receive_shortcuts_changed().await.map_err(|error| error.to_string())?;
-                            Ok::<_, String>((activations, changes))
+                            Ok::<_, String>((activations, deactivations, changes))
                         }).await;
                         match streams {
-                            Ok(Ok((activations, changes))) => {
+                            Ok(Ok((activations, deactivations, changes))) => {
                                 let session = Arc::new(session);
                                 let watched_session = Arc::clone(&session);
                                 let (ready_tx, ready_rx) = oneshot::channel();
@@ -515,16 +560,21 @@ async fn run_worker(
                                 }
                                 let events = futures_util::stream::select(
                                     futures_util::stream::select(
-                                        activations.map(HotkeySignal::Activated),
+                                        futures_util::stream::select(
+                                            activations.map(HotkeySignal::Activated),
+                                            deactivations.map(HotkeySignal::Deactivated),
+                                        ),
                                         changes.map(HotkeySignal::Changed),
                                     ),
                                     futures_util::stream::once(closed),
                                 );
+                                let (events, event_task) = queue_hotkey_events(Box::pin(events), control.clone());
                                 hotkey = Some(HotkeyState {
                                     connection,
                                     portal: Arc::new(portal),
                                     session,
-                                    events: Box::pin(events),
+                                    events,
+                                    event_task,
                                 });
                                 (emit)(WorkerEvent::Hotkey(actual));
                                 if machine.state() == RunState::Ready {
@@ -566,9 +616,28 @@ async fn run_worker(
                 }
             }
             hotkey_event = next_hotkey(&mut hotkey), if hotkey.is_some() => {
-                match hotkey_event {
-                    Some(HotkeySignal::Activated(activation)) if activation.shortcut_id() == HOTKEY_ID => {
+                let QueuedHotkeySignal { signal, generation } = match hotkey_event {
+                    Some(event) => event,
+                    None => QueuedHotkeySignal {
+                        signal: HotkeySignal::Closed,
+                        generation: control.borrow().generation,
+                    },
+                };
+                match signal {
+                    HotkeySignal::Activated(activation) if activation.shortcut_id() == HOTKEY_ID => {
+                        if generation != control.borrow().generation {
+                            if hotkey_rearm_required {
+                                ignored_activation = true;
+                            }
+                            continue;
+                        }
+                        if hotkey_rearm_required {
+                            ignored_activation = true;
+                            continue;
+                        }
                         if matches!(machine.state(), RunState::Starting | RunState::Clicking) {
+                            hotkey_rearm_required = true;
+                            ignored_activation = true;
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
                         } else {
@@ -578,7 +647,13 @@ async fn run_worker(
                             (emit)(WorkerEvent::StartRequested);
                         }
                     }
-                    Some(HotkeySignal::Changed(changed)) => {
+                    HotkeySignal::Deactivated(deactivation) if deactivation.shortcut_id() == HOTKEY_ID => {
+                        if hotkey_rearm_required && ignored_activation {
+                            hotkey_rearm_required = false;
+                            ignored_activation = false;
+                        }
+                    }
+                    HotkeySignal::Changed(changed) => {
                         if let Some(shortcut) = changed.shortcuts().iter().find(|shortcut| shortcut.id() == HOTKEY_ID) {
                             (emit)(WorkerEvent::Hotkey(shortcut.trigger_description().to_owned()));
                         } else {
@@ -586,19 +661,21 @@ async fn run_worker(
                             stop_run(&mut machine, &mut active, &emit);
                             machine.fail();
                             if let Some(state) = hotkey.take() {
+                                state.event_task.abort();
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
                             }
                             (emit)(WorkerEvent::Error("Der globale Stop-Hotkey wurde entfernt.".to_owned()));
                         }
                     }
-                    Some(HotkeySignal::Activated(_)) => {}
-                    Some(HotkeySignal::Closed) | None => {
+                    HotkeySignal::Activated(_) | HotkeySignal::Deactivated(_) => {}
+                    HotkeySignal::Closed => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         stop_run(&mut machine, &mut active, &emit);
                         machine.fail();
                         (emit)(WorkerEvent::Error("Die globale Hotkey-Sitzung wurde beendet.".to_owned()));
                         if let Some(state) = hotkey.take() {
+                            state.event_task.abort();
                             let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
                         }
                     }
@@ -651,6 +728,7 @@ async fn run_worker(
         session.close().await;
     }
     if let Some(state) = hotkey {
+        state.event_task.abort();
         let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
         let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
     }

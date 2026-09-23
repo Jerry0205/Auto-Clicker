@@ -5,7 +5,7 @@ Klickmeister ist ein einzelner Prozess mit zwei Ausführungskontexten:
 1. Der Qt-Thread besitzt das Kirigami-Fenster und alle GUI-Objekte.
 2. Ein Rust-Worker besitzt die Portal-Sitzungen, den Zustandsautomaten und den Scheduler.
 
-Zwischen beiden Richtungen laufen begrenzte Nachrichtenkanäle beziehungsweise in den Qt-Event-Loop eingereihte Zustandsupdates. Stop und Shutdown erreichen den Worker über ein priorisiertes Ein-Wert-Signal auch bei vollem Befehlskanal; vor einem Stop eingereihte Startbefehle werden danach verworfen. Alle Startquellen gehen durch denselben Zustandsautomaten; deshalb kann höchstens ein Scheduler aktiv sein.
+Zwischen beiden Richtungen laufen begrenzte Nachrichtenkanäle beziehungsweise in den Qt-Event-Loop eingereihte Zustandsupdates. Stop und Shutdown erreichen den Worker über ein priorisiertes Ein-Wert-Signal auch bei vollem Befehlskanal; vor einem Stop eingereihte Startbefehle werden danach verworfen. Eine eigene asynchrone Aufgabe empfängt Hotkey-Signale auch während eines Klicks und versieht sie mit der aktuellen Stop-Generation. Nach Stop wird der Hotkey erst nach einem passenden Loslass-Ereignis wieder für Starts freigegeben. Alle Startquellen gehen durch denselben Zustandsautomaten; deshalb kann höchstens ein Scheduler aktiv sein.
 
 ## Wayland-Backend
 

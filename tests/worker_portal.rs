@@ -570,6 +570,17 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             worker.send(Command::Start(continuous.clone()))?;
         }
         assert!(worker.send(Command::Start(continuous.clone())).is_err());
+        // The activation reaches the portal receiver while the worker is
+        // still blocked in a click. Stop must invalidate it as an old event.
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &activation,
+            )
+            .await?;
         worker.send(Command::Stop)?;
         button_release.notify_one();
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
@@ -580,7 +591,31 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         while let Ok(event) = events.try_recv() {
             assert!(!matches!(event, WorkerEvent::Running(true)),
                 "a queued start must not restart after Stop");
+            assert!(!matches!(event, WorkerEvent::StartRequested),
+                "an activation received before Stop must not start a new run");
         }
+
+        // The delayed key release rearms the shortcut. A later press can start.
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Deactivated",
+                &activation,
+            )
+            .await?;
+        sleep(Duration::from_millis(20)).await;
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &activation,
+            )
+            .await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
 
         worker.send(Command::Start(ClickSettings {
             repeat: None,

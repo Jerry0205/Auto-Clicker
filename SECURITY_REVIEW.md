@@ -42,6 +42,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 
 - Ohne bestätigten globalen Hotkey wird Start abgewiesen.
 - Hotkey und Stop-Button setzen den einzigen aktiven Run auf `Stopped` und entfernen seinen Termin.
+- Nach Stop werden bereits empfangene Hotkey-Aktivierungen anhand der Stop-Generation verworfen. Später eintreffende Aktivierungen bleiben bis zum Loslassen des Hotkeys gesperrt, damit ein verzögertes Portal-Signal den Run nicht erneut startet.
 - Fenster-Schließen ruft synchron `shutdown` auf, beendet den Worker und schließt beide Portal-Sitzungen. Ausstehende RemoteDesktop- und Hotkey-Anfragen werden kooperativ abgebrochen. Jede Anfrage besitzt ihre D-Bus-Verbindung, die nach begrenztem `Session.Close` ebenfalls getrennt wird; die Bereinigung wird vor der Stop-/Shutdown-Bestätigung abgewartet.
 - Ein Prozessende trennt zusätzlich automatisch den D-Bus-Client; es gibt keinen separaten Clickerprozess.
 - Nach erfolgreichem Button-Press wird immer ein Release versucht. Schlägt Release fehl, folgt ein zweiter Best-Effort-Release und der Scheduler geht in Fehlerzustand.
