@@ -24,14 +24,19 @@ QtObject {
     property int monitor_height: 0
     property bool selecting_position: false
     property bool saveConfigSucceeds: true
+    property bool configDirty: false
     property int saveCount: 0
     property int shutdownCount: 0
+    property int initializeCount: 0
     signal screenshot_ready(int requestId, string uri, string error)
-    function initialize() {}
-    function shutdown() { shutdownCount++ }
+    function initialize() { initializeCount++ }
+    function shutdown() { shutdownCount++; running = false; busy = false }
+    function mark_settings_changed() { configDirty = true }
     function save_config() {
+        if (!configDirty) return true
         saveCount++
         if (!saveConfigSucceeds) error_message = "Konfiguration konnte nicht gespeichert werden"
+        else configDirty = false
         return saveConfigSucceeds
     }
     function start() {}

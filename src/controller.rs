@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{path::Path, pin::Pin};
 
 use crate::{
     config::{self, AppConfig},
@@ -79,6 +79,9 @@ pub mod qobject {
         fn save_config(self: Pin<&mut AppController>) -> bool;
 
         #[qinvokable]
+        fn mark_settings_changed(self: Pin<&mut AppController>);
+
+        #[qinvokable]
         fn shutdown(self: Pin<&mut AppController>);
     }
 
@@ -107,7 +110,10 @@ pub struct AppControllerRust {
     monitor_height: i32,
     selecting_position: bool,
     worker: Option<WorkerHandle>,
+    worker_epoch: u64,
     startup_error: Option<String>,
+    initial_config: AppConfig,
+    config_dirty: bool,
 }
 
 impl Default for AppControllerRust {
@@ -152,7 +158,10 @@ impl AppControllerRust {
             monitor_height: 0,
             selecting_position: false,
             worker: None,
+            worker_epoch: 0,
             startup_error,
+            initial_config: config,
+            config_dirty: false,
         }
     }
 
@@ -211,6 +220,27 @@ impl AppControllerRust {
             },
         })
     }
+
+    fn persist_config(&mut self, force: bool) -> Result<(), String> {
+        if !force && !self.config_dirty {
+            return Ok(());
+        }
+        let path = config::config_path().map_err(|error| error.to_string())?;
+        self.persist_config_to(&path, force)
+    }
+
+    fn persist_config_to(&mut self, path: &Path, force: bool) -> Result<(), String> {
+        if !force && !self.config_dirty {
+            return Ok(());
+        }
+        let config = self.config_snapshot()?;
+        if config != self.initial_config {
+            config::save_to(path, &config).map_err(|error| error.to_string())?;
+        }
+        self.initial_config = config;
+        self.config_dirty = false;
+        Ok(())
+    }
 }
 
 impl Drop for AppControllerRust {
@@ -242,10 +272,12 @@ impl qobject::AppController {
             monitor: None,
         };
         let preferred_hotkey = self.hotkey().to_string();
+        let worker_epoch = self.rust().worker_epoch.wrapping_add(1);
+        self.as_mut().rust_mut().get_mut().worker_epoch = worker_epoch;
         let qt_thread = self.qt_thread();
         let worker = WorkerHandle::spawn(settings, preferred_hotkey, move |event| {
             let _ = qt_thread.queue(move |mut controller| {
-                controller.as_mut().handle_worker_event(event);
+                controller.as_mut().handle_worker_event(worker_epoch, event);
             });
         });
         self.as_mut().rust_mut().get_mut().worker = Some(worker);
@@ -284,7 +316,7 @@ impl qobject::AppController {
                 return;
             }
         };
-        self.as_mut().save_config();
+        self.as_mut().persist_config(true);
         self.as_mut().send_command(Command::Start(settings));
     }
 
@@ -312,26 +344,39 @@ impl qobject::AppController {
         self.as_mut().set_error_message(QString::default());
     }
 
-    /// Save a valid draft, including settings that do not require a click run.
+    /// Record deliberate edits; display initialization must not rewrite a config.
+    pub fn mark_settings_changed(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().get_mut().config_dirty = true;
+    }
+
+    /// Save a changed draft, including settings that do not require a click run.
     pub fn save_config(mut self: Pin<&mut Self>) -> bool {
-        let result = self
-            .rust()
-            .config_snapshot()
-            .and_then(|config| config::save(&config).map_err(|error| error.to_string()));
-        if let Err(error) = result {
-            self.as_mut().set_error_message(QString::from(&error));
-            return false;
+        self.as_mut().persist_config(false)
+    }
+
+    fn persist_config(mut self: Pin<&mut Self>, force: bool) -> bool {
+        match self.as_mut().rust_mut().get_mut().persist_config(force) {
+            Ok(()) => true,
+            Err(error) => {
+                self.as_mut().set_error_message(QString::from(&error));
+                false
+            }
         }
-        true
     }
 
     /// Join the worker and clear running indicators during window closure.
     pub fn shutdown(mut self: Pin<&mut Self>) {
-        if let Some(worker) = self.as_mut().rust_mut().get_mut().worker.take() {
+        let worker = {
+            let rust = self.as_mut().rust_mut().get_mut();
+            rust.worker_epoch = rust.worker_epoch.wrapping_add(1);
+            rust.worker.take()
+        };
+        if let Some(worker) = worker {
             worker.shutdown();
         }
         self.as_mut().set_running(false);
         self.as_mut().set_busy(false);
+        self.as_mut().set_status(QString::from("Bereit"));
     }
 
     /// Send through the bounded worker channel and surface delivery failures.
@@ -409,7 +454,10 @@ impl qobject::AppController {
     }
 
     /// Apply worker results on the Qt thread and route capture responses.
-    fn handle_worker_event(mut self: Pin<&mut Self>, event: WorkerEvent) {
+    fn handle_worker_event(mut self: Pin<&mut Self>, worker_epoch: u64, event: WorkerEvent) {
+        if worker_epoch != self.rust().worker_epoch {
+            return;
+        }
         match event {
             WorkerEvent::Screenshot(request_id, result) => {
                 let (uri, error) = match result {
@@ -431,7 +479,12 @@ impl qobject::AppController {
                 self.as_mut().set_running(running);
                 self.as_mut().set_busy(false);
             }
-            WorkerEvent::Hotkey(hotkey) => self.as_mut().set_hotkey(QString::from(&hotkey)),
+            WorkerEvent::Hotkey(hotkey) => {
+                if self.hotkey().to_string() != hotkey {
+                    self.as_mut().set_hotkey(QString::from(&hotkey));
+                    self.as_mut().mark_settings_changed();
+                }
+            }
             WorkerEvent::StartRequested => {
                 if !*self.running() && !*self.busy() {
                     self.as_mut().start();
@@ -462,6 +515,7 @@ mod tests {
         controller.fixed_y = 480;
         controller.monitor_identity = QString::from("monitor-a");
         controller.hotkey = QString::from("F8");
+        controller.config_dirty = true;
         // The monitor has not been confirmed, so this draft cannot start.
         assert!(!controller.fixed_position_confirmed);
 
@@ -471,10 +525,7 @@ mod tests {
             NEXT_ID.fetch_add(1, Ordering::Relaxed)
         ));
         let path = directory.join("config.toml");
-        let saved = controller
-            .config_snapshot()
-            .unwrap_or_else(|error| panic!("{error}"));
-        assert!(config::save_to(&path, &saved).is_ok());
+        assert!(controller.persist_config_to(&path, false).is_ok());
         let loaded = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
         assert!(loaded.monitor_identity.is_empty());
         let reopened = AppControllerRust::from_config(loaded, None);
@@ -489,6 +540,39 @@ mod tests {
         assert!(!reopened.fixed_position_confirmed);
         assert!(!reopened.running);
         assert!(reopened.worker.is_none());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn closing_unchanged_does_not_replace_another_write_or_a_malformed_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "klickmeister-controller-test-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = directory.join("config.toml");
+        let initial = AppConfig::default();
+        assert!(config::save_to(&path, &initial).is_ok());
+        let mut first = AppControllerRust::from_config(initial.clone(), None);
+        let mut second = AppControllerRust::from_config(initial.clone(), None);
+        first.interval_ms = 250;
+        first.config_dirty = true;
+        assert!(first.persist_config_to(&path, false).is_ok());
+        assert!(second.persist_config_to(&path, false).is_ok());
+        assert_eq!(
+            config::load_from(&path).ok().map(|c| c.interval_ms),
+            Some(250)
+        );
+
+        let malformed = "interval_ms = [\n";
+        assert!(std::fs::write(&path, malformed).is_ok());
+        assert!(config::load_from(&path).is_err());
+        let mut failed_load = AppControllerRust::from_config(initial, Some("parse error".into()));
+        assert!(failed_load.persist_config_to(&path, false).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&path).ok().as_deref(),
+            Some(malformed)
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 }

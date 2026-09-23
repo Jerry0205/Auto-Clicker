@@ -49,6 +49,7 @@ TestCase {
         compare(input.contentItem.text, String(data.value))
         compare(input.value, data.value)
         compare(controller[data.property], data.value)
+        compare(controller.configDirty, true)
     }
 
     function test_running_and_pending_runs_disable_settings() {
@@ -62,23 +63,32 @@ TestCase {
 
     function test_close_saves_draft_and_keeps_window_open_on_write_error() {
         controller.interval_ms = 250
+        controller.mark_settings_changed()
         controller.saveConfigSucceeds = false
+        controller.running = true
         main.close()
         compare(controller.saveCount, 1)
-        compare(controller.shutdownCount, 0)
+        compare(controller.shutdownCount, 1)
+        compare(controller.running, false)
         compare(main.visible, true)
         const dialog = findChild(main, "saveFailureDialog")
         verify(dialog !== null)
         tryCompare(dialog, "opened", true)
+        keyClick(Qt.Key_Escape)
+        compare(dialog.opened, true)
 
         controller.saveConfigSucceeds = true
-        dialog.close()
+        const continueEditing = findChild(main, "continueEditingButton")
+        verify(continueEditing !== null)
+        mouseClick(continueEditing)
+        compare(controller.initializeCount, 1)
         main.close()
         compare(controller.saveCount, 2)
-        compare(controller.shutdownCount, 1)
+        compare(controller.shutdownCount, 2)
     }
 
     function test_discard_after_save_error_closes_without_retrying() {
+        controller.mark_settings_changed()
         controller.saveConfigSucceeds = false
         main.close()
         const dialog = findChild(main, "saveFailureDialog")
@@ -87,6 +97,12 @@ TestCase {
         verify(discard !== null)
         mouseClick(discard)
         compare(controller.saveCount, 1)
+        compare(controller.shutdownCount, 2)
+    }
+
+    function test_unchanged_window_does_not_rewrite_config() {
+        main.close()
+        compare(controller.saveCount, 0)
         compare(controller.shutdownCount, 1)
     }
 }
