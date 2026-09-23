@@ -170,6 +170,50 @@ Kirigami.ApplicationWindow {
         close.accepted = true
     }
 
+    footer: Controls.Pane {
+        objectName: "runFooter"
+        padding: Kirigami.Units.smallSpacing
+
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.smallSpacing
+
+            Controls.Button {
+                objectName: "runControl"
+                Layout.fillWidth: true
+                Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
+                highlighted: true
+                activeFocusOnTab: true
+                text: controller.running || controller.busy ? qsTr("■  Stoppen") : qsTr("▶  Starten")
+                Accessible.name: controller.running || controller.busy ? qsTr("Stoppen") : qsTr("Starten")
+                onClicked: controller.toggle()
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.smallSpacing
+                Rectangle {
+                    implicitWidth: Kirigami.Units.smallSpacing
+                    implicitHeight: implicitWidth
+                    radius: implicitWidth / 2
+                    color: controller.running ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
+                }
+                Controls.Label {
+                    objectName: "runStatus"
+                    Layout.fillWidth: true
+                    text: qsTr("Status: %1").arg(controller.status)
+                    wrapMode: Text.WordWrap
+                    Accessible.name: text
+                }
+                Controls.BusyIndicator {
+                    visible: controller.busy
+                    running: visible
+                    implicitWidth: Kirigami.Units.gridUnit
+                    implicitHeight: implicitWidth
+                }
+            }
+        }
+    }
+
     pageStack.initialPage: Kirigami.ScrollablePage {
         title: qsTr("Auto Clicker")
 
@@ -410,35 +454,6 @@ Kirigami.ApplicationWindow {
                         enabled: !controller.busy && !controller.running
                         onClicked: controller.configure_hotkey()
                     }
-                }
-            }
-
-            Controls.Button {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
-                highlighted: true
-                text: controller.running || controller.busy ? qsTr("■  Stoppen") : qsTr("▶  Starten")
-                onClicked: controller.toggle()
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: Kirigami.Units.smallSpacing
-                Rectangle {
-                    implicitWidth: Kirigami.Units.smallSpacing
-                    implicitHeight: implicitWidth
-                    radius: implicitWidth / 2
-                    color: controller.running ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
-                }
-                Controls.Label {
-                    text: qsTr("Status: %1").arg(controller.status)
-                }
-                Item { Layout.fillWidth: true }
-                Controls.BusyIndicator {
-                    visible: controller.busy
-                    running: visible
-                    implicitWidth: Kirigami.Units.gridUnit
-                    implicitHeight: implicitWidth
                 }
             }
 
