@@ -368,11 +368,11 @@ impl FakeScreencast {
 async fn event(
     events: &mut mpsc::UnboundedReceiver<WorkerEvent>,
     matches: impl Fn(&WorkerEvent) -> bool,
-) -> TestResult {
+) -> Result<WorkerEvent, Box<dyn std::error::Error>> {
     timeout(Duration::from_secs(3), async {
         while let Some(event) = events.recv().await {
             if matches(&event) {
-                return Ok(());
+                return Ok(event);
             }
             if let WorkerEvent::Error(error) = event {
                 return Err(error.into());
@@ -426,7 +426,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 &activation,
             )
             .await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested(_))).await?;
         for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
             for click_type in [ClickType::Single, ClickType::Double] {
                 observed
@@ -591,8 +591,43 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         while let Ok(event) = events.try_recv() {
             assert!(!matches!(event, WorkerEvent::Running(true)),
                 "a queued start must not restart after Stop");
-            assert!(!matches!(event, WorkerEvent::StartRequested),
+            assert!(!matches!(event, WorkerEvent::StartRequested(_)),
                 "an activation received before Stop must not start a new run");
+        }
+
+        // Starting with the button before the old key is released must not
+        // rearm it. A late activation can stop the new run, but cannot start it.
+        worker.send(Command::Start(continuous.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &activation,
+            )
+            .await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+
+        // A short manual run can finish before an old activation arrives.
+        // It must not turn that delayed activation into another start request.
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &activation,
+            )
+            .await?;
+        sleep(Duration::from_millis(120)).await;
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, WorkerEvent::StartRequested(_)),
+                "a delayed activation must not restart a completed manual run");
         }
 
         // The delayed key release rearms the shortcut. A later press can start.
@@ -615,7 +650,10 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 &activation,
             )
             .await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
+        let pending_start = event(&mut events, |e| matches!(e, WorkerEvent::StartRequested(_))).await?;
+        let WorkerEvent::StartRequested(pending_generation) = pending_start else {
+            unreachable!()
+        };
 
         worker.send(Command::Start(ClickSettings {
             repeat: None,
@@ -632,6 +670,8 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             )
             .await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert!(!worker.accepts_hotkey_start(pending_generation),
+            "a hotkey stop must invalidate earlier Qt start callbacks");
         worker.send(Command::Start(ClickSettings {
             repeat: None,
             ..settings

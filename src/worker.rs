@@ -49,7 +49,7 @@ pub enum WorkerEvent {
     Status(String),
     Running(bool),
     Hotkey(String),
-    StartRequested,
+    StartRequested(u64),
     Screenshot(i32, Result<String, String>),
     Error(String),
 }
@@ -79,6 +79,7 @@ impl WorkerHandle {
     {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let (control, control_rx) = watch::channel(ControlState::default());
+        let worker_control = control.clone();
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = Arc::clone(&closing);
         let emit = Arc::new(emit);
@@ -90,6 +91,7 @@ impl WorkerHandle {
                     Ok(runtime) => runtime.block_on(run_worker(
                         rx,
                         control_rx,
+                        worker_control,
                         initial,
                         preferred_hotkey,
                         emit,
@@ -128,6 +130,23 @@ impl WorkerHandle {
             return Ok(());
         }
         let generation = self.control.borrow().generation;
+        self.enqueue(command, generation)
+    }
+
+    pub fn send_start_for_generation(
+        &self,
+        settings: ClickSettings,
+        generation: u64,
+    ) -> Result<(), &'static str> {
+        if !self.accepts_hotkey_start(generation) {
+            return Ok(());
+        }
+        // Keep the original generation even if a concurrent Stop lands now.
+        // The worker will discard the command if it processes Stop first.
+        self.enqueue(Command::Start(settings), generation)
+    }
+
+    fn enqueue(&self, command: Command, generation: u64) -> Result<(), &'static str> {
         self.tx
             .try_send(QueuedCommand {
                 command,
@@ -139,6 +158,13 @@ impl WorkerHandle {
                     "Der Hintergrund-Worker ist nicht mehr erreichbar."
                 }
             })
+    }
+
+    /// A queued Qt callback may outlive the Stop that invalidated its hotkey press.
+    pub fn accepts_hotkey_start(&self, generation: u64) -> bool {
+        !self.closing.load(Ordering::Acquire)
+            && !self.control.is_closed()
+            && self.control.borrow().generation == generation
     }
 
     pub fn shutdown(mut self) {
@@ -337,28 +363,34 @@ async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<QueuedHotkeySig
 /// Keep receiving portal signals while the worker waits for a click or cleanup.
 fn queue_hotkey_events(
     mut events: Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>,
-    mut control: watch::Receiver<ControlState>,
+    control: watch::Receiver<ControlState>,
 ) -> (mpsc::Receiver<QueuedHotkeySignal>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
     let task = tokio::spawn(async move {
-        let mut generation = control.borrow_and_update().generation;
-        loop {
-            tokio::select! {
-                biased;
-                signal = events.next() => {
-                    let Some(signal) = signal else { break; };
-                    if tx.send(QueuedHotkeySignal { signal, generation }).await.is_err() {
-                        break;
-                    }
-                }
-                changed = control.changed() => {
-                    if changed.is_err() { break; }
-                    generation = control.borrow_and_update().generation;
-                }
+        while let Some(signal) = events.next().await {
+            let generation = control.borrow().generation;
+            if tx
+                .send(QueuedHotkeySignal { signal, generation })
+                .await
+                .is_err()
+            {
+                break;
             }
         }
     });
     (rx, task)
+}
+
+fn invalidate_hotkey_starts(
+    control: &mut watch::Receiver<ControlState>,
+    control_tx: &watch::Sender<ControlState>,
+) -> bool {
+    control_tx.send_modify(|state| {
+        state.generation = state.generation.wrapping_add(1);
+    });
+    // The caller handles this stop; mark the self-notification as seen.
+    // Shutdown may arrive concurrently and must not be skipped.
+    control.borrow_and_update().shutdown
 }
 
 async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task::JoinError> {
@@ -387,6 +419,7 @@ async fn register_hotkey_watcher(
 async fn run_worker(
     mut commands: mpsc::Receiver<QueuedCommand>,
     mut control: watch::Receiver<ControlState>,
+    control_tx: watch::Sender<ControlState>,
     mut latest_settings: ClickSettings,
     preferred_hotkey: String,
     emit: Emitter,
@@ -439,11 +472,7 @@ async fn run_worker(
                             continue;
                         }
                         match request_validated_start(&mut machine, &settings) {
-                            Ok(true) => {
-                                latest_settings = settings.clone();
-                                hotkey_rearm_required = false;
-                                ignored_activation = false;
-                            }
+                            Ok(true) => latest_settings = settings.clone(),
                             Ok(false) => continue,
                             Err(error) => {
                                 (emit)(WorkerEvent::Error(error.to_string()));
@@ -633,9 +662,21 @@ async fn run_worker(
                         }
                         if hotkey_rearm_required {
                             ignored_activation = true;
+                            // A manual restart does not rearm a key still in flight.
+                            // A press during that run may stop it, but never start it.
+                            if matches!(machine.state(), RunState::Starting | RunState::Clicking) {
+                                if invalidate_hotkey_starts(&mut control, &control_tx) {
+                                    break;
+                                }
+                                cancel_start(&mut start_task, &mut start_cancel).await;
+                                stop_run(&mut machine, &mut active, &emit);
+                            }
                             continue;
                         }
                         if matches!(machine.state(), RunState::Starting | RunState::Clicking) {
+                            if invalidate_hotkey_starts(&mut control, &control_tx) {
+                                break;
+                            }
                             hotkey_rearm_required = true;
                             ignored_activation = true;
                             cancel_start(&mut start_task, &mut start_cancel).await;
@@ -644,7 +685,7 @@ async fn run_worker(
                             // Ask the Qt side to start so the current UI values are
                             // collected, validated and saved. Keeping a settings copy
                             // here made hotkey starts use values from the previous run.
-                            (emit)(WorkerEvent::StartRequested);
+                            (emit)(WorkerEvent::StartRequested(generation));
                         }
                     }
                     HotkeySignal::Deactivated(deactivation) if deactivation.shortcut_id() == HOTKEY_ID => {
@@ -808,13 +849,17 @@ mod tests {
         assert!(handle.send(Command::ConfigureHotkey).is_err());
 
         assert!(handle.send(Command::Stop).is_ok());
+        assert!(!handle.accepts_hotkey_start(0));
+        assert!(handle.accepts_hotkey_start(1));
+        assert!(handle.send_start_for_generation(settings(), 0).is_ok());
         assert!(control.has_changed().is_ok_and(|changed| changed));
         assert_eq!(control.borrow_and_update().generation, 1);
         let old_start = commands.try_recv().unwrap_or_else(|_| unreachable!());
         assert!(matches!(old_start.command, Command::Start(_)));
         assert_ne!(old_start.generation, control.borrow().generation);
+        assert!(commands.try_recv().is_err());
 
-        assert!(handle.send(Command::Start(settings())).is_ok());
+        assert!(handle.send_start_for_generation(settings(), 1).is_ok());
         let new_start = commands.try_recv().unwrap_or_else(|_| unreachable!());
         assert_eq!(new_start.generation, control.borrow().generation);
     }
