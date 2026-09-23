@@ -302,6 +302,7 @@ Kirigami.ApplicationWindow {
                         Controls.SpinBox {
                             id: xInput
                             objectName: "xInput"
+                            Accessible.name: qsTr("X-Koordinate auf dem gewählten Monitor")
                             Layout.fillWidth: true
                             from: 0
                             to: Math.max(0, controller.monitor_width - 1)
@@ -313,6 +314,7 @@ Kirigami.ApplicationWindow {
                         Controls.SpinBox {
                             id: yInput
                             objectName: "yInput"
+                            Accessible.name: qsTr("Y-Koordinate auf dem gewählten Monitor")
                             Layout.fillWidth: true
                             from: 0
                             to: Math.max(0, controller.monitor_height - 1)
