@@ -29,6 +29,17 @@ TestCase {
         compare(findChild(main, "yInput").value, controller.fixed_y)
     }
 
+    function test_coordinate_inputs_have_distinct_accessible_names() {
+        const x = findChild(main, "xInput")
+        const y = findChild(main, "yInput")
+        verify(x !== null)
+        verify(y !== null)
+        compare(x.Accessible.name, "X-Koordinate auf dem gewählten Monitor")
+        compare(y.Accessible.name, "Y-Koordinate auf dem gewählten Monitor")
+        compare(x.contentItem.Accessible.name, x.Accessible.name)
+        compare(y.contentItem.Accessible.name, y.Accessible.name)
+    }
+
     function test_typed_values_reach_hotkey_without_focus_loss_data() {
         return [
             { tag: "interval", input: "intervalInput", property: "interval_ms", value: 250 },
