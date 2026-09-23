@@ -205,7 +205,20 @@ impl qobject::AppController {
 
     /// Validate and save current controls before requesting a click run.
     pub fn start(mut self: Pin<&mut Self>) {
+        self.as_mut().start_with_generation(None);
+    }
+
+    fn start_with_generation(mut self: Pin<&mut Self>, generation: Option<u64>) {
         if *self.selecting_position() {
+            return;
+        }
+        if let Some(generation) = generation
+            && !self
+                .rust()
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.accepts_hotkey_start(generation))
+        {
             return;
         }
         self.as_mut().clear_error();
@@ -219,7 +232,18 @@ impl qobject::AppController {
         if let Err(error) = self.as_ref().save_config() {
             self.as_mut().set_error_message(QString::from(&error));
         }
-        self.as_mut().send_command(Command::Start(settings));
+        let result = self
+            .rust()
+            .worker
+            .as_ref()
+            .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")
+            .and_then(|worker| match generation {
+                Some(generation) => worker.send_start_for_generation(settings, generation),
+                None => worker.send(Command::Start(settings)),
+            });
+        if let Err(error) = result {
+            self.as_mut().show_error(error);
+        }
     }
 
     /// Stop a run or an outstanding start request.
@@ -351,11 +375,11 @@ impl qobject::AppController {
         config::save(&config).map_err(|error| error.to_string())
     }
 
-    /// Display an error and reset the running and busy indicators.
+    /// Display an error without guessing whether the worker has stopped.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
-        self.as_mut().set_running(false);
-        self.as_mut().set_busy(false);
-        self.as_mut().set_status(QString::from("Fehler"));
+        if !*self.running() && !*self.busy() {
+            self.as_mut().set_status(QString::from("Fehler"));
+        }
         self.as_mut().set_error_message(QString::from(message));
     }
 
@@ -383,9 +407,9 @@ impl qobject::AppController {
                 self.as_mut().set_busy(false);
             }
             WorkerEvent::Hotkey(hotkey) => self.as_mut().set_hotkey(QString::from(&hotkey)),
-            WorkerEvent::StartRequested => {
+            WorkerEvent::StartRequested(generation) => {
                 if !*self.running() && !*self.busy() {
-                    self.as_mut().start();
+                    self.as_mut().start_with_generation(Some(generation));
                 }
             }
             WorkerEvent::Error(error) => self.as_mut().show_error(&error),

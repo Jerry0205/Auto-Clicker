@@ -14,6 +14,8 @@ Window {
     property bool previewOnly: false
     property bool positionPinned: false
     property bool waitingForScreenshot: false
+    // The KDE dialog needs time for Full Screen, Capture and Save by hand.
+    property int captureTimeoutMs: 20000
     property int targetX: 0
     property int targetY: 0
     property int hostVisibility: Window.Windowed
@@ -68,7 +70,6 @@ Window {
         if (waitingForScreenshot) {
             hostWindow.showMinimized()
             captureDelay.start()
-            captureFallback.start()
         }
         else showPicker()
     }
@@ -156,10 +157,18 @@ Window {
     onScreenChanged: updateInputReady()
     onClosing: function(close) { close.accepted = false; finish() }
 
-    Timer { id: captureDelay; interval: 250; onTriggered: picker.screenshotRequested(picker.captureId) }
+    Timer {
+        id: captureDelay
+        interval: 250
+        onTriggered: {
+            if (!picker.selecting || !picker.waitingForScreenshot) return
+            captureFallback.start()
+            picker.screenshotRequested(picker.captureId)
+        }
+    }
     Timer {
         id: captureFallback
-        interval: 3000
+        interval: picker.captureTimeoutMs
         onTriggered: {
             if (!picker.selecting || !picker.waitingForScreenshot) return
             captureDelay.stop()

@@ -13,6 +13,23 @@ from pathlib import Path
 from guard import supervise, terminate
 
 
+def monitor_identity(screen):
+    """Match JSON.stringify in MonitorSelection.qml, including integral floats."""
+    scale = screen["scale"]
+    if isinstance(scale, float) and scale.is_integer():
+        scale = int(scale)
+    identity = [
+        screen["name"],
+        screen["manufacturer"],
+        screen["model"],
+        screen["serial"],
+        screen["width"],
+        screen["height"],
+        scale,
+    ]
+    return json.dumps(identity, ensure_ascii=False, separators=(",", ":"))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -53,25 +70,13 @@ def main():
         state = rpc("target", cmd="state")
         assert state["visible"], "Target is not mapped"
         screen = state["screen"]
-        identity = [
-            screen["name"],
-            screen["manufacturer"],
-            screen["model"],
-            screen["serial"],
-            screen["width"],
-            screen["height"],
-            round(screen["scale"]),
-        ]
         config = base / "config/klickmeister/config.toml"
         config.parent.mkdir(parents=True)
         config.write_text(
             'interval_ms = 100\nmouse_button = "left"\nclick_type = "single"\n'
             'repeat_mode = "count"\nrepeat_count = 3\nposition_mode = "fixed"\n'
             'fixed_x = 80\nfixed_y = 400\nhotkey = "Pause"\nmonitor_identity = '
-            + json.dumps(
-                json.dumps(identity, ensure_ascii=False, separators=(",", ":")),
-                ensure_ascii=False,
-            )
+            + json.dumps(monitor_identity(screen), ensure_ascii=False)
             + "\n"
         )
         start("driver", [sys.executable, str(Path(__file__).with_name("driver.py"))])

@@ -42,6 +42,9 @@ struct Observed {
     delay_start: bool,
     start_seen: Arc<Notify>,
     start_release: Arc<Notify>,
+    delay_button: bool,
+    button_seen: Arc<Notify>,
+    button_release: Arc<Notify>,
 }
 type Shared = Arc<Mutex<Observed>>;
 
@@ -291,14 +294,26 @@ impl FakeRemote {
         button: i32,
         state: u32,
     ) -> zbus::fdo::Result<()> {
-        let mut observed = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if observed.revoked_session.as_ref() == Some(&session) {
-            return Err(failed("session revoked"));
-        }
-        observed.buttons.push((button, state));
-        if state == 0 && observed.release_failures > 0 {
-            observed.release_failures -= 1;
-            return Err(failed("simulated release failure"));
+        let delay = {
+            let mut observed = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            if observed.revoked_session.as_ref() == Some(&session) {
+                return Err(failed("session revoked"));
+            }
+            observed.buttons.push((button, state));
+            if state == 0 && observed.release_failures > 0 {
+                observed.release_failures -= 1;
+                return Err(failed("simulated release failure"));
+            }
+            (state == 1 && observed.delay_button).then(|| {
+                (
+                    observed.button_seen.clone(),
+                    observed.button_release.clone(),
+                )
+            })
+        };
+        if let Some((seen, release)) = delay {
+            seen.notify_one();
+            release.notified().await;
         }
         Ok(())
     }
@@ -353,11 +368,11 @@ impl FakeScreencast {
 async fn event(
     events: &mut mpsc::UnboundedReceiver<WorkerEvent>,
     matches: impl Fn(&WorkerEvent) -> bool,
-) -> TestResult {
+) -> Result<WorkerEvent, Box<dyn std::error::Error>> {
     timeout(Duration::from_secs(3), async {
         while let Some(event) = events.recv().await {
             if matches(&event) {
-                return Ok(());
+                return Ok(event);
             }
             if let WorkerEvent::Error(error) = event {
                 return Err(error.into());
@@ -411,7 +426,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 &activation,
             )
             .await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested(_))).await?;
         for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
             for click_type in [ClickType::Single, ClickType::Double] {
                 observed
@@ -539,6 +554,107 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             count
         );
 
+        // Hold an actual click while all 16 command slots fill. Stop must
+        // still reach the worker, and queued starts from before Stop must not
+        // restart it once the blocked click finishes.
+        let (button_seen, button_release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.delay_button = true;
+            (state.button_seen.clone(), state.button_release.clone())
+        };
+        let continuous = ClickSettings { repeat: None, ..settings.clone() };
+        worker.send(Command::Start(continuous.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        timeout(Duration::from_secs(3), button_seen.notified()).await?;
+        for _ in 0..16 {
+            worker.send(Command::Start(continuous.clone()))?;
+        }
+        assert!(worker.send(Command::Start(continuous.clone())).is_err());
+        // The activation reaches the portal receiver while the worker is
+        // still blocked in a click. Stop must invalidate it as an old event.
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &activation,
+            )
+            .await?;
+        worker.send(Command::Stop)?;
+        button_release.notify_one();
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        observed.lock().unwrap_or_else(|e| e.into_inner()).delay_button = false;
+        let count = observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len();
+        sleep(Duration::from_millis(120)).await;
+        assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len(), count);
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, WorkerEvent::Running(true)),
+                "a queued start must not restart after Stop");
+            assert!(!matches!(event, WorkerEvent::StartRequested(_)),
+                "an activation received before Stop must not start a new run");
+        }
+
+        // Starting with the button before the old key is released must not
+        // rearm it. A late activation can stop the new run, but cannot start it.
+        worker.send(Command::Start(continuous.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &activation,
+            )
+            .await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+
+        // A short manual run can finish before an old activation arrives.
+        // It must not turn that delayed activation into another start request.
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &activation,
+            )
+            .await?;
+        sleep(Duration::from_millis(120)).await;
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, WorkerEvent::StartRequested(_)),
+                "a delayed activation must not restart a completed manual run");
+        }
+
+        // The delayed key release rearms the shortcut. A later press can start.
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Deactivated",
+                &activation,
+            )
+            .await?;
+        sleep(Duration::from_millis(20)).await;
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &activation,
+            )
+            .await?;
+        let pending_start = event(&mut events, |e| matches!(e, WorkerEvent::StartRequested(_))).await?;
+        let WorkerEvent::StartRequested(pending_generation) = pending_start else {
+            unreachable!()
+        };
+
         worker.send(Command::Start(ClickSettings {
             repeat: None,
             ..settings.clone()
@@ -554,6 +670,8 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             )
             .await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert!(!worker.accepts_hotkey_start(pending_generation),
+            "a hotkey stop must invalidate earlier Qt start callbacks");
         worker.send(Command::Start(ClickSettings {
             repeat: None,
             ..settings

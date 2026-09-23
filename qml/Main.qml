@@ -364,7 +364,7 @@ Kirigami.ApplicationWindow {
                         enabled: !controller.running && !controller.busy
                         text: qsTr("Mit 4×-Lupe auswählen (Bildschirmaufnahme)")
                         Controls.ToolTip.visible: hovered
-                        Controls.ToolTip.text: qsTr("Im KDE-Dialog Vollbild aufnehmen und speichern. Nach drei Sekunden ohne Bild öffnet sich die Auswahl ohne Lupe.")
+                        Controls.ToolTip.text: qsTr("Im KDE-Dialog Vollbild wählen, aufnehmen und speichern. „Abbrechen“ setzt die Auswahl ohne Lupe fort; Esc beendet sie. Nach 20 Sekunden ohne Bild öffnet sich die Auswahl ohne Lupe.")
                     }
                     Controls.Label {
                         Layout.fillWidth: true
