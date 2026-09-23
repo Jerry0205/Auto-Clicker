@@ -177,13 +177,23 @@ Kirigami.ApplicationWindow {
             spacing: Kirigami.Units.largeSpacing
 
             Kirigami.InlineMessage {
+                id: errorBanner
+                objectName: "errorBanner"
                 Layout.fillWidth: true
-                visible: controller.error_message.length > 0
+                visible: false
                 type: Kirigami.MessageType.Error
                 text: controller.error_message
                 showCloseButton: true
                 onLinkActivated: controller.clear_error()
                 onVisibleChanged: if (!visible) controller.clear_error()
+                Component.onCompleted: visible = controller.error_message.length > 0
+            }
+
+            Connections {
+                target: controller
+                function onError_messageChanged() {
+                    errorBanner.visible = controller.error_message.length > 0
+                }
             }
 
             Controls.GroupBox {
