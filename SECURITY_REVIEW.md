@@ -1,6 +1,6 @@
 # Security Review
 
-Stand: 2026-09-14, Version 0.1.2 (Portal-Bereinigung; native Geräteprüfung siehe Testbericht zu 0.1.1)
+Stand: 2026-09-23, Version 0.1.2 (Portal-Bereinigung und priorisierter Stop; native Geräteprüfung siehe Testbericht zu 0.1.1)
 
 ## 1. Benötigte Berechtigungen
 
@@ -34,7 +34,7 @@ Keine Eingaben, Klickhistorien, Fenstertitel, Prozessinformationen, Clipboard-In
 
 ## 5. Threading-Modell
 
-Der Qt-Main-Thread besitzt die GUI. Genau ein Rust-Workerthread besitzt Zustandsautomat, Scheduler und Portalobjekte. Ein begrenzter Kanal (16 Befehle) verhindert unbeschränktes Anwachsen. Zustandsupdates gelangen über die threadsichere CXX-Qt-Queue in den Qt-Event-Loop.
+Der Qt-Main-Thread besitzt die GUI. Genau ein Rust-Workerthread besitzt Zustandsautomat, Scheduler und Portalobjekte. Ein begrenzter Kanal (16 Befehle) verhindert unbeschränktes Anwachsen. Stop und Shutdown verwenden ein priorisiertes Ein-Wert-Signal, damit sie auch bei vollem Befehlskanal ankommen. Zustandsupdates gelangen über die threadsichere CXX-Qt-Queue in den Qt-Event-Loop.
 
 Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` weisen weitere Startbefehle ab. Es existiert höchstens ein `ActiveRun` und eine Start-Aufgabe. Abgebrochene Starts werden verworfen.
 
@@ -52,7 +52,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 - Ein echtes globales Auslesen der Cursorposition ist unter Wayland absichtlich nicht möglich. Der Picker nutzt ein eigenes Vollbildfenster.
 - Für absolute Positionen muss der Benutzer im KWin-Dialog denselben Monitor wählen. Position und Größe werden vor Nutzung mit der Auswahl abgeglichen; fehlende Metadaten verhindern den Start. Displayänderungen können die Sitzung ungültig machen und führen dann zum Stop mit Fehlermeldung.
 - Portal-Dialoge sind derzeit nicht an einen exportierten Wayland-Fensterhandle gekoppelt und können daher als separates KWin-Dialogfenster erscheinen.
-- Auf dem geprüften xdg-desktop-portal 1.22.1 bleibt eine unbeantwortete Screenshot-Erstfreigabe trotz Request.Close und getrennter App-Verbindung offen und kann weitere Portal-Aufrufe blockieren. Der Picker fällt nach drei Sekunden auf Auswahl ohne Lupe zurück; der verbliebene KDE-Dialog musste regulär abgelehnt werden. Erfolgreiche Zustimmung vor dem Timeout funktioniert. Diese Desktop-Einschränkung ist mit Reproduktion und Quellen in [DEVICE_TEST_REPORT.md](tests/DEVICE_TEST_REPORT.md) dokumentiert.
+- Auf dem früher geprüften xdg-desktop-portal 1.22.1 konnte eine unbeantwortete nichtinteraktive Screenshot-Erstfreigabe trotz Request.Close und getrennter App-Verbindung offen bleiben und weitere Portal-Aufrufe blockieren. Die Lupe verwendet inzwischen die interaktive Freigabe; der Picker fällt nach 20 Sekunden ab Anfrage auf Auswahl ohne Lupe zurück und versucht, die Anfrage zu schließen. Bleibt ein alter KDE-Dialog dennoch offen, muss er regulär abgelehnt werden. Die ursprüngliche Desktop-Einschränkung ist mit Reproduktion und Quellen in [DEVICE_TEST_REPORT.md](tests/DEVICE_TEST_REPORT.md) dokumentiert.
 - `SIGKILL` verhindert anwendungsseitiges RAII-Cleanup; der D-Bus-Verbindungsabbruch beendet die compositorseitige Sitzung dennoch.
 - Die D-Bus-Notify-Methode ist bei 100 CPS bewusst konservativer als das empfohlene EIS-Protokoll. Sie vermeidet eine weitere native FFI-Abhängigkeit und ist für das gesetzte Limit ausreichend.
 

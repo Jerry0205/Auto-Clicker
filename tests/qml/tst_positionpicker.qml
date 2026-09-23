@@ -12,11 +12,13 @@ TestCase {
     Window { id: host; width: 400; height: 300; visible: true }
     PositionPicker { id: picker; hostWindow: host }
     SignalSpy { id: cancelled; target: picker; signalName: "screenshotCancelled" }
+    SignalSpy { id: requested; target: picker; signalName: "screenshotRequested" }
     SignalSpy { id: finished; target: picker; signalName: "finished" }
     SignalSpy { id: picked; target: picker; signalName: "picked" }
 
     function init() {
-        picked.clear(); cancelled.clear(); finished.clear()
+        picked.clear(); cancelled.clear(); requested.clear(); finished.clear()
+        picker.captureTimeoutMs = 20000
         host.show()
         host.requestActivate()
         tryCompare(host, "active", true)
@@ -196,10 +198,29 @@ TestCase {
         compare(host.visible, true)
     }
 
-    function test_capture_timeout_restores_interactive_selection() {
+    function test_portal_cancel_continues_without_magnifier() {
         picker.begin(host.screen, 20, 30, false, true)
         const requestId = picker.captureId
-        tryCompare(picker, "inputReady", true, 4000)
+        tryCompare(requested, "count", 1)
+        picker.acceptScreenshot(requestId, "", "cancelled")
+        tryCompare(picker, "inputReady", true)
+        verify(picker.captureError.indexOf("ohne Lupe") >= 0)
+        compare(cancelled.count, 0)
+        tryVerify(function() { return picker.active })
+        wait(20)
+        keyClick(Qt.Key_Escape)
+        tryCompare(picker, "selecting", false)
+        compare(picked.count, 0)
+    }
+
+    function test_capture_timeout_restores_interactive_selection() {
+        compare(picker.captureTimeoutMs, 20000)
+        picker.captureTimeoutMs = 120
+        picker.begin(host.screen, 20, 30, false, true)
+        const requestId = picker.captureId
+        tryCompare(requested, "count", 1)
+        compare(requested.signalArguments[0][0], requestId)
+        tryCompare(picker, "inputReady", true, 1500)
         compare(picker.waitingForScreenshot, false)
         compare(cancelled.count, 1)
         compare(cancelled.signalArguments[0][0], requestId)

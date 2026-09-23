@@ -351,11 +351,11 @@ impl qobject::AppController {
         config::save(&config).map_err(|error| error.to_string())
     }
 
-    /// Display an error and reset the running and busy indicators.
+    /// Display an error without guessing whether the worker has stopped.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
-        self.as_mut().set_running(false);
-        self.as_mut().set_busy(false);
-        self.as_mut().set_status(QString::from("Fehler"));
+        if !*self.running() && !*self.busy() {
+            self.as_mut().set_status(QString::from("Fehler"));
+        }
         self.as_mut().set_error_message(QString::from(message));
     }
 

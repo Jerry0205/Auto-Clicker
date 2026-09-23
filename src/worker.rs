@@ -18,7 +18,7 @@ use ashpd::desktop::{
 use futures_util::{Stream, StreamExt, future};
 use tokio::{
     runtime::Builder,
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
     time::{Instant, sleep_until, timeout},
 };
@@ -55,9 +55,21 @@ pub enum WorkerEvent {
 }
 
 pub struct WorkerHandle {
-    tx: mpsc::Sender<Command>,
+    tx: mpsc::Sender<QueuedCommand>,
+    control: watch::Sender<ControlState>,
     closing: Arc<AtomicBool>,
     join: Option<thread::JoinHandle<()>>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ControlState {
+    generation: u64,
+    shutdown: bool,
+}
+
+struct QueuedCommand {
+    command: Command,
+    generation: u64,
 }
 
 impl WorkerHandle {
@@ -66,6 +78,7 @@ impl WorkerHandle {
         F: Fn(WorkerEvent) + Send + Sync + 'static,
     {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
+        let (control, control_rx) = watch::channel(ControlState::default());
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = Arc::clone(&closing);
         let emit = Arc::new(emit);
@@ -76,6 +89,7 @@ impl WorkerHandle {
                 match runtime {
                     Ok(runtime) => runtime.block_on(run_worker(
                         rx,
+                        control_rx,
                         initial,
                         preferred_hotkey,
                         emit,
@@ -88,35 +102,65 @@ impl WorkerHandle {
                 }
             })
             .ok();
-        Self { tx, closing, join }
+        Self {
+            tx,
+            control,
+            closing,
+            join,
+        }
     }
 
     pub fn send(&self, command: Command) -> Result<(), &'static str> {
         if self.closing.load(Ordering::Acquire) {
             return Err("Die Anwendung wird bereits beendet.");
         }
+        if self.control.is_closed() {
+            return Err("Der Hintergrund-Worker ist nicht mehr erreichbar.");
+        }
+        if matches!(command, Command::Stop) {
+            self.control.send_modify(|state| {
+                state.generation = state.generation.wrapping_add(1);
+            });
+            return Ok(());
+        }
+        if matches!(command, Command::Shutdown) {
+            self.request_shutdown();
+            return Ok(());
+        }
+        let generation = self.control.borrow().generation;
         self.tx
-            .try_send(command)
-            .map_err(|_| "Der interne Befehlskanal ist ausgelastet.")
+            .try_send(QueuedCommand {
+                command,
+                generation,
+            })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => "Der interne Befehlskanal ist ausgelastet.",
+                mpsc::error::TrySendError::Closed(_) => {
+                    "Der Hintergrund-Worker ist nicht mehr erreichbar."
+                }
+            })
     }
 
     pub fn shutdown(mut self) {
-        if !self.closing.swap(true, Ordering::AcqRel) {
-            let _ = self.tx.blocking_send(Command::Shutdown);
-        }
+        self.request_shutdown();
         if let Some(join) = self.join.take() {
             let _ = join.join();
+        }
+    }
+
+    fn request_shutdown(&self) {
+        if !self.closing.swap(true, Ordering::AcqRel) {
+            self.control.send_modify(|state| {
+                state.generation = state.generation.wrapping_add(1);
+                state.shutdown = true;
+            });
         }
     }
 }
 
 impl Drop for WorkerHandle {
     fn drop(&mut self) {
-        if !self.closing.swap(true, Ordering::AcqRel) {
-            let _ = self.tx.try_send(Command::Shutdown);
-        }
-        // Rust does not wait for detached threads at process exit. Explicit
-        // shutdown joins in the window closing handler.
+        self.request_shutdown();
     }
 }
 
@@ -307,7 +351,8 @@ async fn register_hotkey_watcher(
 
 /// Serialize clicks, permissions, shortcut events and cancellable captures.
 async fn run_worker(
-    mut commands: mpsc::Receiver<Command>,
+    mut commands: mpsc::Receiver<QueuedCommand>,
+    mut control: watch::Receiver<ControlState>,
     mut latest_settings: ClickSettings,
     preferred_hotkey: String,
     emit: Emitter,
@@ -334,10 +379,21 @@ async fn run_worker(
     loop {
         let tick_deadline = active.as_ref().map(|run| run.next_tick);
         tokio::select! {
-            command = commands.recv() => {
-                let Some(command) = command else { break; };
+            biased;
+            changed = control.changed() => {
+                if changed.is_err() || control.borrow().shutdown {
+                    break;
+                }
+                cancel_start(&mut start_task, &mut start_cancel).await;
+                stop_run(&mut machine, &mut active, &emit);
+            }
+            queued = commands.recv() => {
+                let Some(QueuedCommand { command, generation }) = queued else { break; };
                 match command {
                     Command::Start(settings) => {
+                        if generation != control.borrow().generation {
+                            continue;
+                        }
                         if hotkey.is_none() {
                             (emit)(WorkerEvent::Error("Vor dem Start muss der globale Stop-Hotkey von KWin bestätigt sein.".to_owned()));
                             continue;
@@ -361,10 +417,6 @@ async fn run_worker(
                             start_cancel = Some(tx);
                             start_task = Some(tokio::spawn(setup_click_session(settings.monitor, rx)));
                         }
-                    }
-                    Command::Stop => {
-                        cancel_start(&mut start_task, &mut start_cancel).await;
-                        stop_run(&mut machine, &mut active, &emit);
                     }
                     Command::CaptureScreenshot(request_id) => {
                         cancel_capture(&mut screenshot_task, &mut screenshot_cancel).await;
@@ -399,7 +451,7 @@ async fn run_worker(
                             (emit)(WorkerEvent::Error("Der globale Hotkey ist noch nicht verfügbar.".to_owned()));
                         }
                     }
-                    Command::Shutdown => break,
+                    Command::Stop | Command::Shutdown => unreachable!("control commands bypass the bounded queue"),
                 }
             }
             result = wait_task(&mut screenshot_task), if screenshot_task.is_some() => {
@@ -425,6 +477,7 @@ async fn run_worker(
                     }
                     Err(error) => {
                         machine.fail();
+                        (emit)(WorkerEvent::Running(false));
                         (emit)(WorkerEvent::Error(format!("Portal-Aufgabe ist fehlgeschlagen: {error}")));
                     }
                 }
@@ -434,10 +487,13 @@ async fn run_worker(
                 hotkey_cancel = None;
                 match result {
                     Ok(Ok(HotkeyRegistration { connection, portal, session, actual })) => {
-                        let activation_stream = portal.receive_activated().await;
-                        let changed_stream = portal.receive_shortcuts_changed().await;
-                        match (activation_stream, changed_stream) {
-                            (Ok(activations), Ok(changes)) => {
+                        let streams = timeout(PORTAL_CLOSE_TIMEOUT, async {
+                            let activations = portal.receive_activated().await.map_err(|error| error.to_string())?;
+                            let changes = portal.receive_shortcuts_changed().await.map_err(|error| error.to_string())?;
+                            Ok::<_, String>((activations, changes))
+                        }).await;
+                        match streams {
+                            Ok(Ok((activations, changes))) => {
                                 let session = Arc::new(session);
                                 let watched_session = Arc::clone(&session);
                                 let (ready_tx, ready_rx) = oneshot::channel();
@@ -475,9 +531,14 @@ async fn run_worker(
                                     (emit)(WorkerEvent::Status("Bereit".to_owned()));
                                 }
                             }
-                            (Err(error), _) | (_, Err(error)) => {
+                            result => {
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+                                let error = match result {
+                                    Ok(Err(error)) => error,
+                                    Err(_) => "Zeitüberschreitung bei der Hotkey-Signalanmeldung".to_owned(),
+                                    Ok(Ok(_)) => unreachable!(),
+                                };
                                 (emit)(WorkerEvent::Error(format!("Hotkey-Signale sind nicht verfügbar: {error}")));
                             }
                         }
@@ -548,6 +609,7 @@ async fn run_worker(
                 let Some(session) = click_session.as_ref() else {
                     machine.fail();
                     active = None;
+                    (emit)(WorkerEvent::Running(false));
                     (emit)(WorkerEvent::Error("Die Wayland-Sitzung wurde unerwartet beendet.".to_owned()));
                     continue;
                 };
@@ -641,6 +703,51 @@ fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hold the worker receiver still so the queue is deterministically full.
+    fn stalled_handle(
+        capacity: usize,
+    ) -> (
+        WorkerHandle,
+        mpsc::Receiver<QueuedCommand>,
+        watch::Receiver<ControlState>,
+    ) {
+        let (tx, rx) = mpsc::channel(capacity);
+        let (control, control_rx) = watch::channel(ControlState::default());
+        let handle = WorkerHandle {
+            tx,
+            control,
+            closing: Arc::new(AtomicBool::new(false)),
+            join: None,
+        };
+        (handle, rx, control_rx)
+    }
+
+    #[test]
+    fn stop_bypasses_full_queue_and_discards_older_starts() {
+        let (handle, mut commands, mut control) = stalled_handle(1);
+        assert!(handle.send(Command::Start(settings())).is_ok());
+        assert!(handle.send(Command::ConfigureHotkey).is_err());
+
+        assert!(handle.send(Command::Stop).is_ok());
+        assert!(control.has_changed().is_ok_and(|changed| changed));
+        assert_eq!(control.borrow_and_update().generation, 1);
+        let old_start = commands.try_recv().unwrap_or_else(|_| unreachable!());
+        assert!(matches!(old_start.command, Command::Start(_)));
+        assert_ne!(old_start.generation, control.borrow().generation);
+
+        assert!(handle.send(Command::Start(settings())).is_ok());
+        let new_start = commands.try_recv().unwrap_or_else(|_| unreachable!());
+        assert_eq!(new_start.generation, control.borrow().generation);
+    }
+
+    #[test]
+    fn shutdown_bypasses_full_queue() {
+        let (handle, _commands, control) = stalled_handle(1);
+        assert!(handle.send(Command::Start(settings())).is_ok());
+        handle.shutdown();
+        assert!(control.borrow().shutdown);
+    }
 
     #[tokio::test]
     async fn stalled_hotkey_registration_times_out() {

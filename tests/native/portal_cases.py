@@ -114,7 +114,7 @@ def main():
 
     open_capture()
     probe_driver("independent_client_during_dialog")
-    wait_for(lambda: "zu lange" in picker_text(), timeout=4)
+    wait_for(lambda: "zu lange" in picker_text(), timeout=23)
     wait_for(lambda: not screenshot_dialog())
     assert "Deny" in picker_text()
     probe_driver("unanswered_dialog_closed_after_timeout")

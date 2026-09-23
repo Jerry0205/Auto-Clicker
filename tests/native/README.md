@@ -10,7 +10,9 @@ Instanz starten. Globale Tastenkürzel dürfen nicht parallel umkonfiguriert wer
 ```bash
 cargo build --locked --release
 python -m unittest discover -s tests/native -p test_guard.py
+python -m unittest discover -s tests/native -p test_run.py
 python tests/native/run.py tests/native/portal_cases.py
+python tests/native/run.py --binary target/debug/klickmeister tests/native/capture_timing.py
 ```
 
 `run.py` erstellt ein privates Artefaktverzeichnis samt eigener App-Konfiguration.
@@ -27,6 +29,11 @@ nach Screenshotfehlern sowie App-Schließen bei offener Screenshot-Anfrage.
 Zusätzlich laufen alle drei Maustasten mit Einzel-/Doppelklick; Menüwerte werden
 über sichtbare Einträge gewählt und anschließend gelesen. Jeder neue Picker wird
 bei (80, 400) fixiert und vor dem Start bestätigt.
+`test_run.py` prüft die Monitoridentität bei ganzzahliger und gebrochener
+Skalierung einschließlich der TOML-Einbettung. Der interaktive Dialog hat ab
+der Screenshot-Anfrage 20 Sekunden Zeit; „Abbrechen“ führt zur Auswahl ohne Lupe.
+`capture_timing.py` prüft auf der echten Plasma-Sitzung zweimal die Lupe nach
+6 bzw. 12 Sekunden Bedenkzeit sowie Abbruch und den begrenzten Timeout.
 
 Die aus den temporären Hilfsskripten übernommenen Korrekturen sind fest enthalten:
 

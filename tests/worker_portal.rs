@@ -42,6 +42,9 @@ struct Observed {
     delay_start: bool,
     start_seen: Arc<Notify>,
     start_release: Arc<Notify>,
+    delay_button: bool,
+    button_seen: Arc<Notify>,
+    button_release: Arc<Notify>,
 }
 type Shared = Arc<Mutex<Observed>>;
 
@@ -291,14 +294,26 @@ impl FakeRemote {
         button: i32,
         state: u32,
     ) -> zbus::fdo::Result<()> {
-        let mut observed = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if observed.revoked_session.as_ref() == Some(&session) {
-            return Err(failed("session revoked"));
-        }
-        observed.buttons.push((button, state));
-        if state == 0 && observed.release_failures > 0 {
-            observed.release_failures -= 1;
-            return Err(failed("simulated release failure"));
+        let delay = {
+            let mut observed = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            if observed.revoked_session.as_ref() == Some(&session) {
+                return Err(failed("session revoked"));
+            }
+            observed.buttons.push((button, state));
+            if state == 0 && observed.release_failures > 0 {
+                observed.release_failures -= 1;
+                return Err(failed("simulated release failure"));
+            }
+            (state == 1 && observed.delay_button).then(|| {
+                (
+                    observed.button_seen.clone(),
+                    observed.button_release.clone(),
+                )
+            })
+        };
+        if let Some((seen, release)) = delay {
+            seen.notify_one();
+            release.notified().await;
         }
         Ok(())
     }
@@ -538,6 +553,34 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 .len(),
             count
         );
+
+        // Hold an actual click while all 16 command slots fill. Stop must
+        // still reach the worker, and queued starts from before Stop must not
+        // restart it once the blocked click finishes.
+        let (button_seen, button_release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.delay_button = true;
+            (state.button_seen.clone(), state.button_release.clone())
+        };
+        let continuous = ClickSettings { repeat: None, ..settings.clone() };
+        worker.send(Command::Start(continuous.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        timeout(Duration::from_secs(3), button_seen.notified()).await?;
+        for _ in 0..16 {
+            worker.send(Command::Start(continuous.clone()))?;
+        }
+        assert!(worker.send(Command::Start(continuous.clone())).is_err());
+        worker.send(Command::Stop)?;
+        button_release.notify_one();
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        observed.lock().unwrap_or_else(|e| e.into_inner()).delay_button = false;
+        let count = observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len();
+        sleep(Duration::from_millis(120)).await;
+        assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len(), count);
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, WorkerEvent::Running(true)),
+                "a queued start must not restart after Stop");
+        }
 
         worker.send(Command::Start(ClickSettings {
             repeat: None,
