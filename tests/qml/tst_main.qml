@@ -59,4 +59,34 @@ TestCase {
             controller[state] = false
         }
     }
+
+    function test_close_saves_draft_and_keeps_window_open_on_write_error() {
+        controller.interval_ms = 250
+        controller.saveConfigSucceeds = false
+        main.close()
+        compare(controller.saveCount, 1)
+        compare(controller.shutdownCount, 0)
+        compare(main.visible, true)
+        const dialog = findChild(main, "saveFailureDialog")
+        verify(dialog !== null)
+        tryCompare(dialog, "opened", true)
+
+        controller.saveConfigSucceeds = true
+        dialog.close()
+        main.close()
+        compare(controller.saveCount, 2)
+        compare(controller.shutdownCount, 1)
+    }
+
+    function test_discard_after_save_error_closes_without_retrying() {
+        controller.saveConfigSucceeds = false
+        main.close()
+        const dialog = findChild(main, "saveFailureDialog")
+        tryCompare(dialog, "opened", true)
+        const discard = findChild(main, "discardSettingsButton")
+        verify(discard !== null)
+        mouseClick(discard)
+        compare(controller.saveCount, 1)
+        compare(controller.shutdownCount, 1)
+    }
 }

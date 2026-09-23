@@ -2,7 +2,10 @@ use std::pin::Pin;
 
 use crate::{
     config::{self, AppConfig},
-    model::{ClickSettings, ClickType, MonitorGeometry, MouseButton, PositionMode, RepeatMode},
+    model::{
+        ClickSettings, ClickType, MAX_REPEAT_COUNT, MonitorGeometry, MouseButton, PositionMode,
+        RepeatMode, validate_interval,
+    },
     worker::{Command, WorkerEvent, WorkerHandle},
 };
 use cxx_qt::{CxxQtType, Threading};
@@ -73,6 +76,9 @@ pub mod qobject {
         fn clear_error(self: Pin<&mut AppController>);
 
         #[qinvokable]
+        fn save_config(self: Pin<&mut AppController>) -> bool;
+
+        #[qinvokable]
         fn shutdown(self: Pin<&mut AppController>);
     }
 
@@ -111,6 +117,12 @@ impl Default for AppControllerRust {
             Ok(config) => (config, None),
             Err(error) => (AppConfig::default(), Some(error.to_string())),
         };
+        Self::from_config(config, startup_error)
+    }
+}
+
+impl AppControllerRust {
+    fn from_config(config: AppConfig, startup_error: Option<String>) -> Self {
         Self {
             status: QString::from("Bereit"),
             error_message: QString::default(),
@@ -142,6 +154,62 @@ impl Default for AppControllerRust {
             worker: None,
             startup_error,
         }
+    }
+
+    /// A draft needs valid values but does not need an approved monitor yet.
+    fn config_snapshot(&self) -> Result<AppConfig, String> {
+        let interval_ms = u64::try_from(self.interval_ms)
+            .map_err(|_| "Das Intervall muss positiv sein.".to_owned())?;
+        validate_interval(interval_ms).map_err(|error| error.to_string())?;
+        let repeat_count = u64::try_from(self.repeat_count)
+            .map_err(|_| "Die Wiederholungszahl muss positiv sein.".to_owned())?;
+        if !(1..=MAX_REPEAT_COUNT).contains(&repeat_count) {
+            return Err("Die Wiederholungszahl ist ungültig.".to_owned());
+        }
+        let fixed_x = u32::try_from(self.fixed_x)
+            .map_err(|_| "X muss eine nichtnegative Ganzzahl sein.".to_owned())?;
+        let fixed_y = u32::try_from(self.fixed_y)
+            .map_err(|_| "Y muss eine nichtnegative Ganzzahl sein.".to_owned())?;
+        if fixed_x > 100_000 || fixed_y > 100_000 {
+            return Err(
+                "Die festen Koordinaten liegen außerhalb des unterstützten Bereichs.".to_owned(),
+            );
+        }
+        let mouse_button = match self.mouse_button {
+            0 => MouseButton::Left,
+            1 => MouseButton::Right,
+            2 => MouseButton::Middle,
+            _ => return Err("Unbekannte Maustaste.".to_owned()),
+        };
+        let click_type = match self.click_type {
+            0 => ClickType::Single,
+            1 => ClickType::Double,
+            _ => return Err("Unbekannter Klicktyp.".to_owned()),
+        };
+        Ok(AppConfig {
+            interval_ms,
+            mouse_button,
+            click_type,
+            repeat_mode: if self.repeat_until_stopped {
+                RepeatMode::UntilStopped
+            } else {
+                RepeatMode::Count
+            },
+            repeat_count,
+            position_mode: if self.current_position {
+                PositionMode::CurrentCursor
+            } else {
+                PositionMode::Fixed
+            },
+            fixed_x,
+            fixed_y,
+            hotkey: self.hotkey.to_string(),
+            monitor_identity: if self.fixed_position_confirmed {
+                self.monitor_identity.to_string()
+            } else {
+                String::new()
+            },
+        })
     }
 }
 
@@ -216,9 +284,7 @@ impl qobject::AppController {
                 return;
             }
         };
-        if let Err(error) = self.as_ref().save_config() {
-            self.as_mut().set_error_message(QString::from(&error));
-        }
+        self.as_mut().save_config();
         self.as_mut().send_command(Command::Start(settings));
     }
 
@@ -244,6 +310,19 @@ impl qobject::AppController {
     /// Dismiss the current user-visible error message.
     pub fn clear_error(mut self: Pin<&mut Self>) {
         self.as_mut().set_error_message(QString::default());
+    }
+
+    /// Save a valid draft, including settings that do not require a click run.
+    pub fn save_config(mut self: Pin<&mut Self>) -> bool {
+        let result = self
+            .rust()
+            .config_snapshot()
+            .and_then(|config| config::save(&config).map_err(|error| error.to_string()));
+        if let Err(error) = result {
+            self.as_mut().set_error_message(QString::from(&error));
+            return false;
+        }
+        true
     }
 
     /// Join the worker and clear running indicators during window closure.
@@ -321,36 +400,6 @@ impl qobject::AppController {
         Ok(settings)
     }
 
-    /// Persist monitor identity together with monitor-relative coordinates.
-    fn save_config(self: Pin<&Self>) -> Result<(), String> {
-        let settings = self.settings()?;
-        let config = AppConfig {
-            interval_ms: settings.interval_ms,
-            mouse_button: settings.button,
-            click_type: settings.click_type,
-            repeat_mode: if settings.repeat.is_some() {
-                RepeatMode::Count
-            } else {
-                RepeatMode::UntilStopped
-            },
-            repeat_count: u64::try_from(*self.repeat_count()).unwrap_or(100),
-            position_mode: if settings.position.is_some() {
-                PositionMode::Fixed
-            } else {
-                PositionMode::CurrentCursor
-            },
-            fixed_x: u32::try_from(*self.fixed_x()).unwrap_or(0),
-            fixed_y: u32::try_from(*self.fixed_y()).unwrap_or(0),
-            hotkey: self.hotkey().to_string(),
-            monitor_identity: if *self.fixed_position_confirmed() {
-                self.monitor_identity().to_string()
-            } else {
-                String::new()
-            },
-        };
-        config::save(&config).map_err(|error| error.to_string())
-    }
-
     /// Display an error and reset the running and busy indicators.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
         self.as_mut().set_running(false);
@@ -390,5 +439,56 @@ impl qobject::AppController {
             }
             WorkerEvent::Error(error) => self.as_mut().show_error(&error),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn draft_survives_close_and_reload_without_confirming_position_or_starting() {
+        let mut controller = AppControllerRust::from_config(AppConfig::default(), None);
+        controller.interval_ms = 250;
+        controller.mouse_button = 1;
+        controller.click_type = 1;
+        controller.repeat_until_stopped = false;
+        controller.repeat_count = 42;
+        controller.current_position = false;
+        controller.fixed_x = 640;
+        controller.fixed_y = 480;
+        controller.monitor_identity = QString::from("monitor-a");
+        controller.hotkey = QString::from("F8");
+        // The monitor has not been confirmed, so this draft cannot start.
+        assert!(!controller.fixed_position_confirmed);
+
+        let directory = std::env::temp_dir().join(format!(
+            "klickmeister-controller-test-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = directory.join("config.toml");
+        let saved = controller
+            .config_snapshot()
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(config::save_to(&path, &saved).is_ok());
+        let loaded = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
+        assert!(loaded.monitor_identity.is_empty());
+        let reopened = AppControllerRust::from_config(loaded, None);
+        assert_eq!(reopened.interval_ms, 250);
+        assert_eq!(reopened.mouse_button, 1);
+        assert_eq!(reopened.click_type, 1);
+        assert_eq!(reopened.repeat_count, 42);
+        assert_eq!(reopened.fixed_x, 640);
+        assert_eq!(reopened.fixed_y, 480);
+        assert_eq!(reopened.hotkey.to_string(), "F8");
+        assert!(!reopened.current_position);
+        assert!(!reopened.fixed_position_confirmed);
+        assert!(!reopened.running);
+        assert!(reopened.worker.is_none());
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

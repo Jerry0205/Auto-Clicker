@@ -23,9 +23,17 @@ QtObject {
     property int monitor_width: 0
     property int monitor_height: 0
     property bool selecting_position: false
+    property bool saveConfigSucceeds: true
+    property int saveCount: 0
+    property int shutdownCount: 0
     signal screenshot_ready(int requestId, string uri, string error)
     function initialize() {}
-    function shutdown() {}
+    function shutdown() { shutdownCount++ }
+    function save_config() {
+        saveCount++
+        if (!saveConfigSucceeds) error_message = "Konfiguration konnte nicht gespeichert werden"
+        return saveConfigSucceeds
+    }
     function start() {}
     function stop() { running = false; busy = false }
     function toggle() {}

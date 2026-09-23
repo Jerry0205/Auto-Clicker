@@ -75,6 +75,7 @@ Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So
 - Der Positionswähler öffnet sich auf dem Bildschirm, den du zuvor in Klickmeister ausgewählt hast.
 - Klickmeister ist nur für Wayland gedacht. Ein X11- oder `xdotool`-Ersatz ist nicht eingebaut.
 - Gespeichert werden nur deine Einstellungen. Es gibt keine Statistiken, keine Nutzungsdaten und keine Telemetrie.
+- Änderungen an den Einstellungen werden beim Schließen gespeichert, auch wenn du keinen Klicklauf gestartet hast. Falls das Speichern fehlschlägt, kannst du weiterarbeiten oder ausdrücklich ohne Speichern schließen.
 
 ## Für Entwickler
 

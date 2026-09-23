@@ -13,6 +13,7 @@ Kirigami.ApplicationWindow {
     property var positionPicker: null
     property int captureSequence: 0
     property bool monitorRestored: false
+    property bool discardSettingsOnClose: false
     readonly property var monitorOptions: {
         const screens = Qt.application.screens
         const options = []
@@ -166,8 +167,47 @@ Kirigami.ApplicationWindow {
     }
     onClosing: function(close) {
         root.finishPicker(false)
+        if (!root.discardSettingsOnClose && !controller.save_config()) {
+            close.accepted = false
+            saveFailureDialog.open()
+            return
+        }
         controller.shutdown()
         close.accepted = true
+    }
+
+    Controls.Dialog {
+        id: saveFailureDialog
+        objectName: "saveFailureDialog"
+        modal: true
+        title: qsTr("Einstellungen konnten nicht gespeichert werden")
+        width: Math.min(root.width - 32, 440)
+        x: (root.width - width) / 2
+        y: (root.height - height) / 2
+
+        ColumnLayout {
+            Controls.Label {
+                Layout.fillWidth: true
+                text: controller.error_message
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                Controls.Button {
+                    text: qsTr("Weiter bearbeiten")
+                    onClicked: saveFailureDialog.close()
+                }
+                Controls.Button {
+                    objectName: "discardSettingsButton"
+                    text: qsTr("Ohne Speichern schließen")
+                    onClicked: {
+                        saveFailureDialog.close()
+                        root.discardSettingsOnClose = true
+                        root.close()
+                    }
+                }
+            }
+        }
     }
 
     pageStack.initialPage: Kirigami.ScrollablePage {
