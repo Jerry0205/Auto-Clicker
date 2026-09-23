@@ -172,6 +172,10 @@ Kirigami.ApplicationWindow {
         controller.shutdown()
         if (!root.discardSettingsOnClose && !controller.save_config()) {
             close.accepted = false
+            if (root.visibility === Window.Minimized || root.visibility === Window.Hidden)
+                root.showNormal()
+            root.raise()
+            root.requestActivate()
             saveFailureDialog.open()
             return
         }

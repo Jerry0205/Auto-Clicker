@@ -170,20 +170,21 @@ impl AppControllerRust {
         let interval_ms = u64::try_from(self.interval_ms)
             .map_err(|_| "Das Intervall muss positiv sein.".to_owned())?;
         validate_interval(interval_ms).map_err(|error| error.to_string())?;
-        let repeat_count = u64::try_from(self.repeat_count)
-            .map_err(|_| "Die Wiederholungszahl muss positiv sein.".to_owned())?;
-        if !(1..=MAX_REPEAT_COUNT).contains(&repeat_count) {
-            return Err("Die Wiederholungszahl ist ungültig.".to_owned());
-        }
-        let fixed_x = u32::try_from(self.fixed_x)
-            .map_err(|_| "X muss eine nichtnegative Ganzzahl sein.".to_owned())?;
-        let fixed_y = u32::try_from(self.fixed_y)
-            .map_err(|_| "Y muss eine nichtnegative Ganzzahl sein.".to_owned())?;
-        if fixed_x > 100_000 || fixed_y > 100_000 {
-            return Err(
-                "Die festen Koordinaten liegen außerhalb des unterstützten Bereichs.".to_owned(),
-            );
-        }
+        let repeat_count = match u64::try_from(self.repeat_count) {
+            Ok(count) if (1..=MAX_REPEAT_COUNT).contains(&count) => count,
+            _ if self.repeat_until_stopped => 100,
+            _ => return Err("Die Wiederholungszahl ist ungültig.".to_owned()),
+        };
+        let fixed_x = match u32::try_from(self.fixed_x) {
+            Ok(x) if x <= 100_000 => x,
+            _ if self.current_position || !self.fixed_position_confirmed => 0,
+            _ => return Err("Die festen Koordinaten sind ungültig.".to_owned()),
+        };
+        let fixed_y = match u32::try_from(self.fixed_y) {
+            Ok(y) if y <= 100_000 => y,
+            _ if self.current_position || !self.fixed_position_confirmed => 0,
+            _ => return Err("Die festen Koordinaten sind ungültig.".to_owned()),
+        };
         let mouse_button = match self.mouse_button {
             0 => MouseButton::Left,
             1 => MouseButton::Right,
@@ -573,6 +574,48 @@ mod tests {
             std::fs::read_to_string(&path).ok().as_deref(),
             Some(malformed)
         );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn inactive_invalid_fields_do_not_block_valid_changes() {
+        let directory = std::env::temp_dir().join(format!(
+            "klickmeister-controller-test-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = directory.join("config.toml");
+        let initial = AppConfig {
+            repeat_count: 0,
+            fixed_x: 100_001,
+            fixed_y: 100_001,
+            ..AppConfig::default()
+        };
+        assert!(config::save_to(&path, &initial).is_ok());
+        let mut controller = AppControllerRust::from_config(initial, None);
+        controller.interval_ms = 250;
+        controller.config_dirty = true;
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        let saved = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(saved.interval_ms, 250);
+        assert_eq!(saved.repeat_count, 100);
+        assert_eq!((saved.fixed_x, saved.fixed_y), (0, 0));
+
+        let fixed_draft = AppConfig {
+            position_mode: PositionMode::Fixed,
+            fixed_x: 100_001,
+            monitor_identity: "stale-monitor".into(),
+            ..AppConfig::default()
+        };
+        assert!(config::save_to(&path, &fixed_draft).is_ok());
+        let mut controller = AppControllerRust::from_config(fixed_draft, None);
+        controller.interval_ms = 300;
+        controller.config_dirty = true;
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        let saved = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(saved.interval_ms, 300);
+        assert_eq!(saved.fixed_x, 0);
+        assert!(saved.monitor_identity.is_empty());
         let _ = std::fs::remove_dir_all(directory);
     }
 }

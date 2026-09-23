@@ -105,4 +105,17 @@ TestCase {
         compare(controller.saveCount, 0)
         compare(controller.shutdownCount, 1)
     }
+
+    function test_save_error_restores_minimized_window() {
+        controller.mark_settings_changed()
+        controller.saveConfigSucceeds = false
+        main.showMinimized()
+        tryCompare(main, "visibility", Window.Minimized)
+        main.close()
+        tryCompare(main, "visibility", Window.Windowed)
+        const dialog = findChild(main, "saveFailureDialog")
+        tryCompare(dialog, "opened", true)
+        const discard = findChild(main, "discardSettingsButton")
+        mouseClick(discard)
+    }
 }
