@@ -7,6 +7,9 @@ QtObject {
     property string hotkey: "Pause"
     property bool running: false
     property bool busy: false
+    property int countdown_remaining: 0
+    property int button_starts: 0
+    property int stops: 0
     property double interval_ms: 100
     property int mouse_button: 0
     property int click_type: 0
@@ -27,7 +30,8 @@ QtObject {
     function initialize() {}
     function shutdown() {}
     function start() {}
-    function stop() { running = false; busy = false }
+    function start_from_button() { button_starts += 1 }
+    function stop() { stops += 1; running = false; busy = false; countdown_remaining = 0 }
     function toggle() {}
     function configure_hotkey() {}
     function clear_error() { error_message = "" }

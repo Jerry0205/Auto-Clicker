@@ -23,6 +23,7 @@ pub mod qobject {
         #[qproperty(QString, hotkey)]
         #[qproperty(bool, running)]
         #[qproperty(bool, busy)]
+        #[qproperty(i32, countdown_remaining)]
         #[qproperty(i64, interval_ms)]
         #[qproperty(i32, mouse_button)]
         #[qproperty(i32, click_type)]
@@ -61,6 +62,9 @@ pub mod qobject {
         fn start(self: Pin<&mut AppController>);
 
         #[qinvokable]
+        fn start_from_button(self: Pin<&mut AppController>);
+
+        #[qinvokable]
         fn stop(self: Pin<&mut AppController>);
 
         #[qinvokable]
@@ -85,6 +89,7 @@ pub struct AppControllerRust {
     hotkey: QString,
     running: bool,
     busy: bool,
+    countdown_remaining: i32,
     interval_ms: i64,
     mouse_button: i32,
     click_type: i32,
@@ -117,6 +122,7 @@ impl Default for AppControllerRust {
             hotkey: QString::from(&config.hotkey),
             running: false,
             busy: false,
+            countdown_remaining: 0,
             interval_ms: i64::try_from(config.interval_ms).unwrap_or(100),
             mouse_button: match config.mouse_button {
                 MouseButton::Left => 0,
@@ -205,6 +211,15 @@ impl qobject::AppController {
 
     /// Validate and save current controls before requesting a click run.
     pub fn start(mut self: Pin<&mut Self>) {
+        self.as_mut().start_with_origin(false);
+    }
+
+    /// Give the user time to move the pointer after using the Start button.
+    pub fn start_from_button(mut self: Pin<&mut Self>) {
+        self.as_mut().start_with_origin(true);
+    }
+
+    fn start_with_origin(mut self: Pin<&mut Self>, from_button: bool) {
         if *self.selecting_position() {
             return;
         }
@@ -219,7 +234,12 @@ impl qobject::AppController {
         if let Err(error) = self.as_ref().save_config() {
             self.as_mut().set_error_message(QString::from(&error));
         }
-        self.as_mut().send_command(Command::Start(settings));
+        let command = if from_button {
+            Command::StartFromButton(settings)
+        } else {
+            Command::Start(settings)
+        };
+        self.as_mut().send_command(command);
     }
 
     /// Stop a run or an outstanding start request.
@@ -253,6 +273,7 @@ impl qobject::AppController {
         }
         self.as_mut().set_running(false);
         self.as_mut().set_busy(false);
+        self.as_mut().set_countdown_remaining(0);
     }
 
     /// Send through the bounded worker channel and surface delivery failures.
@@ -355,6 +376,7 @@ impl qobject::AppController {
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
         self.as_mut().set_running(false);
         self.as_mut().set_busy(false);
+        self.as_mut().set_countdown_remaining(0);
         self.as_mut().set_status(QString::from("Fehler"));
         self.as_mut().set_error_message(QString::from(message));
     }
@@ -362,6 +384,13 @@ impl qobject::AppController {
     /// Apply worker results on the Qt thread and route capture responses.
     fn handle_worker_event(mut self: Pin<&mut Self>, event: WorkerEvent) {
         match event {
+            WorkerEvent::Countdown(remaining) => {
+                self.as_mut().set_busy(true);
+                self.as_mut().set_countdown_remaining(i32::from(remaining));
+                self.as_mut().set_status(QString::from(&format!(
+                    "Start in {remaining} s – Cursor zum Ziel bewegen …"
+                )));
+            }
             WorkerEvent::Screenshot(request_id, result) => {
                 let (uri, error) = match result {
                     Ok(uri) => (uri, String::new()),
@@ -381,6 +410,7 @@ impl qobject::AppController {
             WorkerEvent::Running(running) => {
                 self.as_mut().set_running(running);
                 self.as_mut().set_busy(false);
+                self.as_mut().set_countdown_remaining(0);
             }
             WorkerEvent::Hotkey(hotkey) => self.as_mut().set_hotkey(QString::from(&hotkey)),
             WorkerEvent::StartRequested => {
