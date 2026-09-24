@@ -59,4 +59,19 @@ TestCase {
             controller[state] = false
         }
     }
+
+    function test_button_shows_and_cancels_countdown() {
+        const button = findChild(main, "startStopButton")
+        verify(button !== null)
+        button.clicked()
+        compare(controller.button_starts, 1)
+
+        controller.busy = true
+        controller.countdown_remaining = 3
+        verify(button.text.includes("Start abbrechen (3)"))
+        button.clicked()
+        compare(controller.stops, 1)
+        compare(controller.countdown_remaining, 0)
+        compare(controller.button_starts, 1)
+    }
 }

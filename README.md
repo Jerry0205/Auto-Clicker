@@ -47,6 +47,8 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 4. Starte den Klicker mit dem Hotkey.
 5. Drücke den Hotkey erneut, um ihn zu stoppen.
 
+Wenn du mit der Schaltfläche **Starten** an der aktuellen Cursorposition beginnst, startet nach der Wayland-Freigabe ein sichtbarer Countdown von drei Sekunden. Bewege den Mauszeiger in dieser Zeit zum Ziel. **Start abbrechen** oder der globale Hotkey beendet den Countdown ohne Klick. Beim Start per Hotkey und bei einer festen Position beginnt der Klicker nach der Freigabe sofort.
+
 Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. „Position anzeigen“ markiert das gespeicherte Ziel kurz, ohne zu klicken.
 
 Optional verwendet „Mit 4×-Lupe auswählen“ eine über das interaktive Screenshot-Portal freigegebene Bildschirmaufnahme als Standbild. Wähle im KDE-Dialog **Vollbild**, dann **Übernehmen** (je nach Übersetzung „Aufnehmen“) und **Speichern**. Bei Ablehnung, Fehler oder nach spätestens drei Sekunden Wartezeit funktioniert die Auswahl ohne Lupe weiter; die ausstehende Anfrage wird geschlossen. Dieser Ablauf umgeht die blockierende nichtinteraktive Erstfreigabe von xdg-desktop-portal 1.22.1 und wurde mit echten KDE-Dialogen geprüft. Falls dennoch ein alter KDE-Freigabedialog offen bleibt, schließe ihn mit „Deny“/„Verweigern“. Details stehen im [Regressionstestbericht](tests/PORTAL_FIX_REPORT.md). Die Aufnahme ist keine Live-Vorschau.
@@ -93,6 +95,8 @@ KLICKMEISTER_TEST_SCALE=1.5 bash tests/qml-wayland.sh
 ```
 
 Die QML-Tests verwenden denselben KDE-Control-Stil wie die App und für das Hauptfenster einen Controller-Testersatz. Die separaten D-Bus-Tests prüfen den echten Rust-Worker gegen simulierte Portale, einschließlich Klickfolgen, Stop-Hotkey, Sitzungsende und Button-Release-Fehlern. Sie erzeugen keine tatsächlichen Mausklicks auf dem Desktop. Echte KDE-Freigabedialoge und die Zeigersteuerung auf physischen Monitoren müssen zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft werden.
+
+Für die manuelle Prüfung des Start-Countdowns: Wähle „Aktuelle Cursorposition“, starte über die Schaltfläche und bewege den Zeiger auf ein unkritisches eigenes Testziel. Prüfe, dass vor Ablauf der drei Sekunden kein Klick erfolgt und sowohl **Start abbrechen** als auch der globale Hotkey den Countdown ohne Klick beenden. Wiederhole den Start bei bereits erteilter Wayland-Freigabe.
 
 Die abgesicherten nativen Testwerkzeuge und ihre Voraussetzungen sind unter [tests/native](tests/native/README.md) dokumentiert.
 

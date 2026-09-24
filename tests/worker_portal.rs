@@ -21,6 +21,7 @@ use tokio::{
 type Options = HashMap<String, OwnedValue>;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 const PATH: &str = "/org/freedesktop/portal/desktop";
+static PORTAL_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Default)]
 struct Observed {
@@ -372,6 +373,7 @@ async fn event(
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
+    let _lock = PORTAL_TEST_MUTEX.lock().await;
     let observed = Shared::default();
     let service = zbus::connection::Builder::session()?
         .name("org.freedesktop.portal.Desktop")?
@@ -658,4 +660,125 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
     result?;
     service.close().await?;
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn button_countdown_delays_first_click_and_stop_cancels_it() -> TestResult {
+    let _lock = PORTAL_TEST_MUTEX.lock().await;
+    let observed = Shared::default();
+    let service = zbus::connection::Builder::session()?
+        .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeHotkeys(observed.clone()))?
+        .serve_at(PATH, FakeRemote(observed.clone()))?
+        .serve_at(PATH, FakeScreencast(observed.clone()))?
+        .build()
+        .await?;
+    let settings = ClickSettings {
+        interval_ms: 10,
+        button: MouseButton::Left,
+        click_type: ClickType::Single,
+        repeat: Some(1),
+        position: None,
+        monitor: None,
+    };
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+
+        worker.send(Command::StartFromButton(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Countdown(3))).await?;
+        assert!(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .buttons
+                .is_empty()
+        );
+        event(&mut events, |e| matches!(e, WorkerEvent::Countdown(2))).await?;
+        worker.send(Command::Stop)?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        sleep(Duration::from_millis(2200)).await;
+        assert!(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .buttons
+                .is_empty()
+        );
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(
+                event,
+                WorkerEvent::Running(true) | WorkerEvent::Countdown(_)
+            ));
+        }
+
+        // The global shortcut also cancels a pending countdown.
+        worker.send(Command::StartFromButton(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Countdown(3))).await?;
+        let hotkey_session = OwnedObjectPath::try_from(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .hotkey_session
+                .clone(),
+        )?;
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &(&hotkey_session, "toggle-clicking", 1_u64, Options::new()),
+            )
+            .await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert!(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .buttons
+                .is_empty()
+        );
+
+        // The retained portal permission must not bypass the next button countdown.
+        worker.send(Command::StartFromButton(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Countdown(3))).await?;
+        let began = std::time::Instant::now();
+        sleep(Duration::from_millis(2700)).await;
+        assert!(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .buttons
+                .is_empty()
+        );
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert!(began.elapsed() >= Duration::from_millis(2900));
+        assert_eq!(
+            observed.lock().unwrap_or_else(|e| e.into_inner()).buttons,
+            vec![(0x110, 1), (0x110, 0)]
+        );
+
+        // Hotkey-origin starts remain immediate when the permission is reused.
+        worker.send(Command::Start(settings))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert_eq!(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .buttons
+                .len(),
+            4
+        );
+        Ok(())
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    result
 }

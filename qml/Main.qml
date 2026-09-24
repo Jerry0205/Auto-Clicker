@@ -414,11 +414,14 @@ Kirigami.ApplicationWindow {
             }
 
             Controls.Button {
+                objectName: "startStopButton"
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
                 highlighted: true
-                text: controller.running || controller.busy ? qsTr("■  Stoppen") : qsTr("▶  Starten")
-                onClicked: controller.toggle()
+                text: controller.countdown_remaining > 0
+                    ? qsTr("■  Start abbrechen (%1)").arg(controller.countdown_remaining)
+                    : controller.running || controller.busy ? qsTr("■  Stoppen") : qsTr("▶  Starten")
+                onClicked: controller.running || controller.busy ? controller.stop() : controller.start_from_button()
             }
 
             RowLayout {
