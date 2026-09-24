@@ -1,3 +1,5 @@
+use std::{future::Future, pin::Pin, sync::Arc};
+
 use ashpd::desktop::{
     PersistMode, Session,
     remote_desktop::{
@@ -6,6 +8,7 @@ use ashpd::desktop::{
     },
     screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
 };
+use futures_util::{FutureExt, StreamExt};
 use thiserror::Error;
 use tokio::{
     sync::oneshot,
@@ -27,6 +30,10 @@ pub enum PortalError {
     Denied(#[source] ashpd::Error),
     #[error("KWin hat keine Berechtigung für Zeigersteuerung erteilt.")]
     PointerNotGranted,
+    #[error("Die Wayland-Sitzung konnte nicht auf ihr Ende überwacht werden.")]
+    SessionWatchUnavailable,
+    #[error("Die Wayland-Berechtigung wurde beendet.")]
+    SessionClosed,
     #[error("Für die feste Position wurde kein Monitor-Stream freigegeben.")]
     MissingMonitorStream,
     #[error(
@@ -52,13 +59,15 @@ pub enum PortalError {
     EventTimeout,
 }
 
-#[derive(Debug)]
 pub struct PortalClickSession {
     connection: ashpd::zbus::Connection,
     portal: RemoteDesktop,
-    session: Session<RemoteDesktop>,
+    session: Arc<Session<RemoteDesktop>>,
+    closed: ClosedWatcher,
     stream: Option<MonitorStream>,
 }
+
+type ClosedWatcher = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 #[derive(Debug, Clone, Copy)]
 struct MonitorStream {
@@ -83,18 +92,30 @@ impl PortalClickSession {
                 result.map_err(|error| PortalError::Unavailable(error.into()))?,
         };
         let mut session = None;
+        let mut closed = None;
         let result = tokio::select! {
             biased;
             _ = &mut cancel => Err(PortalError::Cancelled),
-            result = Self::create_on(&connection, &mut session, monitor) => result,
+            result = Self::create_on(&connection, &mut session, &mut closed, monitor) => result,
         };
         match result {
-            Ok((portal, stream)) => Ok(Self {
-                connection,
-                portal,
-                session: session.ok_or(PortalError::Cancelled)?,
-                stream,
-            }),
+            Ok((portal, stream)) => {
+                let mut closed = closed.ok_or(PortalError::SessionWatchUnavailable)?;
+                if closed.as_mut().now_or_never().is_some() {
+                    if let Some(session) = session {
+                        let _ = timeout(CLOSE_TIMEOUT, session.close()).await;
+                    }
+                    let _ = timeout(CLOSE_TIMEOUT, connection.close()).await;
+                    return Err(PortalError::SessionClosed);
+                }
+                Ok(Self {
+                    connection,
+                    portal,
+                    session: session.ok_or(PortalError::Cancelled)?,
+                    closed,
+                    stream,
+                })
+            }
             Err(error) => {
                 if let Some(session) = session {
                     let _ = timeout(CLOSE_TIMEOUT, session.close()).await;
@@ -108,7 +129,8 @@ impl PortalClickSession {
     /// Negotiate permission while exposing the session to cancellation cleanup.
     async fn create_on(
         connection: &ashpd::zbus::Connection,
-        owned_session: &mut Option<Session<RemoteDesktop>>,
+        owned_session: &mut Option<Arc<Session<RemoteDesktop>>>,
+        owned_closed: &mut Option<ClosedWatcher>,
         monitor: Option<MonitorGeometry>,
     ) -> Result<(RemoteDesktop, Option<MonitorStream>), PortalError> {
         let fixed_position = monitor.is_some();
@@ -123,13 +145,33 @@ impl PortalClickSession {
             return Err(PortalError::PointerNotGranted);
         }
 
-        *owned_session = Some(
+        *owned_session = Some(Arc::new(
             portal
                 .create_session(Default::default())
                 .await
                 .map_err(PortalError::Unavailable)?,
-        );
+        ));
         let session = owned_session.as_ref().ok_or(PortalError::Cancelled)?;
+        let watched_session = Arc::clone(session);
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let mut closed: ClosedWatcher = Box::pin(async move {
+            if let Ok(mut events) = watched_session.receive_closed().await {
+                let _ = ready_tx.send(());
+                let _ = events.next().await;
+            }
+        });
+        let watching = timeout(CLOSE_TIMEOUT, async {
+            tokio::select! {
+                result = ready_rx => result.is_ok(),
+                _ = &mut closed => false,
+            }
+        })
+        .await
+        .unwrap_or(false);
+        if !watching {
+            return Err(PortalError::SessionWatchUnavailable);
+        }
+        *owned_closed = Some(closed);
         portal
             .select_devices(
                 session,
@@ -200,6 +242,16 @@ impl PortalClickSession {
             }
             _ => false,
         }
+    }
+
+    /// Resolve when the portal revokes this session, including while no run is active.
+    pub async fn wait_closed(&mut self) {
+        self.closed.as_mut().await;
+    }
+
+    /// Poll a queued revocation before reusing a session for a new run.
+    pub fn is_closed(&mut self) -> bool {
+        self.closed.as_mut().now_or_never().is_some()
     }
 
     /// Move within the verified monitor if needed and emit a bounded click cycle.

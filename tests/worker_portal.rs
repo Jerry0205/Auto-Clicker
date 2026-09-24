@@ -368,6 +368,25 @@ async fn event(
     .await?
 }
 
+async fn close_remote_session(service: &zbus::Connection, observed: &Shared) -> TestResult {
+    let session = observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remote_session
+        .clone()
+        .ok_or("missing RemoteDesktop session")?;
+    service
+        .emit_signal(
+            None::<&str>,
+            &session,
+            "org.freedesktop.portal.Session",
+            "Closed",
+            &(Options::new(),),
+        )
+        .await?;
+    Ok(())
+}
+
 /// Run with: dbus-run-session -- cargo test --test worker_portal -- --ignored
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
@@ -412,6 +431,70 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             )
             .await?;
         event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
+        // A revoked long-running session must stop before the next scheduled click.
+        let long_run = ClickSettings {
+            interval_ms: 60_000,
+            repeat: None,
+            ..settings.clone()
+        };
+        worker.send(Command::Start(long_run))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        timeout(Duration::from_secs(3), async {
+            loop {
+                if observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len() >= 2 {
+                    break;
+                }
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let first_session = observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session.clone();
+        close_remote_session(&service, &observed).await?;
+        timeout(Duration::from_millis(500), event(&mut events, |e| matches!(e, WorkerEvent::Running(false)))).await??;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+
+        // A stopped session must also be discarded, so a later start asks again.
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert_ne!(observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session, first_session);
+        let stopped_session = observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session.clone();
+        close_remote_session(&service, &observed).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert_ne!(observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session, stopped_session);
+
+        // If permission is revoked during Start, no run may be confirmed.
+        close_remote_session(&service, &observed).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+        let (seen, release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.delay_start = true;
+            (state.start_seen.clone(), state.start_release.clone())
+        };
+        worker.send(Command::Start(settings.clone()))?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        close_remote_session(&service, &observed).await?;
+        release.notify_one();
+        let mut incorrectly_started = false;
+        timeout(Duration::from_secs(3), async {
+            while let Some(event) = events.recv().await {
+                match event {
+                    WorkerEvent::Running(true) => incorrectly_started = true,
+                    WorkerEvent::Error(_) => break,
+                    _ => {}
+                }
+            }
+        })
+        .await?;
+        assert!(!incorrectly_started, "revoked permission must not start a run");
+        observed.lock().unwrap_or_else(|e| e.into_inner()).delay_start = false;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+
         for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
             for click_type in [ClickType::Single, ClickType::Double] {
                 observed

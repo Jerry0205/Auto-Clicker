@@ -283,6 +283,13 @@ async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<HotkeySignal> {
     }
 }
 
+async fn wait_click_session_closed(session: &mut Option<PortalClickSession>) {
+    match session {
+        Some(session) => session.wait_closed().await,
+        None => future::pending().await,
+    }
+}
+
 async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task::JoinError> {
     match task {
         Some(task) => task.await,
@@ -334,6 +341,15 @@ async fn run_worker(
     loop {
         let tick_deadline = active.as_ref().map(|run| run.next_tick);
         tokio::select! {
+            biased;
+            () = wait_click_session_closed(&mut click_session), if click_session.is_some() => {
+                stop_run(&mut machine, &mut active, &emit);
+                machine.fail();
+                if let Some(session) = click_session.take() {
+                    session.close().await;
+                }
+                (emit)(WorkerEvent::Error("Die Wayland-Berechtigung wurde beendet.".to_owned()));
+            }
             command = commands.recv() => {
                 let Some(command) = command else { break; };
                 match command {
@@ -341,6 +357,10 @@ async fn run_worker(
                         if hotkey.is_none() {
                             (emit)(WorkerEvent::Error("Vor dem Start muss der globale Stop-Hotkey von KWin bestätigt sein.".to_owned()));
                             continue;
+                        }
+                        if click_session.as_mut().is_some_and(PortalClickSession::is_closed)
+                            && let Some(session) = click_session.take() {
+                            session.close().await;
                         }
                         match request_validated_start(&mut machine, &settings) {
                             Ok(true) => latest_settings = settings.clone(),
