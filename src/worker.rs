@@ -290,6 +290,22 @@ async fn wait_click_session_closed(session: &mut Option<PortalClickSession>) {
     }
 }
 
+async fn discard_closed_click_session(
+    session: &mut Option<PortalClickSession>,
+    machine: &mut StateMachine,
+    active: &mut Option<ActiveRun>,
+    emit: &Emitter,
+) {
+    stop_run(machine, active, emit);
+    machine.fail();
+    if let Some(session) = session.take() {
+        session.close().await;
+    }
+    (emit)(WorkerEvent::Error(
+        "Die Wayland-Berechtigung wurde beendet.".to_owned(),
+    ));
+}
+
 async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task::JoinError> {
     match task {
         Some(task) => task.await,
@@ -343,12 +359,7 @@ async fn run_worker(
         tokio::select! {
             biased;
             () = wait_click_session_closed(&mut click_session), if click_session.is_some() => {
-                stop_run(&mut machine, &mut active, &emit);
-                machine.fail();
-                if let Some(session) = click_session.take() {
-                    session.close().await;
-                }
-                (emit)(WorkerEvent::Error("Die Wayland-Berechtigung wurde beendet.".to_owned()));
+                discard_closed_click_session(&mut click_session, &mut machine, &mut active, &emit).await;
             }
             command = commands.recv() => {
                 let Some(command) = command else { break; };
@@ -358,9 +369,12 @@ async fn run_worker(
                             (emit)(WorkerEvent::Error("Vor dem Start muss der globale Stop-Hotkey von KWin bestätigt sein.".to_owned()));
                             continue;
                         }
-                        if click_session.as_mut().is_some_and(PortalClickSession::is_closed)
-                            && let Some(session) = click_session.take() {
-                            session.close().await;
+                        if click_session.as_mut().is_some_and(PortalClickSession::is_closed) {
+                            let was_running = matches!(machine.state(), RunState::Starting | RunState::Clicking);
+                            discard_closed_click_session(&mut click_session, &mut machine, &mut active, &emit).await;
+                            if was_running {
+                                continue;
+                            }
                         }
                         match request_validated_start(&mut machine, &settings) {
                             Ok(true) => latest_settings = settings.clone(),
@@ -431,9 +445,16 @@ async fn run_worker(
                 start_task = None;
                 start_cancel = None;
                 match result {
-                    Ok(Ok(session)) => {
-                        click_session = Some(session);
-                        start_run(&mut machine, &mut active, latest_settings.clone(), &emit);
+                    Ok(Ok(mut session)) => {
+                        if session.is_closed() {
+                            session.close().await;
+                            machine.fail();
+                            (emit)(WorkerEvent::Running(false));
+                            (emit)(WorkerEvent::Error("Die Wayland-Berechtigung wurde beendet.".to_owned()));
+                        } else {
+                            click_session = Some(session);
+                            start_run(&mut machine, &mut active, latest_settings.clone(), &emit);
+                        }
                     }
                     Ok(Err(error)) => {
                         machine.fail();
