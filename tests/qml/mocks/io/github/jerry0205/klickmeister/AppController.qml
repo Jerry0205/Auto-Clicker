@@ -25,6 +25,7 @@ QtObject {
     property bool selecting_position: false
     property bool saveConfigSucceeds: true
     property bool configDirty: false
+    property bool positionDirty: false
     property int saveCount: 0
     property int shutdownCount: 0
     property int initializeCount: 0
@@ -32,6 +33,7 @@ QtObject {
     function initialize() { initializeCount++ }
     function shutdown() { shutdownCount++; running = false; busy = false }
     function mark_settings_changed() { configDirty = true }
+    function mark_position_changed() { configDirty = true; positionDirty = true }
     function save_config() {
         if (!configDirty) return true
         saveCount++

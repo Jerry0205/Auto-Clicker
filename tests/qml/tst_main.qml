@@ -31,10 +31,10 @@ TestCase {
 
     function test_typed_values_reach_hotkey_without_focus_loss_data() {
         return [
-            { tag: "interval", input: "intervalInput", property: "interval_ms", value: 250 },
-            { tag: "repeat", input: "repeatInput", property: "repeat_count", value: 42 },
-            { tag: "x", input: "xInput", property: "fixed_x", value: 123 },
-            { tag: "y", input: "yInput", property: "fixed_y", value: 234 }
+            { tag: "interval", input: "intervalInput", property: "interval_ms", value: 250, position: false },
+            { tag: "repeat", input: "repeatInput", property: "repeat_count", value: 42, position: false },
+            { tag: "x", input: "xInput", property: "fixed_x", value: 123, position: true },
+            { tag: "y", input: "yInput", property: "fixed_y", value: 234, position: true }
         ]
     }
     function test_typed_values_reach_hotkey_without_focus_loss(data) {
@@ -50,6 +50,27 @@ TestCase {
         compare(input.value, data.value)
         compare(controller[data.property], data.value)
         compare(controller.configDirty, true)
+        compare(controller.positionDirty, data.position)
+    }
+
+    function test_monitor_initialization_does_not_replace_saved_position() {
+        // Restoring the monitor at startup clamps and rewrites the displayed
+        // position, but only user actions may replace the saved one.
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.configDirty, false)
+        compare(controller.positionDirty, false)
+    }
+
+    function test_confirming_monitor_replaces_saved_position() {
+        controller.current_position = false
+        const confirm = findChild(main, "confirmMonitorButton")
+        verify(confirm !== null)
+        tryCompare(confirm, "visible", true)
+        compare(confirm.enabled, true)
+        // The button can lie below the scrollable page's visible area.
+        confirm.clicked()
+        compare(controller.fixed_position_confirmed, true)
+        compare(controller.positionDirty, true)
     }
 
     function test_running_and_pending_runs_disable_settings() {

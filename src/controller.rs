@@ -82,6 +82,9 @@ pub mod qobject {
         fn mark_settings_changed(self: Pin<&mut AppController>);
 
         #[qinvokable]
+        fn mark_position_changed(self: Pin<&mut AppController>);
+
+        #[qinvokable]
         fn shutdown(self: Pin<&mut AppController>);
     }
 
@@ -113,7 +116,37 @@ pub struct AppControllerRust {
     worker_epoch: u64,
     startup_error: Option<String>,
     initial_config: AppConfig,
+    saved_position: SavedPosition,
     config_dirty: bool,
+}
+
+/// Fixed position that is saved while the displayed position is unconfirmed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SavedPosition {
+    fixed_x: u32,
+    fixed_y: u32,
+    monitor_identity: String,
+}
+
+impl SavedPosition {
+    fn new(fixed_x: i64, fixed_y: i64, monitor_identity: String) -> Option<Self> {
+        let coordinate = |value| u32::try_from(value).ok().filter(|value| *value <= 100_000);
+        Some(Self {
+            fixed_x: coordinate(fixed_x)?,
+            fixed_y: coordinate(fixed_y)?,
+            monitor_identity,
+        })
+    }
+
+    /// Out-of-range coordinates can never be restored, so they are dropped.
+    fn from_config(config: &AppConfig) -> Self {
+        Self::new(
+            config.fixed_x.into(),
+            config.fixed_y.into(),
+            config.monitor_identity.clone(),
+        )
+        .unwrap_or_default()
+    }
 }
 
 impl Default for AppControllerRust {
@@ -160,6 +193,7 @@ impl AppControllerRust {
             worker: None,
             worker_epoch: 0,
             startup_error,
+            saved_position: SavedPosition::from_config(&config),
             initial_config: config,
             config_dirty: false,
         }
@@ -175,15 +209,20 @@ impl AppControllerRust {
             _ if self.repeat_until_stopped => 100,
             _ => return Err("Die Wiederholungszahl ist ungültig.".to_owned()),
         };
-        let fixed_x = match u32::try_from(self.fixed_x) {
-            Ok(x) if x <= 100_000 => x,
-            _ if self.current_position || !self.fixed_position_confirmed => 0,
-            _ => return Err("Die festen Koordinaten sind ungültig.".to_owned()),
-        };
-        let fixed_y = match u32::try_from(self.fixed_y) {
-            Ok(y) if y <= 100_000 => y,
-            _ if self.current_position || !self.fixed_position_confirmed => 0,
-            _ => return Err("Die festen Koordinaten sind ungültig.".to_owned()),
+        let position = if !self.fixed_position_confirmed {
+            // A missing saved monitor makes the UI clamp coordinates to a
+            // substitute monitor. Keep the chosen position until it is replaced.
+            self.saved_position.clone()
+        } else if let Some(position) = SavedPosition::new(
+            self.fixed_x,
+            self.fixed_y,
+            self.monitor_identity.to_string(),
+        ) {
+            position
+        } else if self.current_position {
+            SavedPosition::default()
+        } else {
+            return Err("Die festen Koordinaten sind ungültig.".to_owned());
         };
         let mouse_button = match self.mouse_button {
             0 => MouseButton::Left,
@@ -211,15 +250,23 @@ impl AppControllerRust {
             } else {
                 PositionMode::Fixed
             },
-            fixed_x,
-            fixed_y,
+            fixed_x: position.fixed_x,
+            fixed_y: position.fixed_y,
             hotkey: self.hotkey.to_string(),
-            monitor_identity: if self.fixed_position_confirmed {
-                self.monitor_identity.to_string()
-            } else {
-                String::new()
-            },
+            monitor_identity: position.monitor_identity,
         })
+    }
+
+    /// Adopt a deliberately edited position; unconfirmed edits lose the monitor.
+    fn record_position_change(&mut self) {
+        let monitor_identity = if self.fixed_position_confirmed {
+            self.monitor_identity.to_string()
+        } else {
+            String::new()
+        };
+        self.saved_position =
+            SavedPosition::new(self.fixed_x, self.fixed_y, monitor_identity).unwrap_or_default();
+        self.config_dirty = true;
     }
 
     fn persist_config(&mut self, force: bool) -> Result<(), String> {
@@ -238,6 +285,7 @@ impl AppControllerRust {
         if config != self.initial_config {
             config::save_to(path, &config).map_err(|error| error.to_string())?;
         }
+        self.saved_position = SavedPosition::from_config(&config);
         self.initial_config = config;
         self.config_dirty = false;
         Ok(())
@@ -348,6 +396,11 @@ impl qobject::AppController {
     /// Record deliberate edits; display initialization must not rewrite a config.
     pub fn mark_settings_changed(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().get_mut().config_dirty = true;
+    }
+
+    /// Record a position chosen by the user rather than restored or clamped.
+    pub fn mark_position_changed(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().get_mut().record_position_change();
     }
 
     /// Save a changed draft, including settings that do not require a click run.
@@ -503,6 +556,22 @@ mod tests {
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
+    fn test_directory() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "klickmeister-controller-test-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    /// Mirror Main.qml when the saved monitor is replaced by a smaller one.
+    fn substitute_monitor(controller: &mut AppControllerRust) {
+        controller.fixed_position_confirmed = false;
+        controller.monitor_identity = QString::from("laptop");
+        controller.fixed_x = controller.fixed_x.min(1919);
+        controller.fixed_y = controller.fixed_y.min(1079);
+    }
+
     #[test]
     fn draft_survives_close_and_reload_without_confirming_position_or_starting() {
         let mut controller = AppControllerRust::from_config(AppConfig::default(), None);
@@ -516,15 +585,11 @@ mod tests {
         controller.fixed_y = 480;
         controller.monitor_identity = QString::from("monitor-a");
         controller.hotkey = QString::from("F8");
-        controller.config_dirty = true;
+        controller.record_position_change();
         // The monitor has not been confirmed, so this draft cannot start.
         assert!(!controller.fixed_position_confirmed);
 
-        let directory = std::env::temp_dir().join(format!(
-            "klickmeister-controller-test-{}-{}",
-            std::process::id(),
-            NEXT_ID.fetch_add(1, Ordering::Relaxed)
-        ));
+        let directory = test_directory();
         let path = directory.join("config.toml");
         assert!(controller.persist_config_to(&path, false).is_ok());
         let loaded = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
@@ -546,11 +611,7 @@ mod tests {
 
     #[test]
     fn closing_unchanged_does_not_replace_another_write_or_a_malformed_file() {
-        let directory = std::env::temp_dir().join(format!(
-            "klickmeister-controller-test-{}-{}",
-            std::process::id(),
-            NEXT_ID.fetch_add(1, Ordering::Relaxed)
-        ));
+        let directory = test_directory();
         let path = directory.join("config.toml");
         let initial = AppConfig::default();
         assert!(config::save_to(&path, &initial).is_ok());
@@ -579,11 +640,7 @@ mod tests {
 
     #[test]
     fn inactive_invalid_fields_do_not_block_valid_changes() {
-        let directory = std::env::temp_dir().join(format!(
-            "klickmeister-controller-test-{}-{}",
-            std::process::id(),
-            NEXT_ID.fetch_add(1, Ordering::Relaxed)
-        ));
+        let directory = test_directory();
         let path = directory.join("config.toml");
         let initial = AppConfig {
             repeat_count: 0,
@@ -616,6 +673,76 @@ mod tests {
         assert_eq!(saved.interval_ms, 300);
         assert_eq!(saved.fixed_x, 0);
         assert!(saved.monitor_identity.is_empty());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn unconfirmed_saved_position_survives_unrelated_edits() {
+        let directory = test_directory();
+        let path = directory.join("config.toml");
+        let initial = AppConfig {
+            position_mode: PositionMode::Fixed,
+            fixed_x: 2400,
+            fixed_y: 1300,
+            monitor_identity: "external".into(),
+            ..AppConfig::default()
+        };
+        assert!(config::save_to(&path, &initial).is_ok());
+        let mut controller = AppControllerRust::from_config(initial, None);
+        // The external monitor is absent at startup.
+        substitute_monitor(&mut controller);
+        controller.interval_ms = 250;
+        controller.config_dirty = true;
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        let saved = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(saved.interval_ms, 250);
+        assert_eq!((saved.fixed_x, saved.fixed_y), (2400, 1300));
+        assert_eq!(saved.monitor_identity, "external");
+        assert_eq!(saved.position_mode, PositionMode::Fixed);
+
+        // Switching to the cursor mode keeps the fixed position for later.
+        controller.current_position = true;
+        controller.config_dirty = true;
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        let saved = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(saved.position_mode, PositionMode::CurrentCursor);
+        assert_eq!((saved.fixed_x, saved.fixed_y), (2400, 1300));
+        assert_eq!(saved.monitor_identity, "external");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn chosen_position_survives_losing_its_monitor_before_close() {
+        let directory = test_directory();
+        let path = directory.join("config.toml");
+        let mut controller = AppControllerRust::from_config(AppConfig::default(), None);
+        controller.current_position = false;
+        controller.fixed_x = 2400;
+        controller.fixed_y = 1300;
+        controller.monitor_identity = QString::from("external");
+        controller.fixed_position_confirmed = true;
+        controller.record_position_change();
+        substitute_monitor(&mut controller);
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        let saved = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!((saved.fixed_x, saved.fixed_y), (2400, 1300));
+        assert_eq!(saved.monitor_identity, "external");
+
+        // A deliberate edit on the substitute monitor replaces the position.
+        controller.fixed_x = 100;
+        controller.record_position_change();
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        let saved = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!((saved.fixed_x, saved.fixed_y), (100, 1079));
+        assert!(saved.monitor_identity.is_empty());
+
+        // Confirming the substitute monitor saves it with the shown position.
+        controller.fixed_position_confirmed = true;
+        controller.record_position_change();
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        let saved = config::load_from(&path).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!((saved.fixed_x, saved.fixed_y), (100, 1079));
+        assert_eq!(saved.monitor_identity, "laptop");
         let _ = std::fs::remove_dir_all(directory);
     }
 }

@@ -41,7 +41,7 @@ Kirigami.ApplicationWindow {
     function confirmMonitor() {
         syncMonitor()
         controller.fixed_position_confirmed = !!selectedMonitor
-        controller.mark_settings_changed()
+        controller.mark_position_changed()
     }
 
     function syncMonitor() {
@@ -127,7 +127,7 @@ Kirigami.ApplicationWindow {
                 controller.fixed_y = y
                 controller.current_position = false
                 controller.fixed_position_confirmed = true
-                controller.mark_settings_changed()
+                controller.mark_position_changed()
             }
             onFinished: {
                 if (root.positionPicker === picker) root.positionPicker = null
@@ -197,6 +197,12 @@ Kirigami.ApplicationWindow {
                 Layout.fillWidth: true
                 text: controller.error_message
                 wrapMode: Text.WordWrap
+            }
+            Controls.Label {
+                Layout.fillWidth: true
+                text: qsTr("„Weiter bearbeiten“ startet den Hintergrunddienst neu. KDE kann deshalb beim nächsten Start erneut nach der Wayland-Freigabe fragen.")
+                wrapMode: Text.WordWrap
+                color: Kirigami.Theme.disabledTextColor
             }
             RowLayout {
                 Layout.alignment: Qt.AlignRight
@@ -362,7 +368,7 @@ Kirigami.ApplicationWindow {
                             to: Math.max(0, controller.monitor_width - 1)
                             editable: true
                             value: controller.fixed_x
-                            onValueModified: { controller.fixed_x = value; controller.mark_settings_changed() }
+                            onValueModified: { controller.fixed_x = value; controller.mark_position_changed() }
                         }
                         Controls.Label { text: qsTr("Y") }
                         Controls.SpinBox {
@@ -373,7 +379,7 @@ Kirigami.ApplicationWindow {
                             to: Math.max(0, controller.monitor_height - 1)
                             editable: true
                             value: controller.fixed_y
-                            onValueModified: { controller.fixed_y = value; controller.mark_settings_changed() }
+                            onValueModified: { controller.fixed_y = value; controller.mark_position_changed() }
                         }
                     }
                     RowLayout {
@@ -408,6 +414,7 @@ Kirigami.ApplicationWindow {
                         wrapMode: Text.WordWrap
                     }
                     Controls.Button {
+                        objectName: "confirmMonitorButton"
                         visible: !controller.current_position && !controller.fixed_position_confirmed
                         enabled: !!root.selectedMonitor && !controller.running && !controller.busy
                         text: qsTr("Monitor und Koordinaten bestätigen")
