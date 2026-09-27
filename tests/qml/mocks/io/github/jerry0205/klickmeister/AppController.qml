@@ -26,6 +26,9 @@ QtObject {
     property bool saveConfigSucceeds: true
     property bool configDirty: false
     property bool positionDirty: false
+    property string savedMonitorIdentity: ""
+    property double savedFixedX: 0
+    property double savedFixedY: 0
     property int saveCount: 0
     property int shutdownCount: 0
     property int initializeCount: 0
@@ -34,6 +37,11 @@ QtObject {
     function shutdown() { shutdownCount++; running = false; busy = false }
     function mark_settings_changed() { configDirty = true }
     function mark_position_changed() { configDirty = true; positionDirty = true }
+    function restore_saved_position() {
+        if (fixed_position_confirmed || !savedMonitorIdentity || savedMonitorIdentity !== monitor_identity) return
+        fixed_x = savedFixedX
+        fixed_y = savedFixedY
+    }
     function save_config() {
         if (!configDirty) return true
         saveCount++

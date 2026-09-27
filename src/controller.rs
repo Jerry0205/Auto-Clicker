@@ -85,6 +85,9 @@ pub mod qobject {
         fn mark_position_changed(self: Pin<&mut AppController>);
 
         #[qinvokable]
+        fn restore_saved_position(self: Pin<&mut AppController>);
+
+        #[qinvokable]
         fn shutdown(self: Pin<&mut AppController>);
     }
 
@@ -269,6 +272,15 @@ impl AppControllerRust {
         self.config_dirty = true;
     }
 
+    /// Saved coordinates for the live monitor while they await confirmation.
+    fn saved_coordinates_for_live_monitor(&self) -> Option<(i64, i64)> {
+        let saved = &self.saved_position;
+        (!self.fixed_position_confirmed
+            && !saved.monitor_identity.is_empty()
+            && saved.monitor_identity == self.monitor_identity.to_string())
+        .then(|| (saved.fixed_x.into(), saved.fixed_y.into()))
+    }
+
     fn persist_config(&mut self, force: bool) -> Result<(), String> {
         if !force && !self.config_dirty {
             return Ok(());
@@ -401,6 +413,14 @@ impl qobject::AppController {
     /// Record a position chosen by the user rather than restored or clamped.
     pub fn mark_position_changed(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().get_mut().record_position_change();
+    }
+
+    /// Undo substitute-monitor clamping once the saved monitor is selected again.
+    pub fn restore_saved_position(mut self: Pin<&mut Self>) {
+        if let Some((x, y)) = self.rust().saved_coordinates_for_live_monitor() {
+            self.as_mut().set_fixed_x(x);
+            self.as_mut().set_fixed_y(y);
+        }
     }
 
     /// Save a changed draft, including settings that do not require a click run.
@@ -709,6 +729,32 @@ mod tests {
         assert_eq!((saved.fixed_x, saved.fixed_y), (2400, 1300));
         assert_eq!(saved.monitor_identity, "external");
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn saved_position_returns_when_its_monitor_is_selected_again() {
+        let initial = AppConfig {
+            position_mode: PositionMode::Fixed,
+            fixed_x: 2400,
+            fixed_y: 1300,
+            monitor_identity: "external".into(),
+            ..AppConfig::default()
+        };
+        let mut controller = AppControllerRust::from_config(initial, None);
+        substitute_monitor(&mut controller);
+        assert_eq!(controller.saved_coordinates_for_live_monitor(), None);
+        controller.monitor_identity = QString::from("external");
+        assert_eq!(
+            controller.saved_coordinates_for_live_monitor(),
+            Some((2400, 1300))
+        );
+        controller.fixed_position_confirmed = true;
+        assert_eq!(controller.saved_coordinates_for_live_monitor(), None);
+
+        // An unconfirmed deliberate edit has no monitor to return to.
+        controller.fixed_position_confirmed = false;
+        controller.record_position_change();
+        assert_eq!(controller.saved_coordinates_for_live_monitor(), None);
     }
 
     #[test]

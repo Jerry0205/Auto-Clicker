@@ -73,6 +73,45 @@ TestCase {
         compare(controller.positionDirty, true)
     }
 
+    function test_reselecting_saved_monitor_restores_saved_position() {
+        controller.current_position = false
+        // Simulate coordinates clamped to a substitute for the saved monitor.
+        controller.savedMonitorIdentity = controller.monitor_identity
+        controller.savedFixedX = 300
+        controller.savedFixedY = 200
+        controller.fixed_x = 10
+        controller.fixed_y = 20
+        const monitorInput = findChild(main, "monitorInput")
+        monitorInput.activated(monitorInput.currentIndex)
+        compare(controller.fixed_x, 300)
+        compare(controller.fixed_y, 200)
+        compare(findChild(main, "xInput").value, 300)
+        compare(controller.fixed_position_confirmed, true)
+        compare(controller.positionDirty, true)
+    }
+
+    function test_mouse_wheel_cannot_replace_saved_position() {
+        for (const name of ["xInput", "yInput", "monitorInput"])
+            compare(findChild(main, name).wheelEnabled, false)
+    }
+
+    function test_save_error_dialog_keeps_choices_reachable() {
+        controller.mark_settings_changed()
+        controller.saveConfigSucceeds = false
+        main.close()
+        const dialog = findChild(main, "saveFailureDialog")
+        tryCompare(dialog, "opened", true)
+        for (const name of ["continueEditingButton", "discardSettingsButton"]) {
+            const button = findChild(main, name)
+            const right = button.mapToItem(dialog.contentItem, button.width, 0).x
+            verify(right <= dialog.availableWidth, name + " ends at " + right)
+        }
+        // The header close button rejects the dialog.
+        dialog.reject()
+        tryCompare(dialog, "opened", false)
+        compare(controller.initializeCount, 1)
+    }
+
     function test_running_and_pending_runs_disable_settings() {
         for (const state of ["running", "busy"]) {
             controller[state] = true

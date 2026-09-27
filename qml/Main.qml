@@ -52,6 +52,8 @@ Kirigami.ApplicationWindow {
         controller.monitor_y = screen ? screen.virtualY : 0
         controller.monitor_width = screen ? screen.width : 0
         controller.monitor_height = screen ? screen.height : 0
+        // Reselecting the saved monitor shows its saved position before clamping.
+        controller.restore_saved_position()
         controller.fixed_x = Math.max(0, Math.min(controller.fixed_x, xInput.to))
         controller.fixed_y = Math.max(0, Math.min(controller.fixed_y, yInput.to))
         // SpinBox initially clamps saved coordinates to its zero-sized monitor.
@@ -191,8 +193,11 @@ Kirigami.ApplicationWindow {
         width: Math.min(root.width - 32, 440)
         x: (root.width - width) / 2
         y: (root.height - height) / 2
+        // The header's close button rejects the dialog; treat it as continuing.
+        onRejected: controller.initialize()
 
         ColumnLayout {
+            width: saveFailureDialog.availableWidth
             Controls.Label {
                 Layout.fillWidth: true
                 text: controller.error_message
@@ -367,6 +372,7 @@ Kirigami.ApplicationWindow {
                             from: 0
                             to: Math.max(0, controller.monitor_width - 1)
                             editable: true
+                            wheelEnabled: false
                             value: controller.fixed_x
                             onValueModified: { controller.fixed_x = value; controller.mark_position_changed() }
                         }
@@ -378,6 +384,7 @@ Kirigami.ApplicationWindow {
                             from: 0
                             to: Math.max(0, controller.monitor_height - 1)
                             editable: true
+                            wheelEnabled: false
                             value: controller.fixed_y
                             onValueModified: { controller.fixed_y = value; controller.mark_position_changed() }
                         }
@@ -391,6 +398,8 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             model: root.monitorOptions
                             textRole: "label"
+                            // Scrolling the page must not replace the saved position.
+                            wheelEnabled: false
                             onModelChanged: Qt.callLater(root.ensureMonitorSelection)
                             Component.onCompleted: {
                                 root.monitorSelectionReady = true
