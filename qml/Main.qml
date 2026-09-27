@@ -33,13 +33,15 @@ Kirigami.ApplicationWindow {
         const clicksPerCycle = clickType === 1 ? 2 : 1
         if (intervalMs <= 1000) {
             const cyclesPerSecond = 1000 / intervalMs
-            const cycleRate = Number(cyclesPerSecond.toFixed(2))
-            const clickRate = Number((cyclesPerSecond * clicksPerCycle).toFixed(2))
+            // Three places distinguish every whole-millisecond interval below
+            // one second from an exact rate of one cycle per second.
+            const cycleRate = Number(cyclesPerSecond.toFixed(3))
+            const clickRate = Number((cyclesPerSecond * clicksPerCycle).toFixed(3))
             const cycleUnit = cycleRate === 1 ? qsTr("Zyklus/s") : qsTr("Zyklen/s")
             const clickUnit = clickRate === 1 ? qsTr("Klick/s") : qsTr("Klicks/s")
             return qsTr("%1 %2 · %3 %4")
-                .arg(formatRateNumber(cycleRate, 2)).arg(cycleUnit)
-                .arg(formatRateNumber(clickRate, 2)).arg(clickUnit)
+                .arg(formatRateNumber(cycleRate, 3)).arg(cycleUnit)
+                .arg(formatRateNumber(clickRate, 3)).arg(clickUnit)
         }
         const seconds = formatRateNumber(intervalMs / 1000, 3)
         const clicks = clicksPerCycle === 1 ? qsTr("1 Klick") : qsTr("2 Klicks")

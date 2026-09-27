@@ -66,12 +66,15 @@ TestCase {
         verify(rateLabel !== null)
         verify(statusLabel !== null)
         const twoAndHalf = Number(2.5).toLocaleString(Qt.locale(), 'f', 1)
+        const nearOneCycle = Number(1.001).toLocaleString(Qt.locale(), 'f', 3)
+        const nearTwoClicks = Number(2.002).toLocaleString(Qt.locale(), 'f', 3)
         const scenarios = [
             { interval: 10, type: 0, expected: "100 Zyklen/s · 100 Klicks/s" },
             { interval: 10, type: 1, expected: "100 Zyklen/s · 200 Klicks/s" },
             { interval: 1000, type: 0, expected: "1 Zyklus/s · 1 Klick/s" },
             { interval: 1000, type: 1, expected: "1 Zyklus/s · 2 Klicks/s" },
-            { interval: 999, type: 0, expected: "1 Zyklus/s · 1 Klick/s" },
+            { interval: 999, type: 0, expected: nearOneCycle + " Zyklen/s · " + nearOneCycle + " Klicks/s" },
+            { interval: 999, type: 1, expected: nearOneCycle + " Zyklen/s · " + nearTwoClicks + " Klicks/s" },
             { interval: 5000, type: 0, expected: "1 Zyklus alle 5 s · 1 Klick alle 5 s" },
             { interval: 5000, type: 1, expected: "1 Zyklus alle 5 s · 2 Klicks alle 5 s" },
             { interval: 2500, type: 1, expected: "1 Zyklus alle " + twoAndHalf + " s · 2 Klicks alle " + twoAndHalf + " s" }
