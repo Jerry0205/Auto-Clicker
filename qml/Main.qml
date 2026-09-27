@@ -402,22 +402,28 @@ Kirigami.ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     Controls.Label {
-                        text: controller.hotkey
+                        objectName: "hotkeyStatusLabel"
+                        text: controller.hotkey_pending ?
+                                  (controller.hotkey_ready ? qsTr("Wird geändert …") : qsTr("Wird eingerichtet …")) :
+                                  (controller.hotkey_ready ? controller.hotkey : qsTr("Nicht verfügbar"))
                         font.bold: true
                     }
                     Controls.Button {
-                        text: qsTr("Ändern …")
-                        enabled: !controller.busy && !controller.running
+                        objectName: "hotkeyConfigureButton"
+                        text: controller.hotkey_ready ? qsTr("Ändern …") : qsTr("Erneut versuchen")
+                        enabled: !controller.busy && !controller.running && !controller.hotkey_pending
                         onClicked: controller.configure_hotkey()
                     }
                 }
             }
 
             Controls.Button {
+                objectName: "startStopButton"
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
                 highlighted: true
                 text: controller.running || controller.busy ? qsTr("■  Stoppen") : qsTr("▶  Starten")
+                enabled: controller.running || controller.busy || (controller.hotkey_ready && !controller.hotkey_pending)
                 onClicked: controller.toggle()
             }
 

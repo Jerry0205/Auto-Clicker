@@ -3,7 +3,7 @@ use std::pin::Pin;
 use crate::{
     config::{self, AppConfig},
     model::{ClickSettings, ClickType, MonitorGeometry, MouseButton, PositionMode, RepeatMode},
-    worker::{Command, WorkerEvent, WorkerHandle},
+    worker::{Command, HotkeyPhase, WorkerEvent, WorkerHandle},
 };
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
@@ -21,6 +21,8 @@ pub mod qobject {
         #[qproperty(QString, status)]
         #[qproperty(QString, error_message)]
         #[qproperty(QString, hotkey)]
+        #[qproperty(bool, hotkey_ready)]
+        #[qproperty(bool, hotkey_pending)]
         #[qproperty(bool, running)]
         #[qproperty(bool, busy)]
         #[qproperty(i64, interval_ms)]
@@ -83,6 +85,8 @@ pub struct AppControllerRust {
     status: QString,
     error_message: QString,
     hotkey: QString,
+    hotkey_ready: bool,
+    hotkey_pending: bool,
     running: bool,
     busy: bool,
     interval_ms: i64,
@@ -115,6 +119,8 @@ impl Default for AppControllerRust {
             status: QString::from("Bereit"),
             error_message: QString::default(),
             hotkey: QString::from(&config.hotkey),
+            hotkey_ready: false,
+            hotkey_pending: true,
             running: false,
             busy: false,
             interval_ms: i64::try_from(config.interval_ms).unwrap_or(100),
@@ -238,7 +244,12 @@ impl qobject::AppController {
 
     /// Open the desktop portal configuration for the global shortcut.
     pub fn configure_hotkey(mut self: Pin<&mut Self>) {
-        self.as_mut().send_command(Command::ConfigureHotkey);
+        if *self.hotkey_pending() {
+            return;
+        }
+        let preferred = self.hotkey().to_string();
+        self.as_mut()
+            .send_command(Command::ConfigureHotkey(preferred));
     }
 
     /// Dismiss the current user-visible error message.
@@ -383,6 +394,16 @@ impl qobject::AppController {
                 self.as_mut().set_busy(false);
             }
             WorkerEvent::Hotkey(hotkey) => self.as_mut().set_hotkey(QString::from(&hotkey)),
+            WorkerEvent::HotkeyPhase(phase) => {
+                self.as_mut().set_hotkey_ready(matches!(
+                    phase,
+                    HotkeyPhase::Ready | HotkeyPhase::Configuring
+                ));
+                self.as_mut().set_hotkey_pending(matches!(
+                    phase,
+                    HotkeyPhase::Registering | HotkeyPhase::Configuring
+                ));
+            }
             WorkerEvent::StartRequested => {
                 if !*self.running() && !*self.busy() {
                     self.as_mut().start();

@@ -59,4 +59,36 @@ TestCase {
             controller[state] = false
         }
     }
+
+    function test_hotkey_recovery_controls() {
+        const retry = findChild(main, "hotkeyConfigureButton")
+        const start = findChild(main, "startStopButton")
+        const status = findChild(main, "hotkeyStatusLabel")
+        verify(retry !== null)
+        verify(start !== null)
+        verify(status !== null)
+
+        controller.hotkey_ready = false
+        controller.hotkey_pending = false
+        compare(retry.text, "Erneut versuchen")
+        compare(status.text, "Nicht verfügbar")
+        compare(retry.enabled, true)
+        compare(start.enabled, false)
+
+        controller.hotkey_pending = true
+        compare(status.text, "Wird eingerichtet …")
+        compare(retry.enabled, false)
+        compare(start.enabled, false)
+
+        controller.hotkey_ready = true
+        compare(status.text, "Wird geändert …")
+        compare(retry.enabled, false)
+        compare(start.enabled, false)
+
+        controller.hotkey_pending = false
+        compare(status.text, "Pause")
+        compare(retry.text, "Ändern …")
+        compare(retry.enabled, true)
+        compare(start.enabled, true)
+    }
 }
