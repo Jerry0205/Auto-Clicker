@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Rust, portal, QML and package checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container: archlinux:base-devel
+    steps:
+      - name: Install build and test tools
+        run: >-
+          pacman -Syu --noconfirm --needed
+          git ca-certificates rust cargo clang lld pkgconf
+          qt6-base qt6-declarative qt6-tools kirigami qqc2-desktop-style
+          dbus python appstream desktop-file-utils
+
+      - uses: actions/checkout@v4
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Rust lints
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --locked --all-targets
+
+      - name: Run portal tests on a private session bus
+        run: dbus-run-session -- cargo test --locked --all-targets -- --ignored
+
+      - name: Run QML tests with the KDE style
+        run: >-
+          QT_QPA_PLATFORM=offscreen
+          QT_QUICK_BACKEND=software
+          QT_QUICK_CONTROLS_STYLE=org.kde.desktop
+          /usr/lib/qt6/bin/qmltestrunner
+          -import tests/qml/mocks -input tests/qml
+
+      - name: Run Python guard tests
+        run: python -m unittest discover -s tests/native -p 'test_guard.py'
+
+      - name: Validate desktop and AppStream metadata
+        run: |
+          desktop-file-validate packaging/io.github.jerry0205.klickmeister.desktop
+          appstreamcli validate --no-net packaging/io.github.jerry0205.klickmeister.metainfo.xml
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Smoke test the built application
+        run: bash tests/qml-smoke.sh target/release/klickmeister
+
+  virtual-wayland:
+    name: QML on virtual KWin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: archlinux:base-devel
+    steps:
+      - name: Install virtual compositor and QML test tools
+        run: >-
+          pacman -Syu --noconfirm --needed
+          git ca-certificates qt6-base qt6-declarative qt6-wayland
+          kirigami qqc2-desktop-style kwin libkscreen dbus mesa
+
+      - uses: actions/checkout@v4
+
+      - name: Run QML tests on three virtual monitors
+        run: bash tests/qml-wayland.sh
