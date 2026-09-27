@@ -194,7 +194,7 @@ struct HotkeyState {
     connection: ashpd::zbus::Connection,
     portal: Arc<GlobalShortcuts>,
     session: Arc<Session<GlobalShortcuts>>,
-    events: mpsc::Receiver<QueuedHotkeySignal>,
+    events: mpsc::UnboundedReceiver<QueuedHotkeySignal>,
     event_task: JoinHandle<()>,
 }
 
@@ -364,16 +364,15 @@ async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<QueuedHotkeySig
 fn queue_hotkey_events(
     mut events: Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>,
     control: watch::Receiver<ControlState>,
-) -> (mpsc::Receiver<QueuedHotkeySignal>, JoinHandle<()>) {
-    let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
+) -> (mpsc::UnboundedReceiver<QueuedHotkeySignal>, JoinHandle<()>) {
+    // The worker may wait on a portal click. Do not stop reading shortcut
+    // signals when the worker falls behind: a later read would assign old
+    // presses the generation of a Stop that occurred in the meantime.
+    let (tx, rx) = mpsc::unbounded_channel();
     let task = tokio::spawn(async move {
         while let Some(signal) = events.next().await {
             let generation = control.borrow().generation;
-            if tx
-                .send(QueuedHotkeySignal { signal, generation })
-                .await
-                .is_err()
-            {
+            if tx.send(QueuedHotkeySignal { signal, generation }).is_err() {
                 break;
             }
         }
@@ -689,6 +688,9 @@ async fn run_worker(
                         }
                     }
                     HotkeySignal::Deactivated(deactivation) if deactivation.shortcut_id() == HOTKEY_ID => {
+                        if generation != control.borrow().generation {
+                            continue;
+                        }
                         if hotkey_rearm_required && ignored_activation {
                             hotkey_rearm_required = false;
                             ignored_activation = false;

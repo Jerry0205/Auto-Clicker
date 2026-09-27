@@ -21,6 +21,7 @@ use tokio::{
 type Options = HashMap<String, OwnedValue>;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 const PATH: &str = "/org/freedesktop/portal/desktop";
+static PORTAL_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Default)]
 struct Observed {
@@ -387,6 +388,7 @@ async fn event(
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
+    let _portal_test_guard = PORTAL_TEST_MUTEX.lock().await;
     let observed = Shared::default();
     let service = zbus::connection::Builder::session()?
         .name("org.freedesktop.portal.Desktop")?
@@ -776,4 +778,116 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
     result?;
     service.close().await?;
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
+    let _portal_test_guard = PORTAL_TEST_MUTEX.lock().await;
+    let observed = Shared::default();
+    let service = zbus::connection::Builder::session()?
+        .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeHotkeys(observed.clone()))?
+        .serve_at(PATH, FakeRemote(observed.clone()))?
+        .serve_at(PATH, FakeScreencast(observed.clone()))?
+        .build()
+        .await?;
+    let settings = ClickSettings {
+        interval_ms: 10,
+        button: MouseButton::Left,
+        click_type: ClickType::Single,
+        repeat: None,
+        position: None,
+        monitor: None,
+    };
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+        let session = OwnedObjectPath::try_from(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .hotkey_session
+                .clone(),
+        )?;
+        let (button_seen, button_release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.delay_button = true;
+            (state.button_seen.clone(), state.button_release.clone())
+        };
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        timeout(Duration::from_secs(3), button_seen.notified()).await?;
+
+        // More signals than the former 16-slot forwarding channel can hold.
+        // All of them are sent before Stop while the worker waits for a click.
+        for timestamp in 1..=20_u64 {
+            for signal in ["Activated", "Deactivated"] {
+                service
+                    .emit_signal(
+                        None::<&str>,
+                        PATH,
+                        "org.freedesktop.portal.GlobalShortcuts",
+                        signal,
+                        &(&session, "toggle-clicking", timestamp, Options::new()),
+                    )
+                    .await?;
+            }
+        }
+        sleep(Duration::from_millis(20)).await;
+        worker.send(Command::Stop)?;
+        observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .delay_button = false;
+        button_release.notify_one();
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        sleep(Duration::from_millis(200)).await;
+
+        let mut stale_starts = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let WorkerEvent::StartRequested(generation) = event
+                && worker.accepts_hotkey_start(generation)
+            {
+                stale_starts.push(generation);
+            }
+        }
+        assert!(
+            stale_starts.is_empty(),
+            "old presses can restart after Stop: {stale_starts:?}"
+        );
+
+        // A fresh key cycle still works after the backlog has been discarded.
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Deactivated",
+                &(&session, "toggle-clicking", 21_u64, Options::new()),
+            )
+            .await?;
+        sleep(Duration::from_millis(20)).await;
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &(&session, "toggle-clicking", 22_u64, Options::new()),
+            )
+            .await?;
+        let requested = event(&mut events, |e| matches!(e, WorkerEvent::StartRequested(_))).await?;
+        let WorkerEvent::StartRequested(generation) = requested else {
+            unreachable!()
+        };
+        assert!(worker.accepts_hotkey_start(generation));
+        Ok(())
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    result
 }
