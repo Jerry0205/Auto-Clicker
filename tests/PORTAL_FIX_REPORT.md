@@ -1,5 +1,9 @@
 # Screenshot-Portal: native Regression vom 22.09.2026
 
+Historischer Testbericht: Seit dem Fix für Issue #19 wird die Lupe im aktuellen
+Programm nicht angeboten. Die damalige erfolgreiche Vollbildaufnahme beweist
+nicht, dass andere interaktive Aufnahmen geometrisch zum Desktop passen.
+
 Die Korrektur umgeht den blockierenden Erstfreigabe-Pfad über
 `Screenshot(interactive=true)`. Sie ist auf dem betroffenen Gerät mit
 **xdg-desktop-portal 1.22.1-2.1 und KDE-Backend 6.7.5-1.1** nativ nachgewiesen.

@@ -188,7 +188,6 @@ TestCase {
         picker.acceptScreenshot(picker.captureId, "", "denied")
         tryCompare(picker, "inputReady", true)
         verify(picker.captureError.length > 0)
-        verify(!picker.magnifierReady)
         tryVerify(function() { return picker.active })
         wait(20)
         keyClick(Qt.Key_Return)
@@ -224,25 +223,40 @@ TestCase {
         compare(host.visible, true)
     }
 
-    function test_capture_enables_magnifier_and_clears_on_finish() {
-        picker.begin(host.screen, 20, 30, false, true)
-        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'
-            + picker.desktopBounds.width + '" height="' + picker.desktopBounds.height
-            + '"><rect width="100%" height="100%" fill="blue"/></svg>'
-        picker.acceptScreenshot(picker.captureId, "data:image/svg+xml," + encodeURIComponent(svg), "")
-        tryCompare(picker, "magnifierReady", true)
-        tryCompare(picker, "inputReady", true)
-        picker.finish()
-        compare(picker.magnifierReady, false)
+    function test_unverified_capture_falls_back_data() {
+        const screens = Qt.application.screens
+        let left = screens[0].virtualX
+        let top = screens[0].virtualY
+        let right = left + screens[0].width
+        let bottom = top + screens[0].height
+        for (const screen of screens) {
+            left = Math.min(left, screen.virtualX)
+            top = Math.min(top, screen.virtualY)
+            right = Math.max(right, screen.virtualX + screen.width)
+            bottom = Math.max(bottom, screen.virtualY + screen.height)
+        }
+        const width = right - left
+        const height = bottom - top
+        return [
+            { tag: "matching desktop size", width: width, height: height },
+            { tag: "proportional crop", width: width / 2, height: height / 2 },
+            { tag: "single monitor", width: screens[0].width, height: screens[0].height },
+            { tag: "scaled desktop", width: width * 1.5, height: height * 1.5 }
+        ]
     }
 
-    function test_wrong_capture_geometry_falls_back() {
+    function test_unverified_capture_falls_back(data) {
         picker.begin(host.screen, 20, 30, false, true)
-        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="1"/>'
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'
+            + Math.round(data.width) + '" height="' + Math.round(data.height) + '"/>'
         picker.acceptScreenshot(picker.captureId, "data:image/svg+xml," + encodeURIComponent(svg), "")
-        tryVerify(function() { return picker.captureError.length > 0 })
-        compare(picker.magnifierReady, false)
-        verify(picker.inputReady)
+        tryCompare(picker, "inputReady", true)
+        verify(picker.captureError.indexOf("Positionsdaten") >= 0)
+        picker.setTarget(20, 30)
+        picker.confirm()
+        compare(picked.count, 1)
+        compare(picked.signalArguments[0][0], 20)
+        compare(picked.signalArguments[0][1], 30)
     }
 
     function test_previous_capture_is_ignored() {

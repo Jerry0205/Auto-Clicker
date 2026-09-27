@@ -59,4 +59,13 @@ TestCase {
             controller[state] = false
         }
     }
+
+    function test_position_selection_does_not_request_unverifiable_screenshot() {
+        controller.current_position = false
+        main.beginPicker(false)
+        tryVerify(function() { return main.positionPicker && main.positionPicker.inputReady })
+        wait(350) // The former capture delay would have requested the portal here.
+        compare(controller.screenshot_requests, 0)
+        main.finishPicker()
+    }
 }

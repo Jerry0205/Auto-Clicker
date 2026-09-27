@@ -1,7 +1,6 @@
-"""Native KDE 6.7 screenshot regression, using real dialogs and portal input."""
+"""Native KDE portal input regression with screenshot-free position selection."""
 
 import json
-import subprocess
 import time
 from pathlib import Path
 
@@ -61,13 +60,9 @@ def grant_remote():
     portal_button("Fernsteuerung", "Akzeptieren", 0, 2)
 
 
-def screenshot_dialog():
-    return frame("Bildschirmfoto anfordern")
-
-
-def open_capture():
+def open_picker():
     action("Position wählen / Neu wählen …", role="button")
-    wait_for(screenshot_dialog)
+    wait_for(lambda: "Esc / Rechtsklick" in picker_text())
 
 
 def picker_text():
@@ -77,7 +72,7 @@ def picker_text():
 def probe_driver(name):
     started = time.monotonic()
     rpc("driver", cmd="move", x=80, y=400)
-    mark(name, passed=True, independent_portal_ms=(time.monotonic() - started) * 1000)
+    mark(name, passed=True, elapsed_ms=(time.monotonic() - started) * 1000)
 
 
 def focus_picker():
@@ -110,53 +105,15 @@ def main():
     wait_for(lambda: rpc("driver", cmd="state")["ready"])
     kwin("place")
     wait_for(lambda: "Bereit" in status())
-    action("Mit 4×-Lupe auswählen (Bildschirmaufnahme)", role="check box")
-
-    open_capture()
-    probe_driver("independent_client_during_dialog")
-    wait_for(lambda: "zu lange" in picker_text(), timeout=4)
-    wait_for(lambda: not screenshot_dialog())
-    assert "Deny" in picker_text()
-    probe_driver("unanswered_dialog_closed_after_timeout")
-    close_picker()
-    time.sleep(0.3)
-    assert "Esc / Rechtsklick" not in picker_text()
-
-    open_capture()
-    subprocess.run(
-        ["spectacle", "-b", "-n", "-o", str(BASE / "screenshot-dialog.png")], check=True
-    )
-    portal_button("Bildschirmfoto anfordern", "Abbrechen", 1, 3)
-    wait_for(lambda: "nicht verfügbar" in picker_text())
+    open_picker()
     assert "Lupe 4×" not in picker_text()
-    probe_driver("denied_capture_falls_back")
+    assert not frame("Bildschirmfoto anfordern")
+    probe_driver("picker_without_screenshot_portal")
     close_picker()
-
-    open_capture()
-    # KDE defaults to Full Screen. Verify this before accepting the image.
-    assert any(
-        n.get_role_name() == "text" and Atspi.Text.get_text(n, 0, -1) == "Vollbild"
-        for n, _ in nodes(PORTAL_APP)
-    )
-    portal_button("Bildschirmfoto anfordern", "Übernehmen", 2, 3)
-
-    def save_ready():
-        buttons = [n for n, _ in nodes(PORTAL_APP) if n.get_role_name() == "button"]
-        return len(buttons) == 3 and all(
-            n.get_state_set().contains(Atspi.StateType.ENABLED) for n in buttons
-        )
-
-    wait_for(save_ready, timeout=2)
-    portal_button("Bildschirmfoto anfordern", "Speichern", 0, 3)
-    wait_for(lambda: "Lupe 4×" in picker_text(), timeout=3)
-    rpc("driver", cmd="move", x=80, y=400)
-    subprocess.run(
-        ["spectacle", "-b", "-n", "-o", str(BASE / "magnifier.png")], check=True
-    )
-    mark("approved_real_screenshot_magnifier", passed=True)
+    open_picker()
     pin_target()
 
-    # Exercise actual clicks and Stop after the screenshot failure paths.
+    # Exercise actual clicks and Stop after position selection.
     before = len(mouse_events())
     focus_target()
     action("▶  Starten", role="button")
@@ -166,7 +123,7 @@ def main():
     assert len(new) == 6, new
     assert all(e["x"] == 80 and e["y"] == 400 for e in new)
     assert [e["type"] == "MouseButtonRelease" for e in new] == [False, True] * 3
-    mark("clicks_after_capture_failures", passed=True, mouse_events=len(new))
+    mark("clicks_after_position_selection", passed=True, mouse_events=len(new))
     action("Bis zum Stoppen", role="radio button")
     focus_target()
     action("▶  Starten", role="button")
@@ -177,7 +134,7 @@ def main():
     count = len(mouse_events())
     time.sleep(0.3)
     assert len(mouse_events()) == count
-    mark("stop_after_capture_failures", passed=True, quiet_ms=300)
+    mark("stop_after_position_selection", passed=True, quiet_ms=300)
 
     # Saved helpers exercise real visible menu choices and verify their values.
     action("Anzahl", role="radio button")
@@ -202,15 +159,12 @@ def main():
     mark("target_ignores_alt_f4", passed=True)
 
     focus_app()
-    open_capture()
     started = time.monotonic()
     kwin("close_app")
     pid = json.loads((BASE / "pids.json").read_text())["app"]
     wait_for(lambda: not Path(f"/proc/{pid}").exists())
-    wait_for(lambda: not screenshot_dialog())
-    probe_driver("close_app_cleans_screenshot_dialog")
     mark(
-        "shutdown_pending_capture",
+        "shutdown_after_input_tests",
         passed=True,
         elapsed_ms=(time.monotonic() - started) * 1000,
     )

@@ -34,7 +34,7 @@ Kirigami.ApplicationWindow {
         })
         if (!picker) return
         positionPicker = picker
-        picker.begin(selectedMonitor, controller.fixed_x, controller.fixed_y, preview, magnifierOption.checked)
+        picker.begin(selectedMonitor, controller.fixed_x, controller.fixed_y, preview, false)
     }
 
     function confirmMonitor() {
@@ -357,14 +357,6 @@ Kirigami.ApplicationWindow {
                         enabled: !!root.selectedMonitor && !controller.running && !controller.busy
                         text: qsTr("Monitor und Koordinaten bestätigen")
                         onClicked: root.confirmMonitor()
-                    }
-                    Controls.CheckBox {
-                        id: magnifierOption
-                        visible: !controller.current_position
-                        enabled: !controller.running && !controller.busy
-                        text: qsTr("Mit 4×-Lupe auswählen (Bildschirmaufnahme)")
-                        Controls.ToolTip.visible: hovered
-                        Controls.ToolTip.text: qsTr("Im KDE-Dialog Vollbild aufnehmen und speichern. Nach drei Sekunden ohne Bild öffnet sich die Auswahl ohne Lupe.")
                     }
                     Controls.Label {
                         Layout.fillWidth: true

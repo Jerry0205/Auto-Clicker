@@ -18,9 +18,7 @@ Window {
     property int targetY: 0
     property int hostVisibility: Window.Windowed
     property string captureError: ""
-    property rect desktopBounds: Qt.rect(0, 0, 1, 1)
     property bool hintAtBottom: false
-    readonly property bool magnifierReady: snapshot.status === Image.Ready
     signal finished()
     signal screenshotCancelled(int requestId)
     signal picked(int x, int y)
@@ -50,20 +48,9 @@ Window {
         selecting = true
         inputReady = false
         captureError = ""
-        snapshot.source = ""
         targetX = x
         targetY = y
         hintAtBottom = y < 110
-        desktopBounds = Qt.rect(screen.virtualX, screen.virtualY, screen.width, screen.height)
-        const screens = Qt.application.screens
-        for (let i = 0; i < screens.length; ++i) {
-            const s = screens[i]
-            const left = Math.min(desktopBounds.x, s.virtualX)
-            const top = Math.min(desktopBounds.y, s.virtualY)
-            const right = Math.max(desktopBounds.x + desktopBounds.width, s.virtualX + s.width)
-            const bottom = Math.max(desktopBounds.y + desktopBounds.height, s.virtualY + s.height)
-            desktopBounds = Qt.rect(left, top, right - left, bottom - top)
-        }
         waitingForScreenshot = magnifier && !preview
         if (waitingForScreenshot) {
             hostWindow.showMinimized()
@@ -97,8 +84,12 @@ Window {
         captureDelay.stop()
         captureFallback.stop()
         waitingForScreenshot = false
-        captureError = error.length > 0 ? qsTr("Bildschirmaufnahme nicht verfügbar – Auswahl ohne Lupe") : ""
-        snapshot.source = uri
+        // The Screenshot portal returns a URI without the capture rectangle.
+        // Even matching dimensions cannot prove that the image starts at the
+        // virtual desktop origin, so it must never guide target coordinates.
+        captureError = error.length > 0
+            ? qsTr("Bildschirmaufnahme nicht verfügbar – Auswahl ohne Lupe")
+            : qsTr("Bildschirmaufnahme ohne Positionsdaten – Auswahl ohne Lupe")
         showPicker()
     }
 
@@ -130,7 +121,6 @@ Window {
         captureDelay.stop()
         previewTimer.stop()
         hide()
-        snapshot.source = ""
         if (restoreHost !== false) {
             if (hostVisibility === Window.Maximized) hostWindow.showMaximized()
             else if (hostVisibility === Window.FullScreen) hostWindow.showFullScreen()
@@ -178,31 +168,6 @@ Window {
         function onWidthChanged() { picker.updateInputReady() }
     }
 
-    // A portal screenshot is a still image of the virtual desktop. Keeping it
-    // behind the overlay makes the magnified detail match the selected point.
-    Item {
-        anchors.fill: parent
-        clip: true
-        visible: picker.magnifierReady
-        Image {
-            id: snapshot
-            x: picker.desktopBounds.x - picker.screen.virtualX
-            y: picker.desktopBounds.y - picker.screen.virtualY
-            width: picker.desktopBounds.width
-            height: picker.desktopBounds.height
-            cache: false
-            fillMode: Image.Stretch
-            onStatusChanged: {
-                if (status === Image.Error)
-                    picker.captureError = qsTr("Bildschirmaufnahme konnte nicht geladen werden – Auswahl ohne Lupe")
-                if (status === Image.Ready && Math.abs(sourceSize.width / sourceSize.height - width / height) > 0.01) {
-                    picker.captureError = qsTr("Bildschirmaufnahme passt nicht zur Monitoranordnung – Auswahl ohne Lupe")
-                    source = ""
-                }
-            }
-        }
-    }
-
     Rectangle { anchors.fill: parent; color: picker.previewOnly ? "transparent" : "#18151a20" }
 
     MouseArea {
@@ -244,28 +209,6 @@ Window {
     }
 
     Rectangle {
-        id: magnifier
-        visible: picker.magnifierReady && !picker.previewOnly
-        x: picker.targetX + 180 < picker.width ? picker.targetX + 28 : picker.targetX - width - 28
-        y: Math.max(0, Math.min(picker.targetY + 28, picker.height - height))
-        width: 148; height: 148
-        color: "#151a20"
-        border.color: "#3daee9"; border.width: 2
-        clip: true
-        Image {
-            x: parent.width / 2 - (picker.targetX + picker.screen.virtualX - picker.desktopBounds.x) * 4
-            y: parent.height / 2 - (picker.targetY + picker.screen.virtualY - picker.desktopBounds.y) * 4
-            width: picker.desktopBounds.width * 4
-            height: picker.desktopBounds.height * 4
-            source: snapshot.source
-            cache: false
-            smooth: false
-        }
-        Rectangle { anchors.centerIn: parent; width: 21; height: 1; color: "#ff4040" }
-        Rectangle { anchors.centerIn: parent; width: 1; height: 21; color: "#ff4040" }
-    }
-
-    Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter
         y: picker.hintAtBottom ? picker.height - height - 12 : 12
         width: Math.min(picker.width - 24, message.implicitWidth + 32)
@@ -286,7 +229,6 @@ Window {
                 : !picker.inputReady ? qsTr("Vollbild wird vorbereitet … · Esc: abbrechen")
                 : qsTr("%1 · X: %2 · Y: %3\nKlicken: Ziel setzen · Enter: übernehmen · Pfeiltasten: 1 Schritt · Umschalt: 10 · Esc / Rechtsklick: abbrechen")
                     .arg(monitors.displayName(picker.screen, Qt.application.screens)).arg(picker.targetX).arg(picker.targetY)
-                    + (picker.magnifierReady ? qsTr("\nLupe 4× · Standbild") : "")
                     + (picker.captureError.length ? "\n" + picker.captureError : "")
         }
     }

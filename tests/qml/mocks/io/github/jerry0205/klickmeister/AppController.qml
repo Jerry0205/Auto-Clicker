@@ -31,6 +31,7 @@ QtObject {
     function toggle() {}
     function configure_hotkey() {}
     function clear_error() { error_message = "" }
-    function capture_screenshot(requestId) {}
+    property int screenshot_requests: 0
+    function capture_screenshot(requestId) { screenshot_requests += 1 }
     function cancel_screenshot(requestId) {}
 }
