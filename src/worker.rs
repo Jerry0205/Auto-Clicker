@@ -513,6 +513,8 @@ async fn run_worker(
             }
             result = wait_task(&mut configure_task), if configure_task.is_some() => {
                 configure_task = None;
+                // ConfigureShortcuts only acknowledges the method call. The portal
+                // does not report when its settings window is closed.
                 (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Ready));
                 match result {
                     Ok(Ok(())) => {}

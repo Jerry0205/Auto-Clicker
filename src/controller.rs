@@ -247,6 +247,9 @@ impl qobject::AppController {
         if *self.hotkey_pending() {
             return;
         }
+        if !*self.hotkey_ready() {
+            self.as_mut().clear_error();
+        }
         let preferred = self.hotkey().to_string();
         self.as_mut()
             .send_command(Command::ConfigureHotkey(preferred));

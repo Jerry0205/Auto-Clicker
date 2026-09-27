@@ -404,7 +404,7 @@ Kirigami.ApplicationWindow {
                     Controls.Label {
                         objectName: "hotkeyStatusLabel"
                         text: controller.hotkey_pending ?
-                                  (controller.hotkey_ready ? qsTr("Wird geändert …") : qsTr("Wird eingerichtet …")) :
+                                  (controller.hotkey_ready ? qsTr("Öffnet Dialog …") : qsTr("Wird eingerichtet …")) :
                                   (controller.hotkey_ready ? controller.hotkey : qsTr("Nicht verfügbar"))
                         font.bold: true
                     }

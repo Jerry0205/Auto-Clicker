@@ -81,7 +81,7 @@ TestCase {
         compare(start.enabled, false)
 
         controller.hotkey_ready = true
-        compare(status.text, "Wird geändert …")
+        compare(status.text, "Öffnet Dialog …")
         compare(retry.enabled, false)
         compare(start.enabled, false)
 
