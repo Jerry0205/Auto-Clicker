@@ -88,6 +88,13 @@ TestCase {
         compare(findChild(main, "xInput").value, 300)
         compare(controller.fixed_position_confirmed, true)
         compare(controller.positionDirty, true)
+
+        // Restored coordinates are still clamped to the selected monitor.
+        controller.fixed_position_confirmed = false
+        controller.savedFixedX = 100000
+        monitorInput.activated(monitorInput.currentIndex)
+        compare(controller.fixed_x, findChild(main, "xInput").to)
+        compare(controller.fixed_y, 200)
     }
 
     function test_mouse_wheel_cannot_replace_saved_position() {

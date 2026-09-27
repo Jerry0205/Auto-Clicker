@@ -36,7 +36,13 @@ QtObject {
     function initialize() { initializeCount++ }
     function shutdown() { shutdownCount++; running = false; busy = false }
     function mark_settings_changed() { configDirty = true }
-    function mark_position_changed() { configDirty = true; positionDirty = true }
+    function mark_position_changed() {
+        configDirty = true
+        positionDirty = true
+        savedMonitorIdentity = fixed_position_confirmed ? monitor_identity : ""
+        savedFixedX = fixed_x
+        savedFixedY = fixed_y
+    }
     function restore_saved_position() {
         if (fixed_position_confirmed || !savedMonitorIdentity || savedMonitorIdentity !== monitor_identity) return
         fixed_x = savedFixedX
