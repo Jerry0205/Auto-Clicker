@@ -40,6 +40,8 @@ struct Observed {
     delay_hotkey: bool,
     hotkey_seen: Arc<Notify>,
     hotkey_release: Arc<Notify>,
+    configure_seen: Arc<Notify>,
+    configure_release: Arc<Notify>,
     delay_start: bool,
     start_seen: Arc<Notify>,
     start_release: Arc<Notify>,
@@ -164,7 +166,7 @@ async fn create(
 struct FakeHotkeys(Shared);
 #[zbus::interface(name = "org.freedesktop.portal.GlobalShortcuts", crate = "ashpd::zbus")]
 impl FakeHotkeys {
-    #[zbus(property)]
+    #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
         2
     }
@@ -211,6 +213,24 @@ impl FakeHotkeys {
             Value::new(shortcuts).try_into().map_err(failed)?,
         )]);
         respond(connection, &header, &options, results).await
+    }
+
+    async fn configure_shortcuts(
+        &self,
+        _session: OwnedObjectPath,
+        _parent: String,
+        _options: Options,
+    ) -> zbus::fdo::Result<()> {
+        let (seen, release) = {
+            let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                state.configure_seen.clone(),
+                state.configure_release.clone(),
+            )
+        };
+        seen.notify_one();
+        release.notified().await;
+        Err(failed("old configure request failed"))
     }
 }
 
@@ -904,6 +924,66 @@ async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
             unreachable!()
         };
         assert!(worker.accepts_hotkey_start(generation));
+        Ok(())
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn old_configure_result_cannot_stop_a_new_run() -> TestResult {
+    let _portal_test_guard = PORTAL_TEST_MUTEX.lock().await;
+    let observed = Shared::default();
+    let _service = zbus::connection::Builder::session()?
+        .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeHotkeys(observed.clone()))?
+        .serve_at(PATH, FakeRemote(observed.clone()))?
+        .serve_at(PATH, FakeScreencast(observed.clone()))?
+        .build()
+        .await?;
+    let settings = ClickSettings {
+        interval_ms: 10,
+        button: MouseButton::Left,
+        click_type: ClickType::Single,
+        repeat: None,
+        position: None,
+        monitor: None,
+    };
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+        let (configure_seen, configure_release) = {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                state.configure_seen.clone(),
+                state.configure_release.clone(),
+            )
+        };
+        worker.send(Command::ConfigureHotkey)?;
+        timeout(Duration::from_secs(3), configure_seen.notified()).await?;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        worker.send(Command::Stop)?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+
+        worker.send(Command::Start(settings))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        configure_release.notify_one();
+        sleep(Duration::from_millis(100)).await;
+        while let Ok(event) = events.try_recv() {
+            assert!(
+                !matches!(event, WorkerEvent::Running(false) | WorkerEvent::Error(_)),
+                "an old ConfigureShortcuts result changed the new run: {event:?}"
+            );
+        }
+        worker.send(Command::Stop)?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
         Ok(())
     }
     .await;

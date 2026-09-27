@@ -267,7 +267,12 @@ async fn setup_hotkey(
             .find(|shortcut| shortcut.id() == HOTKEY_ID)
             .map(|shortcut| shortcut.trigger_description().to_owned())
             .ok_or_else(|| "KWin hat keinen globalen Hotkey gebunden.".to_owned())?;
-        Ok((portal, actual))
+        let session_handle = serde_json::to_value(owned_session)
+            .map_err(|error| error.to_string())?
+            .as_str()
+            .ok_or("Ungültiger Hotkey-Sitzungspfad.")?
+            .to_owned();
+        Ok((portal, actual, session_handle))
     };
     let result = tokio::select! {
         biased;
@@ -275,15 +280,11 @@ async fn setup_hotkey(
         result = operation => result,
     };
     match result {
-        Ok((portal, actual)) => Ok(HotkeyRegistration {
+        Ok((portal, actual, session_handle)) => Ok(HotkeyRegistration {
             connection,
             portal,
             actual,
-            session_handle: serde_json::to_value(session.as_ref().ok_or("Hotkey-Sitzung fehlt.")?)
-                .map_err(|error| error.to_string())?
-                .as_str()
-                .ok_or("Ungültiger Hotkey-Sitzungspfad.")?
-                .to_owned(),
+            session_handle,
             session: session.ok_or("Hotkey-Sitzung fehlt.")?,
         }),
         Err(error) => {
@@ -399,8 +400,12 @@ async fn restart_hotkey(
     hotkey: &mut Option<HotkeyState>,
     hotkey_task: &mut Option<JoinHandle<Result<HotkeyRegistration, String>>>,
     hotkey_cancel: &mut Option<oneshot::Sender<()>>,
+    configure_task: &mut Option<JoinHandle<Result<(), String>>>,
     preferred_hotkey: &str,
 ) {
+    if let Some(task) = configure_task.take() {
+        task.abort();
+    }
     if let Some(state) = hotkey.take() {
         state.event_task.abort();
         let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
@@ -484,7 +489,8 @@ async fn run_worker(
                 }
                 cancel_start(&mut start_task, &mut start_cancel).await;
                 stop_run(&mut machine, &mut active, &emit);
-                restart_hotkey(&mut hotkey, &mut hotkey_task, &mut hotkey_cancel, &preferred_hotkey).await;
+                (emit)(WorkerEvent::Status("Hotkey wird erneut eingerichtet …".to_owned()));
+                restart_hotkey(&mut hotkey, &mut hotkey_task, &mut hotkey_cancel, &mut configure_task, &preferred_hotkey).await;
             }
             queued = commands.recv() => {
                 let Some(QueuedCommand { command, generation }) = queued else { break; };
@@ -629,7 +635,7 @@ async fn run_worker(
                                     event_task,
                                 });
                                 (emit)(WorkerEvent::Hotkey(actual));
-                                if machine.state() == RunState::Ready {
+                                if matches!(machine.state(), RunState::Ready | RunState::Stopped) {
                                     (emit)(WorkerEvent::Status("Bereit".to_owned()));
                                 }
                             }
@@ -691,7 +697,8 @@ async fn run_worker(
                             }
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
-                            restart_hotkey(&mut hotkey, &mut hotkey_task, &mut hotkey_cancel, &preferred_hotkey).await;
+                            (emit)(WorkerEvent::Status("Hotkey wird erneut eingerichtet …".to_owned()));
+                            restart_hotkey(&mut hotkey, &mut hotkey_task, &mut hotkey_cancel, &mut configure_task, &preferred_hotkey).await;
                         } else {
                             // Ask the Qt side to start so the current UI values are
                             // collected, validated and saved. Keeping a settings copy
