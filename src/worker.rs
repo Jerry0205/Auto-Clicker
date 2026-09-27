@@ -47,7 +47,7 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub enum WorkerEvent {
     Status(String),
-    Running(bool),
+    State(RunState),
     Hotkey(String),
     StartRequested,
     Screenshot(i32, Result<String, String>),
@@ -327,6 +327,7 @@ async fn run_worker(
     let mut screenshot_id = 0;
     let mut screenshot_cancel = None;
 
+    (emit)(WorkerEvent::State(machine.state()));
     (emit)(WorkerEvent::Status(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
     ));
@@ -343,9 +344,13 @@ async fn run_worker(
                             continue;
                         }
                         match request_validated_start(&mut machine, &settings) {
-                            Ok(true) => latest_settings = settings.clone(),
+                            Ok(true) => {
+                                latest_settings = settings.clone();
+                                (emit)(WorkerEvent::State(machine.state()));
+                            }
                             Ok(false) => continue,
                             Err(error) => {
+                                (emit)(WorkerEvent::State(machine.state()));
                                 (emit)(WorkerEvent::Error(error.to_string()));
                                 continue;
                             }
@@ -416,15 +421,14 @@ async fn run_worker(
                         start_run(&mut machine, &mut active, latest_settings.clone(), &emit);
                     }
                     Ok(Err(error)) => {
-                        machine.fail();
-                        (emit)(WorkerEvent::Running(false));
+                        fail_run(&mut machine, &emit);
                         (emit)(WorkerEvent::Error(error));
                     }
                     Err(error) if error.is_cancelled() => {
                         stop_run(&mut machine, &mut active, &emit);
                     }
                     Err(error) => {
-                        machine.fail();
+                        fail_run(&mut machine, &emit);
                         (emit)(WorkerEvent::Error(format!("Portal-Aufgabe ist fehlgeschlagen: {error}")));
                     }
                 }
@@ -454,6 +458,7 @@ async fn run_worker(
                                 if !watching {
                                     let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                     let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+                                    fail_run(&mut machine, &emit);
                                     (emit)(WorkerEvent::Error("Die Hotkey-Sitzung kann nicht überwacht werden.".to_owned()));
                                     continue;
                                 }
@@ -478,12 +483,19 @@ async fn run_worker(
                             (Err(error), _) | (_, Err(error)) => {
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+                                fail_run(&mut machine, &emit);
                                 (emit)(WorkerEvent::Error(format!("Hotkey-Signale sind nicht verfügbar: {error}")));
                             }
                         }
                     }
-                    Ok(Err(error)) => (emit)(WorkerEvent::Error(error)),
-                    Err(error) if !error.is_cancelled() => (emit)(WorkerEvent::Error(format!("Hotkey-Aufgabe ist fehlgeschlagen: {error}"))),
+                    Ok(Err(error)) => {
+                        fail_run(&mut machine, &emit);
+                        (emit)(WorkerEvent::Error(error));
+                    }
+                    Err(error) if !error.is_cancelled() => {
+                        fail_run(&mut machine, &emit);
+                        (emit)(WorkerEvent::Error(format!("Hotkey-Aufgabe ist fehlgeschlagen: {error}")));
+                    }
                     Err(_) => {}
                 }
             }
@@ -493,12 +505,12 @@ async fn run_worker(
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
                         stop_run(&mut machine, &mut active, &emit);
-                        machine.fail();
+                        fail_run(&mut machine, &emit);
                         (emit)(WorkerEvent::Error(error));
                     }
                     Err(error) if !error.is_cancelled() => {
                         stop_run(&mut machine, &mut active, &emit);
-                        machine.fail();
+                        fail_run(&mut machine, &emit);
                         (emit)(WorkerEvent::Error(format!("Hotkey-Dialog ist fehlgeschlagen: {error}")));
                     }
                     Err(_) => {}
@@ -523,7 +535,7 @@ async fn run_worker(
                         } else {
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
-                            machine.fail();
+                            fail_run(&mut machine, &emit);
                             if let Some(state) = hotkey.take() {
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
@@ -535,7 +547,7 @@ async fn run_worker(
                     Some(HotkeySignal::Closed) | None => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         stop_run(&mut machine, &mut active, &emit);
-                        machine.fail();
+                        fail_run(&mut machine, &emit);
                         (emit)(WorkerEvent::Error("Die globale Hotkey-Sitzung wurde beendet.".to_owned()));
                         if let Some(state) = hotkey.take() {
                             let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
@@ -546,7 +558,7 @@ async fn run_worker(
             () = wait_for_tick(tick_deadline), if active.is_some() => {
                 let Some(run) = active.as_mut() else { continue; };
                 let Some(session) = click_session.as_ref() else {
-                    machine.fail();
+                    fail_run(&mut machine, &emit);
                     active = None;
                     (emit)(WorkerEvent::Error("Die Wayland-Sitzung wurde unerwartet beendet.".to_owned()));
                     continue;
@@ -556,9 +568,8 @@ async fn run_worker(
                     continue;
                 }
                 if let Err(error) = session.click(&run.settings).await {
-                    machine.fail();
+                    fail_run(&mut machine, &emit);
                     active = None;
-                    (emit)(WorkerEvent::Running(false));
                     (emit)(WorkerEvent::Error(error.to_string()));
                     // A revoked or failed session cannot safely be reused on retry.
                     if let Some(failed_session) = click_session.take() {
@@ -578,6 +589,7 @@ async fn run_worker(
     }
 
     machine.close();
+    (emit)(WorkerEvent::State(machine.state()));
     closing.store(true, Ordering::Release);
     cancel_capture(&mut screenshot_task, &mut screenshot_cancel).await;
     cancel_start(&mut start_task, &mut start_cancel).await;
@@ -592,7 +604,11 @@ async fn run_worker(
         let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
         let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
     }
-    (emit)(WorkerEvent::Running(false));
+}
+
+fn fail_run(machine: &mut StateMachine, emit: &Emitter) {
+    machine.fail();
+    (emit)(WorkerEvent::State(machine.state()));
 }
 
 /// Ignore duplicate starts before they can change a run or its pending settings.
@@ -626,14 +642,14 @@ fn start_run(
         schedule,
         next_tick: Instant::now(),
     });
-    (emit)(WorkerEvent::Running(true));
+    (emit)(WorkerEvent::State(machine.state()));
     (emit)(WorkerEvent::Status(format!("Klickt • {cps:.0} CPS")));
 }
 
 fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &Emitter) {
     if machine.stop() {
         *active = None;
-        (emit)(WorkerEvent::Running(false));
+        (emit)(WorkerEvent::State(machine.state()));
         (emit)(WorkerEvent::Status("Gestoppt".to_owned()));
     }
 }

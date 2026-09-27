@@ -3,6 +3,7 @@ use std::pin::Pin;
 use crate::{
     config::{self, AppConfig},
     model::{ClickSettings, ClickType, MonitorGeometry, MouseButton, PositionMode, RepeatMode},
+    state::RunState,
     worker::{Command, WorkerEvent, WorkerHandle},
 };
 use cxx_qt::{CxxQtType, Threading};
@@ -351,10 +352,8 @@ impl qobject::AppController {
         config::save(&config).map_err(|error| error.to_string())
     }
 
-    /// Display an error and reset the running and busy indicators.
+    /// Display an error without changing the worker-confirmed run state.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
-        self.as_mut().set_running(false);
-        self.as_mut().set_busy(false);
         self.as_mut().set_status(QString::from("Fehler"));
         self.as_mut().set_error_message(QString::from(message));
     }
@@ -374,13 +373,12 @@ impl qobject::AppController {
                 );
             }
             WorkerEvent::Status(status) => {
-                let busy = status.contains("Warte auf Wayland");
-                self.as_mut().set_busy(busy);
                 self.as_mut().set_status(QString::from(&status));
             }
-            WorkerEvent::Running(running) => {
+            WorkerEvent::State(state) => {
+                let (running, busy) = run_indicators(state);
                 self.as_mut().set_running(running);
-                self.as_mut().set_busy(false);
+                self.as_mut().set_busy(busy);
             }
             WorkerEvent::Hotkey(hotkey) => self.as_mut().set_hotkey(QString::from(&hotkey)),
             WorkerEvent::StartRequested => {
@@ -389,6 +387,29 @@ impl qobject::AppController {
                 }
             }
             WorkerEvent::Error(error) => self.as_mut().show_error(&error),
+        }
+    }
+}
+
+fn run_indicators(state: RunState) -> (bool, bool) {
+    match state {
+        RunState::Starting => (false, true),
+        RunState::Clicking => (true, false),
+        RunState::Ready | RunState::Stopped | RunState::Error | RunState::Closing => (false, false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn controls_follow_worker_state() {
+        assert_eq!(run_indicators(RunState::Ready), (false, false));
+        assert_eq!(run_indicators(RunState::Starting), (false, true));
+        assert_eq!(run_indicators(RunState::Clicking), (true, false));
+        for state in [RunState::Stopped, RunState::Error, RunState::Closing] {
+            assert_eq!(run_indicators(state), (false, false));
         }
     }
 }

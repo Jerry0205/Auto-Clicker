@@ -11,6 +11,7 @@ use ashpd::zbus::{
 };
 use klickmeister::{
     model::{ClickSettings, ClickType, MonitorGeometry, MouseButton},
+    state::RunState,
     worker::{Command, WorkerEvent, WorkerHandle},
 };
 use tokio::{
@@ -393,6 +394,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Ready))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
         let session = OwnedObjectPath::try_from(
             observed
@@ -424,8 +426,9 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                     click_type,
                     ..settings.clone()
                 }))?;
-                event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
-                event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+                event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Starting))).await?;
+                event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+                event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
                 let buttons = observed
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -441,12 +444,13 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             state.revoked_session = state.remote_session.clone();
         }
         worker.send(Command::Start(settings.clone()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(_))).await?;
         // Retry must request a fresh session instead of reusing the revoked one.
         worker.send(Command::Start(settings.clone()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
         {
             let state = observed.lock().unwrap_or_else(|e| e.into_inner());
             assert_ne!(state.remote_session, state.revoked_session);
@@ -458,8 +462,8 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             ..settings.clone()
         };
         worker.send(Command::Start(fixed.clone()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).motions,
             vec![(42, 1919.0, 1079.0); 3]);
 
@@ -479,12 +483,13 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             (state.start_seen.clone(), state.start_release.clone())
         };
         worker.send(Command::Start(fixed.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Starting))).await?;
         timeout(Duration::from_secs(3), seen.notified()).await?;
         worker.send(Command::Start(ClickSettings { position: Some((100, 150)), ..fixed.clone() }))?;
         let closed_before_stop = observed.lock().unwrap_or_else(|e| e.into_inner()).closed;
         // This subsequent worker roundtrip proves the duplicate was processed.
         worker.send(Command::Stop)?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
         assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).closed > closed_before_stop,
             "Stop must close the pending RemoteDesktop session before confirming it");
         release.notify_one();
@@ -495,8 +500,8 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
 
         // A cancelled request must not prevent a later valid start.
         worker.send(Command::Start(fixed))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).motions,
             vec![(42, 1919.0, 1079.0); 3]);
 
@@ -506,7 +511,8 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             observed.release_failures = 1;
         }
         worker.send(Command::Start(settings.clone()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(_))).await?;
         assert_eq!(
             observed.lock().unwrap_or_else(|e| e.into_inner()).buttons,
@@ -517,13 +523,13 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             repeat: None,
             ..settings.clone()
         }))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
         worker.send(Command::Start(ClickSettings {
             interval_ms: 0,
             ..settings.clone()
         }))?;
         worker.send(Command::Stop)?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
         let count = observed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -543,7 +549,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             repeat: None,
             ..settings.clone()
         }))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
         service
             .emit_signal(
                 None::<&str>,
@@ -553,12 +559,12 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 &activation,
             )
             .await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
         worker.send(Command::Start(ClickSettings {
             repeat: None,
             ..settings
         }))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
         let session = observed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -644,7 +650,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 }
                 sleep(Duration::from_millis(30)).await;
                 while let Ok(event) = pending_events.try_recv() {
-                    assert!(!matches!(event, WorkerEvent::Running(true)),
+                    assert!(!matches!(event, WorkerEvent::State(RunState::Clicking)),
                         "A late permission response must not start clicking");
                 }
                 observed.lock().unwrap_or_else(|e| e.into_inner()).stall_close = false;
@@ -656,6 +662,11 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
     tokio::task::spawn_blocking(move || worker.shutdown()).await?;
     assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).closed >= 1);
     result?;
+    let mut saw_closing = false;
+    while let Ok(event) = events.try_recv() {
+        saw_closing |= matches!(event, WorkerEvent::State(RunState::Closing));
+    }
+    assert!(saw_closing, "shutdown must report the closing state");
     service.close().await?;
     Ok(())
 }
