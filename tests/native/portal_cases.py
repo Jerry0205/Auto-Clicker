@@ -107,6 +107,8 @@ def main():
     wait_for(lambda: "Bereit" in status())
     open_picker()
     assert "Lupe 4×" not in picker_text()
+    # The former capture path requested the portal after a 250 ms delay.
+    time.sleep(0.35)
     assert not frame("Bildschirmfoto anfordern")
     probe_driver("picker_without_screenshot_portal")
     close_picker()
