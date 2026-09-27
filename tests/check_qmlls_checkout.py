@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 QMLLS = os.environ.get("QMLLS", "/usr/lib/qt6/bin/qmlls")
 
 
-def run(*command, cwd=None):
-    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True)
+def run(*command, cwd=None, env=None):
+    result = subprocess.run(command, cwd=cwd, env=env, text=True, capture_output=True)
     if result.returncode:
         raise RuntimeError(
             f"{' '.join(map(str, command))} failed:\n{result.stdout}{result.stderr}"
@@ -146,10 +146,13 @@ def main():
         run("git", "clone", "--quiet", "--local", "--no-hardlinks", str(ROOT), str(checkout))
         if (checkout / ".qmlls.ini").exists():
             raise AssertionError("A personal .qmlls.ini was copied into the clone")
-        run("cargo", "build", "--locked", cwd=checkout)
-        run("bash", "scripts/setup-qmlls.sh", cwd=checkout)
+        target_dir = checkout / "cargo output"
+        build_env = os.environ.copy()
+        build_env["CARGO_TARGET_DIR"] = str(target_dir)
+        run("cargo", "build", "--locked", cwd=checkout, env=build_env)
+        run("bash", "scripts/setup-qmlls.sh", cwd=checkout, env=build_env)
         configuration = (checkout / ".qmlls.ini").read_text()
-        expected_dir = checkout / "target/cxxqt/qml_modules"
+        expected_dir = target_dir / "cxxqt/qml_modules"
         if f'buildDir="{expected_dir}"' not in configuration:
             raise AssertionError(f"Wrong qmlls build directory:\n{configuration}")
         check_completion(checkout)
