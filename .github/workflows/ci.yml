@@ -22,7 +22,7 @@ jobs:
           qt6-base qt6-declarative qt6-tools kirigami qqc2-desktop-style
           dbus python appstream desktop-file-utils
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
@@ -68,9 +68,12 @@ jobs:
         run: >-
           pacman -Syu --noconfirm --needed
           git ca-certificates qt6-base qt6-declarative qt6-wayland
-          kirigami qqc2-desktop-style kwin libkscreen dbus mesa
+          kirigami qqc2-desktop-style kwin libkscreen dbus mesa libcap
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+
+      - name: Allow KWin to start without container capabilities
+        run: setcap -r /usr/bin/kwin_wayland
 
       - name: Run QML tests on three virtual monitors
         run: bash tests/qml-wayland.sh
