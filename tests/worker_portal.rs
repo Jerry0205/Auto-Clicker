@@ -411,21 +411,20 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
     });
     let result: TestResult = async {
         event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
-        let session = OwnedObjectPath::try_from(
+        let mut session = OwnedObjectPath::try_from(
             observed
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .hotkey_session
                 .clone(),
         )?;
-        let activation = (&session, "toggle-clicking", 0_u64, Options::new());
         service
             .emit_signal(
                 None::<&str>,
                 PATH,
                 "org.freedesktop.portal.GlobalShortcuts",
                 "Activated",
-                &activation,
+                &(&session, "toggle-clicking", 0_u64, Options::new()),
             )
             .await?;
         event(&mut events, |e| matches!(e, WorkerEvent::StartRequested(_))).await?;
@@ -502,6 +501,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         // This subsequent worker roundtrip proves the duplicate was processed.
         worker.send(Command::Stop)?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
         assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).closed > closed_before_stop,
             "Stop must close the pending RemoteDesktop session before confirming it");
         release.notify_one();
@@ -541,6 +541,8 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         }))?;
         worker.send(Command::Stop)?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+        session = OwnedObjectPath::try_from(observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_session.clone())?;
         let count = observed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -580,12 +582,14 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 PATH,
                 "org.freedesktop.portal.GlobalShortcuts",
                 "Activated",
-                &activation,
+                &(&session, "toggle-clicking", 0_u64, Options::new()),
             )
             .await?;
         worker.send(Command::Stop)?;
         button_release.notify_one();
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+        session = OwnedObjectPath::try_from(observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_session.clone())?;
         observed.lock().unwrap_or_else(|e| e.into_inner()).delay_button = false;
         let count = observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len();
         sleep(Duration::from_millis(120)).await;
@@ -597,8 +601,8 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 "an activation received before Stop must not start a new run");
         }
 
-        // Starting with the button before the old key is released must not
-        // rearm it. A late activation can stop the new run, but cannot start it.
+        // A press in the active session still stops a manually started run.
+        let old_session = session.clone();
         worker.send(Command::Start(continuous.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
         service
@@ -607,10 +611,13 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 PATH,
                 "org.freedesktop.portal.GlobalShortcuts",
                 "Activated",
-                &activation,
+                &(&session, "toggle-clicking", 0_u64, Options::new()),
             )
             .await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+        session = OwnedObjectPath::try_from(observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_session.clone())?;
+        assert_ne!(session, old_session);
 
         // A short manual run can finish before an old activation arrives.
         // It must not turn that delayed activation into another start request.
@@ -623,7 +630,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 PATH,
                 "org.freedesktop.portal.GlobalShortcuts",
                 "Activated",
-                &activation,
+                &(&old_session, "toggle-clicking", 0_u64, Options::new()),
             )
             .await?;
         sleep(Duration::from_millis(120)).await;
@@ -632,24 +639,14 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 "a delayed activation must not restart a completed manual run");
         }
 
-        // The delayed key release rearms the shortcut. A later press can start.
-        service
-            .emit_signal(
-                None::<&str>,
-                PATH,
-                "org.freedesktop.portal.GlobalShortcuts",
-                "Deactivated",
-                &activation,
-            )
-            .await?;
-        sleep(Duration::from_millis(20)).await;
+        // The replacement session accepts a new press without old releases.
         service
             .emit_signal(
                 None::<&str>,
                 PATH,
                 "org.freedesktop.portal.GlobalShortcuts",
                 "Activated",
-                &activation,
+                &(&session, "toggle-clicking", 0_u64, Options::new()),
             )
             .await?;
         let pending_start = event(&mut events, |e| matches!(e, WorkerEvent::StartRequested(_))).await?;
@@ -668,10 +665,11 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 PATH,
                 "org.freedesktop.portal.GlobalShortcuts",
                 "Activated",
-                &activation,
+                &(&session, "toggle-clicking", 0_u64, Options::new()),
             )
             .await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
         assert!(!worker.accepts_hotkey_start(pending_generation),
             "a hotkey stop must invalidate earlier Qt start callbacks");
         worker.send(Command::Start(ClickSettings {
@@ -837,7 +835,6 @@ async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
                     .await?;
             }
         }
-        sleep(Duration::from_millis(20)).await;
         worker.send(Command::Stop)?;
         observed
             .lock()
@@ -845,39 +842,61 @@ async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
             .delay_button = false;
         button_release.notify_one();
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
-        sleep(Duration::from_millis(200)).await;
+        timeout(Duration::from_secs(3), async {
+            loop {
+                match events.recv().await {
+                    Some(WorkerEvent::Hotkey(_)) => return Ok::<(), Box<dyn std::error::Error>>(()),
+                    Some(WorkerEvent::StartRequested(generation))
+                        if worker.accepts_hotkey_start(generation) =>
+                    {
+                        return Err("old press became valid after Stop".into());
+                    }
+                    Some(WorkerEvent::Error(error)) => return Err(error.into()),
+                    Some(_) => {}
+                    None => return Err("worker event stream ended".into()),
+                }
+            }
+        })
+        .await??;
+        let new_session = OwnedObjectPath::try_from(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .hotkey_session
+                .clone(),
+        )?;
+        assert_ne!(session, new_session);
 
-        let mut stale_starts = Vec::new();
+        // A late signal with the old session path must not rearm or start.
+        for signal in ["Activated", "Deactivated", "Activated"] {
+            service
+                .emit_signal(
+                    None::<&str>,
+                    PATH,
+                    "org.freedesktop.portal.GlobalShortcuts",
+                    signal,
+                    &(&session, "toggle-clicking", 21_u64, Options::new()),
+                )
+                .await?;
+        }
+        sleep(Duration::from_millis(100)).await;
         while let Ok(event) = events.try_recv() {
-            if let WorkerEvent::StartRequested(generation) = event
-                && worker.accepts_hotkey_start(generation)
-            {
-                stale_starts.push(generation);
+            if let WorkerEvent::StartRequested(generation) = event {
+                assert!(
+                    !worker.accepts_hotkey_start(generation),
+                    "old session restarted the worker"
+                );
             }
         }
-        assert!(
-            stale_starts.is_empty(),
-            "old presses can restart after Stop: {stale_starts:?}"
-        );
 
-        // A fresh key cycle still works after the backlog has been discarded.
-        service
-            .emit_signal(
-                None::<&str>,
-                PATH,
-                "org.freedesktop.portal.GlobalShortcuts",
-                "Deactivated",
-                &(&session, "toggle-clicking", 21_u64, Options::new()),
-            )
-            .await?;
-        sleep(Duration::from_millis(20)).await;
+        // The replacement session accepts a new key press.
         service
             .emit_signal(
                 None::<&str>,
                 PATH,
                 "org.freedesktop.portal.GlobalShortcuts",
                 "Activated",
-                &(&session, "toggle-clicking", 22_u64, Options::new()),
+                &(&new_session, "toggle-clicking", 22_u64, Options::new()),
             )
             .await?;
         let requested = event(&mut events, |e| matches!(e, WorkerEvent::StartRequested(_))).await?;
