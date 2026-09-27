@@ -28,6 +28,7 @@ struct Observed {
     hotkey_session: String,
     hotkey_created: usize,
     reject_hotkey: bool,
+    empty_hotkey_trigger: bool,
     remote_session: Option<OwnedObjectPath>,
     revoked_session: Option<OwnedObjectPath>,
     buttons: Vec<(i32, u32)>,
@@ -219,11 +220,21 @@ impl FakeHotkeys {
                 .map_err(failed)?;
             return Ok(path);
         }
+        let trigger = if self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .empty_hotkey_trigger
+        {
+            ""
+        } else {
+            "Pause"
+        };
         let shortcuts = vec![(
             "toggle-clicking",
             HashMap::from([
                 ("description", Value::from("Start/Stop")),
-                ("trigger_description", Value::from("Pause")),
+                ("trigger_description", Value::from(trigger)),
             ]),
         )];
         let results = HashMap::from([(
@@ -410,6 +421,33 @@ async fn event(
     .await?
 }
 
+async fn shortcuts_changed(service: &zbus::Connection, session: &str, trigger: &str) -> TestResult {
+    let session = OwnedObjectPath::try_from(session)?;
+    let shortcuts: Vec<(String, Options)> = vec![(
+        "toggle-clicking".to_owned(),
+        HashMap::from([
+            (
+                "description".to_owned(),
+                Value::from("Start/Stop").try_into()?,
+            ),
+            (
+                "trigger_description".to_owned(),
+                Value::from(trigger).try_into()?,
+            ),
+        ]),
+    )];
+    service
+        .emit_signal(
+            None::<&str>,
+            PATH,
+            "org.freedesktop.portal.GlobalShortcuts",
+            "ShortcutsChanged",
+            &(session, shortcuts),
+        )
+        .await?;
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> TestResult {
@@ -475,31 +513,72 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         worker.send(Command::Start(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
 
-        observed.lock().unwrap_or_else(|e| e.into_inner()).delay_hotkey = false;
+        {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.delay_hotkey = false;
+            state.empty_hotkey_trigger = true;
+        }
         worker.send(Command::ConfigureHotkey("Pause".into()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Status(status) if status == "Bereit")).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("keinen globalen Stop-Hotkey"))).await?;
         {
             let state = observed.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(state.hotkey_created, 3);
             assert_ne!(state.hotkey_session, old_session);
         }
+        let session = observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_session.clone();
+        let (seen, release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.empty_hotkey_trigger = false;
+            (state.configure_seen.clone(), state.configure_release.clone())
+        };
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(false)))).await?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        shortcuts_changed(&service, &session, "Pause").await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(true)))).await?;
+        release.notify_one();
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Status(status) if status == "Bereit")).await?;
         let (seen, release) = {
             let state = observed.lock().unwrap_or_else(|e| e.into_inner());
             (state.configure_seen.clone(), state.configure_release.clone())
         };
         worker.send(Command::ConfigureHotkey("Pause".into()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(true)))).await?;
         timeout(Duration::from_secs(3), seen.notified()).await?;
         worker.send(Command::ConfigureHotkey("Pause".into()))?;
         worker.send(Command::Start(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
         release.notify_one();
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
-        assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).configure_calls, 1);
-        worker.send(Command::Start(settings))?;
+        assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).configure_calls, 2);
+        worker.send(Command::Start(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        let (session, created_before, calls_before) = {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            (state.hotkey_session.clone(), state.hotkey_created, state.configure_calls)
+        };
+        shortcuts_changed(&service, &session, "").await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?;
+        worker.send(Command::Start(settings))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(false)))).await?;
+        let (seen, release) = {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            (state.configure_seen.clone(), state.configure_release.clone())
+        };
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        shortcuts_changed(&service, &session, "Pause").await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(true)))).await?;
+        release.notify_one();
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(state.hotkey_created, created_before);
+        assert_eq!(state.configure_calls, calls_before + 1);
         Ok(())
     }
     .await;

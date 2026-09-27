@@ -81,11 +81,13 @@ TestCase {
         compare(start.enabled, false)
 
         controller.hotkey_ready = true
+        controller.hotkey_configuring = true
         compare(status.text, "Öffnet Dialog …")
         compare(retry.enabled, false)
         compare(start.enabled, false)
 
         controller.hotkey_pending = false
+        controller.hotkey_configuring = false
         compare(status.text, "Pause")
         compare(retry.text, "Ändern …")
         compare(retry.enabled, true)

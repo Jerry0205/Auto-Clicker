@@ -23,6 +23,7 @@ pub mod qobject {
         #[qproperty(QString, hotkey)]
         #[qproperty(bool, hotkey_ready)]
         #[qproperty(bool, hotkey_pending)]
+        #[qproperty(bool, hotkey_configuring)]
         #[qproperty(bool, running)]
         #[qproperty(bool, busy)]
         #[qproperty(i64, interval_ms)]
@@ -87,6 +88,7 @@ pub struct AppControllerRust {
     hotkey: QString,
     hotkey_ready: bool,
     hotkey_pending: bool,
+    hotkey_configuring: bool,
     running: bool,
     busy: bool,
     interval_ms: i64,
@@ -121,6 +123,7 @@ impl Default for AppControllerRust {
             hotkey: QString::from(&config.hotkey),
             hotkey_ready: false,
             hotkey_pending: true,
+            hotkey_configuring: false,
             running: false,
             busy: false,
             interval_ms: i64::try_from(config.interval_ms).unwrap_or(100),
@@ -400,12 +403,14 @@ impl qobject::AppController {
             WorkerEvent::HotkeyPhase(phase) => {
                 self.as_mut().set_hotkey_ready(matches!(
                     phase,
-                    HotkeyPhase::Ready | HotkeyPhase::Configuring
+                    HotkeyPhase::Ready | HotkeyPhase::Configuring(true)
                 ));
                 self.as_mut().set_hotkey_pending(matches!(
                     phase,
-                    HotkeyPhase::Registering | HotkeyPhase::Configuring
+                    HotkeyPhase::Registering | HotkeyPhase::Configuring(_)
                 ));
+                self.as_mut()
+                    .set_hotkey_configuring(matches!(phase, HotkeyPhase::Configuring(_)));
             }
             WorkerEvent::StartRequested => {
                 if !*self.running() && !*self.busy() {
