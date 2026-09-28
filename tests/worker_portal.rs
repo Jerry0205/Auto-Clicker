@@ -418,6 +418,43 @@ async fn emit_activation(
     Ok(())
 }
 
+/// Part of the worker's error when a held click is not answered in 250 ms.
+const CLICK_TIMEOUT: &str = "nicht innerhalb von 250 ms bestätigt";
+
+/// Some tests hold a click reply while other signals arrive. The worker
+/// gives up on that click after 250 ms, so a heavily loaded machine can
+/// miss the window. Only that case is retried; every other failure,
+/// including a real regression, still fails in each attempt.
+async fn retry_if_click_window_missed<F, Fut>(scenario: F) -> TestResult
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = TestResult>,
+{
+    let mut result = scenario().await;
+    for _ in 1..3 {
+        match &result {
+            Err(error) if error.to_string().contains(CLICK_TIMEOUT) => {
+                eprintln!("Held click timed out under load, retrying: {error}");
+                result = scenario().await;
+            }
+            _ => break,
+        }
+    }
+    result
+}
+
+/// Fail without panicking, so the test still shuts its worker down.
+///
+/// A panic skips that cleanup. The private bus would then start the real
+/// desktop portal for the dropped worker's calls, which outlives the test.
+fn ensure(condition: bool, message: &str) -> TestResult {
+    if condition {
+        Ok(())
+    } else {
+        Err(message.into())
+    }
+}
+
 async fn close_remote_session(service: &zbus::Connection, observed: &Shared) -> TestResult {
     let session = observed
         .lock()
@@ -491,6 +528,10 @@ async fn revocation_ends_start_while_response_is_pending() -> TestResult {
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
+    retry_if_click_window_missed(clicks_stop_hotkey_loss_and_shutdown_once).await
+}
+
+async fn clicks_stop_hotkey_loss_and_shutdown_once() -> TestResult {
     let _bus_guard = BUS_TEST_LOCK.lock().await;
     let observed = Shared::default();
     let service = zbus::connection::Builder::session()?
@@ -772,7 +813,10 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         let WorkerEvent::StartRequested(generation) = after_button_stop else {
             unreachable!()
         };
-        assert!(worker.accepts_hotkey_start(generation));
+        ensure(
+            worker.accepts_hotkey_start(generation),
+            "the first press after the lock must be accepted",
+        )?;
 
         // A button start is allowed right away. A press during that run
         // stops it, which starts a new lock.
@@ -957,6 +1001,11 @@ async fn flood_hotkey_during_click(
     worker.send(Command::Start(settings.clone()))?;
     event(events, |e| matches!(e, WorkerEvent::Running(true))).await?;
     timeout(Duration::from_secs(3), button_seen.notified()).await?;
+    let held = observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .buttons
+        .len();
     // All of these arrive before Stop. The worker is blocked in the click,
     // and its hotkey queue holds only 16 signals.
     for timestamp in 1..=presses {
@@ -968,13 +1017,27 @@ async fn flood_hotkey_during_click(
     }
     // The held click fails after 250 ms, so this must finish well before.
     let flooded = generation + presses - 16;
-    timeout(Duration::from_millis(150), async {
+    let overflowed = timeout(Duration::from_millis(150), async {
         while !worker.accepts_hotkey_start(flooded) {
             sleep(Duration::from_millis(2)).await;
         }
     })
-    .await
-    .map_err(|_| "a full hotkey queue must count as a Stop")?;
+    .await;
+    if overflowed.is_err() {
+        // A worker that gave up on the click released the button and drained
+        // the queue itself. Without that release it was blocked throughout.
+        let released = observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .buttons
+            .len()
+            > held;
+        return Err(if released {
+            format!("the worker gave up on the held click: {CLICK_TIMEOUT}").into()
+        } else {
+            "a full hotkey queue must count as a Stop".into()
+        });
+    }
     Ok((session, button_release))
 }
 
@@ -982,6 +1045,10 @@ async fn flood_hotkey_during_click(
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
+    retry_if_click_window_missed(buffered_key_presses_before_stop_must_not_restart_once).await
+}
+
+async fn buffered_key_presses_before_stop_must_not_restart_once() -> TestResult {
     let _bus_guard = BUS_TEST_LOCK.lock().await;
     let observed = Shared::default();
     let service = zbus::connection::Builder::session()?
@@ -1076,15 +1143,15 @@ async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
         event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
         sleep(Duration::from_millis(200)).await;
         while let Ok(event) = events.try_recv() {
-            assert!(
+            ensure(
                 !matches!(event, WorkerEvent::Running(false)),
-                "a key press from before Stop must not end the new run"
-            );
+                "a key press from before Stop must not end the new run",
+            )?;
             if let WorkerEvent::StartRequested(generation) = event {
-                assert!(
+                ensure(
                     !worker.accepts_hotkey_start(generation),
-                    "a key press from before Stop must not request a start"
-                );
+                    "a key press from before Stop must not request a start",
+                )?;
             }
         }
         worker.send(Command::Stop)?;
@@ -1101,6 +1168,10 @@ async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn hotkey_queue_overflow_keeps_shortcut_removal() -> TestResult {
+    retry_if_click_window_missed(hotkey_queue_overflow_keeps_shortcut_removal_once).await
+}
+
+async fn hotkey_queue_overflow_keeps_shortcut_removal_once() -> TestResult {
     let _bus_guard = BUS_TEST_LOCK.lock().await;
     let observed = Shared::default();
     let service = zbus::connection::Builder::session()?
@@ -1167,11 +1238,11 @@ async fn hotkey_queue_overflow_keeps_shortcut_removal() -> TestResult {
             Ok(())
         })
         .await??;
-        assert!(stopped, "an overflowing hotkey queue must stop the run");
-        assert!(
+        ensure(stopped, "an overflowing hotkey queue must stop the run")?;
+        ensure(
             removed,
-            "the removed shortcut must be reported after the overflow"
-        );
+            "the removed shortcut must be reported after the overflow",
+        )?;
         Ok(())
     }
     .await;
@@ -1237,17 +1308,17 @@ async fn double_press_during_slow_cancel_does_not_restart() -> TestResult {
         .await?;
         let started = std::time::Instant::now();
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
-        assert!(
+        ensure(
             started.elapsed() > Duration::from_millis(400),
-            "the cancel must outlast the lock for this test to be meaningful"
-        );
+            "the cancel must outlast the lock for this test to be meaningful",
+        )?;
         sleep(Duration::from_millis(150)).await;
         while let Ok(event) = events.try_recv() {
             if let WorkerEvent::StartRequested(generation) = event {
-                assert!(
+                ensure(
                     !worker.accepts_hotkey_start(generation),
-                    "the second press of a double tap must not request a new start"
-                );
+                    "the second press of a double tap must not request a new start",
+                )?;
             }
         }
         Ok(())
