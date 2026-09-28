@@ -255,10 +255,11 @@ Kirigami.ApplicationWindow {
                 wrapMode: Text.WordWrap
                 color: Kirigami.Theme.disabledTextColor
             }
-            RowLayout {
-                Layout.alignment: Qt.AlignRight
+            ColumnLayout {
+                Layout.fillWidth: true
                 Controls.Button {
                     objectName: "continueEditingButton"
+                    Layout.fillWidth: true
                     text: qsTr("Weiter bearbeiten")
                     onClicked: {
                         saveFailureDialog.close()
@@ -267,6 +268,7 @@ Kirigami.ApplicationWindow {
                 }
                 Controls.Button {
                     objectName: "discardSettingsButton"
+                    Layout.fillWidth: true
                     text: qsTr("Ohne Speichern schließen")
                     onClicked: {
                         saveFailureDialog.close()

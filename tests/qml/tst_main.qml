@@ -180,6 +180,9 @@ TestCase {
             const right = button.mapToItem(dialog.contentItem, button.width, 0).x
             verify(right <= dialog.availableWidth, name + " ends at " + right)
         }
+        const continueButton = findChild(main, "continueEditingButton")
+        const discardButton = findChild(main, "discardSettingsButton")
+        verify(discardButton.y >= continueButton.y + continueButton.height)
         // The header close button rejects the dialog.
         dialog.reject()
         tryCompare(dialog, "opened", false)
