@@ -80,6 +80,8 @@ Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So
 
 Du möchtest Klickmeister selbst bauen, verändern oder überprüfen? Die wichtigsten Befehle sind:
 
+Für die QML-Codevervollständigung und Fehleranzeige mit `qmlls` zuerst `cargo build --locked` ausführen und danach `bash scripts/setup-qmlls.sh`. Das Skript ermittelt das wirksame Cargo-Buildverzeichnis (auch bei `CARGO_TARGET_DIR` oder `build.target-dir`) und schreibt die lokale, von Git ignorierte `.qmlls.ini`. Nach einem Wechsel des Buildverzeichnisses das Skript erneut ausführen. Für das Skript und den folgenden Test wird Python 3 benötigt. `python tests/check_qmlls_checkout.py` prüft den committeten Stand in einem frischen Checkout mit einem anderen Pfad und fragt die `AppController`-Eigenschaften direkt beim QML-Sprachserver ab.
+
 ```bash
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
@@ -94,6 +96,8 @@ KLICKMEISTER_TEST_SCALE=1.5 bash tests/qml-wayland.sh
 ```
 
 Die QML-Tests verwenden denselben KDE-Control-Stil wie die App und für das Hauptfenster einen Controller-Testersatz. Die AT-SPI-Prüfung startet dieses Hauptfenster ohne Worker und bestätigt die zugänglichen Namen der X-/Y-SpinBoxen sowie ihrer Texteingaben im Accessibility-Baum. Die separaten D-Bus-Tests prüfen den echten Rust-Worker gegen simulierte Portale, einschließlich Klickfolgen, Stop-Hotkey, Sitzungsende und Button-Release-Fehlern. Sie erzeugen keine tatsächlichen Mausklicks auf dem Desktop. Echte KDE-Freigabedialoge und die Zeigersteuerung auf physischen Monitoren müssen zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft werden.
+
+GitHub Actions führt bei Pull Requests und Änderungen an `main` Formatierung, Clippy, Rust-Tests, die ignorierten Portaltests auf einem privaten D-Bus, QML-Tests im KDE-Stil, Python-Wächtertests und die Desktop-/AppStream-Validierung aus. Anschließend wird das Release-Programm gebaut und mit `tests/qml-smoke.sh` geprüft. Ein eigener Job führt die QML-Tests unter einem isolierten virtuellen KWin mit drei Monitoren aus. Beide Jobs verwenden ein Arch-Linux-Containerimage und die Cargo-Lockdatei; native Tests mit echten KDE-Dialogen bleiben eine manuelle Prüfung.
 
 Die abgesicherten nativen Testwerkzeuge und ihre Voraussetzungen sind unter [tests/native](tests/native/README.md) dokumentiert.
 
