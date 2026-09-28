@@ -527,6 +527,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
                 &(Options::new(),),
             )
             .await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey-Sitzung"))).await?;
         worker.send(Command::Start(settings.clone()))?;
@@ -581,6 +582,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
             (state.hotkey_session.clone(), state.hotkey_created, state.configure_calls)
         };
         shortcuts_changed(&service, &session, "").await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?;
         worker.send(Command::Start(settings))?;
@@ -776,10 +778,12 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         close_remote_session(&service, &observed).await?;
         release.notify_one();
         let mut incorrectly_started = false;
+        let mut reported_error_state = false;
         timeout(Duration::from_secs(3), async {
             while let Some(event) = events.recv().await {
                 match event {
                     WorkerEvent::State(RunState::Clicking) => incorrectly_started = true,
+                    WorkerEvent::State(RunState::Error) => reported_error_state = true,
                     WorkerEvent::Error(_) => break,
                     _ => {}
                 }
@@ -787,6 +791,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         })
         .await?;
         assert!(!incorrectly_started, "revoked permission must not start a run");
+        assert!(reported_error_state, "revoked permission must end the pending start");
         observed.lock().unwrap_or_else(|e| e.into_inner()).delay_start = false;
         worker.send(Command::Start(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
