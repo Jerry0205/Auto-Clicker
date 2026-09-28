@@ -241,7 +241,8 @@ TestCase {
         main.height = main.minimumHeight
         controller.current_position = !data.fixed
         controller.fixed_position_confirmed = false
-        controller.error_message = "Ein Portalfehler mit zusätzlicher Beschreibung"
+        // Keep scrolling necessary even with smaller CI fonts and icon themes.
+        controller.error_message = Array(16).join("Ein Portalfehler mit zusätzlicher Beschreibung. ")
         controller.status = data.busy ? "Warte auf Wayland-Berechtigung …" : (data.running ? "Klickt" : "Bereit")
         controller.hotkey_ready = data.ready
         controller.hotkey_pending = data.pending
@@ -272,7 +273,8 @@ TestCase {
         compare(status.text, expectedStatus)
 
         const flickable = main.pageStack.currentItem.flickable
-        verify(flickable.contentHeight > flickable.height, "Settings must remain scrollable")
+        tryVerify(function() { return flickable.contentHeight > flickable.height },
+                  1000, "Settings must remain scrollable")
         flickable.contentY = flickable.contentHeight - flickable.height
         wait(50)
         verify(button.visible && inWindow(button), "Scrolling settings must not move the run control")
