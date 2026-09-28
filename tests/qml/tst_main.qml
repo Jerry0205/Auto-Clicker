@@ -188,4 +188,38 @@ TestCase {
     function test_repeat_count_is_labeled_as_cycles() {
         compare(findChild(main, "repeatCountLabel").text, "Klickzyklen")
     }
+
+    function test_hotkey_recovery_controls() {
+        const retry = findChild(main, "hotkeyConfigureButton")
+        const start = findChild(main, "startStopButton")
+        const status = findChild(main, "hotkeyStatusLabel")
+        verify(retry !== null)
+        verify(start !== null)
+        verify(status !== null)
+
+        controller.hotkey_ready = false
+        controller.hotkey_pending = false
+        compare(retry.text, "Erneut versuchen")
+        compare(status.text, "Nicht verfügbar")
+        compare(retry.enabled, true)
+        compare(start.enabled, false)
+
+        controller.hotkey_pending = true
+        compare(status.text, "Wird eingerichtet …")
+        compare(retry.enabled, false)
+        compare(start.enabled, false)
+
+        controller.hotkey_ready = true
+        controller.hotkey_configuring = true
+        compare(status.text, "Öffnet Dialog …")
+        compare(retry.enabled, false)
+        compare(start.enabled, false)
+
+        controller.hotkey_pending = false
+        controller.hotkey_configuring = false
+        compare(status.text, "Pause")
+        compare(retry.text, "Ändern …")
+        compare(retry.enabled, true)
+        compare(start.enabled, true)
+    }
 }

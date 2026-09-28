@@ -1,4 +1,5 @@
 use std::{
+    fmt, io,
     pin::Pin,
     sync::{
         Arc,
@@ -17,8 +18,11 @@ use ashpd::desktop::{
 };
 use futures_util::{Stream, StreamExt, future};
 use tokio::{
-    runtime::Builder,
-    sync::{mpsc, oneshot, watch},
+    runtime::{Builder, Runtime},
+    sync::{
+        mpsc::{self, error::TrySendError},
+        oneshot, watch,
+    },
     task::JoinHandle,
     time::{Instant, sleep_until, timeout},
 };
@@ -41,7 +45,7 @@ const HOTKEY_REARM_DELAY: Duration = Duration::from_millis(300);
 pub enum Command {
     Start(ClickSettings),
     Stop,
-    ConfigureHotkey,
+    ConfigureHotkey(String),
     Shutdown,
 }
 
@@ -50,8 +54,17 @@ pub enum WorkerEvent {
     Status(String),
     Running(bool),
     Hotkey(String),
+    HotkeyPhase(HotkeyPhase),
     StartRequested(u64),
     Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyPhase {
+    Unavailable,
+    Registering,
+    Ready,
+    Configuring(bool),
 }
 
 pub struct WorkerHandle {
@@ -73,40 +86,49 @@ enum QueuedCommand {
         settings: ClickSettings,
         generation: u64,
     },
-    ConfigureHotkey,
+    ConfigureHotkey(String),
 }
+
+const WORKER_STOPPED: &str = "Der Hintergrund-Worker läuft nicht mehr.";
 
 impl WorkerHandle {
     pub fn spawn<F>(initial: ClickSettings, preferred_hotkey: String, emit: F) -> Self
     where
         F: Fn(WorkerEvent) + Send + Sync + 'static,
     {
+        let builder = thread::Builder::new().name("klickmeister-worker".to_owned());
+        Self::spawn_with(builder, initial, preferred_hotkey, Arc::new(emit))
+    }
+
+    /// Spawn with an injectable thread builder and report start failures as errors.
+    fn spawn_with(
+        builder: thread::Builder,
+        initial: ClickSettings,
+        preferred_hotkey: String,
+        emit: Emitter,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let (control, control_rx) = watch::channel(ControlState::default());
         let worker_control = control.clone();
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = Arc::clone(&closing);
-        let emit = Arc::new(emit);
-        let join = thread::Builder::new()
-            .name("klickmeister-worker".to_owned())
+        let worker_emit = Arc::clone(&emit);
+        let join = builder
             .spawn(move || {
+                // Runtime construction only fails for OS resource exhaustion.
                 let runtime = Builder::new_current_thread().enable_all().build();
-                match runtime {
-                    Ok(runtime) => runtime.block_on(run_worker(
-                        rx,
-                        control_rx,
-                        worker_control,
-                        initial,
-                        preferred_hotkey,
-                        emit,
-                        worker_closing,
-                    )),
-                    Err(error) => {
-                        // Runtime construction only fails for OS resource exhaustion.
-                        eprintln!("Klickmeister worker runtime failed: {error}");
-                    }
-                }
+                let worker = run_worker(
+                    rx,
+                    control_rx,
+                    worker_control,
+                    initial,
+                    preferred_hotkey,
+                    Arc::clone(&worker_emit),
+                    worker_closing,
+                );
+                block_on_runtime(runtime, &worker_emit, worker);
             })
+            .inspect_err(|error| (emit)(worker_start_failed(error)))
             .ok();
         Self {
             tx,
@@ -121,7 +143,7 @@ impl WorkerHandle {
             return Err("Die Anwendung wird bereits beendet.");
         }
         if self.control.is_closed() {
-            return Err("Der Hintergrund-Worker ist nicht mehr erreichbar.");
+            return Err(WORKER_STOPPED);
         }
         match command {
             Command::Stop => {
@@ -141,7 +163,9 @@ impl WorkerHandle {
                     generation,
                 })
             }
-            Command::ConfigureHotkey => self.enqueue(QueuedCommand::ConfigureHotkey),
+            Command::ConfigureHotkey(preferred) => {
+                self.enqueue(QueuedCommand::ConfigureHotkey(preferred))
+            }
         }
     }
 
@@ -163,10 +187,8 @@ impl WorkerHandle {
 
     fn enqueue(&self, command: QueuedCommand) -> Result<(), &'static str> {
         self.tx.try_send(command).map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => "Der interne Befehlskanal ist ausgelastet.",
-            mpsc::error::TrySendError::Closed(_) => {
-                "Der Hintergrund-Worker ist nicht mehr erreichbar."
-            }
+            TrySendError::Full(_) => "Der interne Befehlskanal ist ausgelastet.",
+            TrySendError::Closed(_) => WORKER_STOPPED,
         })
     }
 
@@ -197,6 +219,27 @@ impl WorkerHandle {
 impl Drop for WorkerHandle {
     fn drop(&mut self) {
         self.request_shutdown();
+    }
+}
+
+fn worker_start_failed(error: &dyn fmt::Display) -> WorkerEvent {
+    WorkerEvent::Error(format!(
+        "Der Hintergrund-Worker konnte nicht starten: {error}"
+    ))
+}
+
+fn block_on_runtime(
+    runtime: io::Result<Runtime>,
+    emit: &Emitter,
+    worker: impl std::future::Future<Output = ()>,
+) {
+    match runtime {
+        Ok(runtime) => runtime.block_on(worker),
+        Err(error) => {
+            // Close the command channel before the UI can react to the error.
+            drop(worker);
+            (emit)(worker_start_failed(&error));
+        }
     }
 }
 
@@ -231,7 +274,7 @@ struct HotkeyRegistration {
     connection: ashpd::zbus::Connection,
     portal: GlobalShortcuts,
     session: Session<GlobalShortcuts>,
-    actual: String,
+    actual: Option<String>,
 }
 
 /// Bind the stop hotkey on an owned connection and clean up failed or cancelled requests.
@@ -269,12 +312,13 @@ async fn setup_hotkey(
             .map_err(|error| format!("Hotkey konnte nicht angefragt werden: {error}"))?
             .response()
             .map_err(|error| format!("Hotkey wurde nicht freigegeben: {error}"))?;
-        let actual = response
+        let shortcut = response
             .shortcuts()
             .iter()
             .find(|shortcut| shortcut.id() == HOTKEY_ID)
-            .map(|shortcut| shortcut.trigger_description().to_owned())
-            .ok_or_else(|| "KWin hat keinen globalen Hotkey gebunden.".to_owned())?;
+            .ok_or_else(|| "KWin hat keinen globalen Stop-Hotkey gebunden.".to_owned())?;
+        let actual = (!shortcut.trigger_description().trim().is_empty())
+            .then(|| shortcut.trigger_description().to_owned());
         Ok((portal, actual))
     };
     let result = tokio::select! {
@@ -393,8 +437,8 @@ fn queue_hotkey_events(
             let generation = control.borrow().generation;
             match tx.try_send(QueuedHotkeySignal { signal, generation }) {
                 Ok(()) => {}
-                Err(mpsc::error::TrySendError::Closed(_)) => break,
-                Err(mpsc::error::TrySendError::Full(QueuedHotkeySignal { signal, .. })) => {
+                Err(TrySendError::Closed(_)) => break,
+                Err(TrySendError::Full(QueuedHotkeySignal { signal, .. })) => {
                     control.send_modify(|state| {
                         state.generation = state.generation.wrapping_add(1);
                     });
@@ -493,10 +537,12 @@ async fn run_worker(
     let mut configure_task: Option<JoinHandle<Result<(), String>>> = None;
     let mut hotkey: Option<HotkeyState> = None;
     let mut hotkey_quiet_until: Option<Instant> = None;
+    let mut hotkey_bound = false;
 
     (emit)(WorkerEvent::Status(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
     ));
+    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
 
     loop {
         let tick_deadline = active.as_ref().map(|run| run.next_tick);
@@ -520,7 +566,7 @@ async fn run_worker(
                         if generation != control.borrow().generation {
                             continue;
                         }
-                        if hotkey.is_none() {
+                        if !hotkey_bound || configure_task.is_some() {
                             (emit)(WorkerEvent::Error("Vor dem Start muss der globale Stop-Hotkey von KWin bestätigt sein.".to_owned()));
                             continue;
                         }
@@ -551,13 +597,14 @@ async fn run_worker(
                             start_task = Some(tokio::spawn(setup_click_session(settings.monitor, rx)));
                         }
                     }
-                    QueuedCommand::ConfigureHotkey => {
-                        if configure_task.is_some() {
+                    QueuedCommand::ConfigureHotkey(preferred) => {
+                        if configure_task.is_some() || hotkey_task.is_some() {
                             continue;
                         }
                         if let Some(state) = &hotkey {
                             let portal = Arc::clone(&state.portal);
                             let session = Arc::clone(&state.session);
+                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(hotkey_bound)));
                             configure_task = Some(tokio::spawn(async move {
                                 portal
                                     .configure_shortcuts(
@@ -569,7 +616,11 @@ async fn run_worker(
                                     .map_err(|error| format!("Hotkey-Dialog konnte nicht geöffnet werden: {error}"))
                             }));
                         } else {
-                            (emit)(WorkerEvent::Error("Der globale Hotkey ist noch nicht verfügbar.".to_owned()));
+                            let (tx, rx) = oneshot::channel();
+                            hotkey_cancel = Some(tx);
+                            hotkey_task = Some(tokio::spawn(setup_hotkey(preferred, rx)));
+                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
+                            (emit)(WorkerEvent::Status("Hotkey wird erneut eingerichtet …".to_owned()));
                         }
                     }
                 }
@@ -634,6 +685,7 @@ async fn run_worker(
                                 if !watching {
                                     let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                     let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+                                    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
                                     (emit)(WorkerEvent::Error("Die Hotkey-Sitzung kann nicht überwacht werden.".to_owned()));
                                     continue;
                                 }
@@ -652,26 +704,50 @@ async fn run_worker(
                                     events,
                                     event_task,
                                 });
-                                (emit)(WorkerEvent::Hotkey(actual));
-                                if machine.state() == RunState::Ready {
-                                    (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                                if let Some(actual) = actual {
+                                    hotkey_bound = true;
+                                    (emit)(WorkerEvent::Hotkey(actual));
+                                    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Ready));
+                                    if matches!(machine.state(), RunState::Ready | RunState::Stopped | RunState::Error) {
+                                        (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                                    }
+                                } else {
+                                    hotkey_bound = false;
+                                    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                                    (emit)(WorkerEvent::Error("KWin hat keinen globalen Stop-Hotkey gebunden.".to_owned()));
                                 }
                             }
                             Err(error) => {
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+                                (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
                                 (emit)(WorkerEvent::Error(format!("Hotkey-Signale sind nicht verfügbar: {error}")));
                             }
                         }
                     }
-                    Ok(Err(error)) => (emit)(WorkerEvent::Error(error)),
-                    Err(error) if !error.is_cancelled() => (emit)(WorkerEvent::Error(format!("Hotkey-Aufgabe ist fehlgeschlagen: {error}"))),
-                    Err(_) => {}
+                    Ok(Err(error)) => {
+                        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                        (emit)(WorkerEvent::Error(error));
+                    }
+                    Err(error) if !error.is_cancelled() => {
+                        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                        (emit)(WorkerEvent::Error(format!("Hotkey-Aufgabe ist fehlgeschlagen: {error}")));
+                    }
+                    Err(_) => (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable)),
                 }
             }
             result = wait_task(&mut configure_task), if configure_task.is_some() => {
                 configure_task = None;
+                // ConfigureShortcuts only acknowledges the method call. The portal
+                // does not report when its settings window is closed.
+                (emit)(WorkerEvent::HotkeyPhase(if hotkey_bound { HotkeyPhase::Ready } else { HotkeyPhase::Unavailable }));
                 match result {
+                    Ok(Ok(())) if hotkey_bound && !matches!(machine.state(), RunState::Starting | RunState::Clicking) => {
+                        (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                    }
+                    Ok(Ok(())) if !hotkey_bound => {
+                        (emit)(WorkerEvent::Status("Warte auf globalen Stop-Hotkey …".to_owned()));
+                    }
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
                         stop_run(&mut machine, &mut active, &emit);
@@ -695,7 +771,7 @@ async fn run_worker(
                     },
                 };
                 match signal {
-                    HotkeySignal::Activated(activation) if activation.shortcut_id() == HOTKEY_ID => {
+                    HotkeySignal::Activated(activation) if activation.shortcut_id() == HOTKEY_ID && hotkey_bound => {
                         // The press was received before a later Stop.
                         if generation != control.borrow().generation {
                             continue;
@@ -707,27 +783,30 @@ async fn run_worker(
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
                             hotkey_quiet_until = Some(Instant::now() + HOTKEY_REARM_DELAY);
-                        } else if hotkey_quiet_until.is_none_or(|until| Instant::now() >= until) {
+                        } else if configure_task.is_none() && hotkey_quiet_until.is_none_or(|until| Instant::now() >= until) {
                             // Ask the Qt side to start so the current UI values are
                             // collected, validated and saved. Keeping a settings copy
                             // here made hotkey starts use values from the previous run.
                             (emit)(WorkerEvent::StartRequested(generation));
                         }
-                        // Otherwise the press was still on the bus when Stop was
-                        // requested. It may stop a run, but never start one.
+                        // Otherwise the settings dialog is open, or the press was still
+                        // on the bus when Stop was requested. It may stop a run, but
+                        // never start one.
                     }
                     HotkeySignal::Changed(changed) => {
-                        if let Some(shortcut) = changed.shortcuts().iter().find(|shortcut| shortcut.id() == HOTKEY_ID) {
+                        if let Some(shortcut) = changed.shortcuts().iter().find(|shortcut| shortcut.id() == HOTKEY_ID && !shortcut.trigger_description().trim().is_empty()) {
+                            hotkey_bound = true;
                             (emit)(WorkerEvent::Hotkey(shortcut.trigger_description().to_owned()));
+                            (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(true) } else { HotkeyPhase::Ready }));
+                            if configure_task.is_none() && !matches!(machine.state(), RunState::Starting | RunState::Clicking) {
+                                (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                            }
                         } else {
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
                             machine.fail();
-                            if let Some(state) = hotkey.take() {
-                                state.event_task.abort();
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
-                            }
+                            hotkey_bound = false;
+                            (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(false) } else { HotkeyPhase::Unavailable }));
                             (emit)(WorkerEvent::Error("Der globale Stop-Hotkey wurde entfernt.".to_owned()));
                         }
                     }
@@ -736,6 +815,9 @@ async fn run_worker(
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         stop_run(&mut machine, &mut active, &emit);
                         machine.fail();
+                        if let Some(task) = configure_task.take() { task.abort(); }
+                        hotkey_bound = false;
+                        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
                         (emit)(WorkerEvent::Error("Die globale Hotkey-Sitzung wurde beendet.".to_owned()));
                         if let Some(state) = hotkey.take() {
                             state.event_task.abort();
@@ -843,7 +925,8 @@ fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &E
 mod tests {
     use super::*;
 
-    /// Hold the worker receiver still so the queue is deterministically full.
+    /// Keep the worker side in the test, so the queue fills deterministically
+    /// and the test decides when the worker counts as stopped.
     fn stalled_handle(
         capacity: usize,
     ) -> (
@@ -866,7 +949,11 @@ mod tests {
     fn stop_bypasses_full_queue_and_discards_older_starts() {
         let (handle, mut commands, mut control) = stalled_handle(1);
         assert!(handle.send(Command::Start(settings())).is_ok());
-        assert!(handle.send(Command::ConfigureHotkey).is_err());
+        assert!(
+            handle
+                .send(Command::ConfigureHotkey(String::new()))
+                .is_err()
+        );
 
         assert!(handle.send(Command::Stop).is_ok());
         assert!(!handle.accepts_hotkey_start(0));
@@ -973,6 +1060,70 @@ mod tests {
         assert_eq!(machine.state(), RunState::Error);
         assert_eq!(request_validated_start(&mut machine, &settings()), Ok(true));
         assert!(machine.started());
+    }
+
+    fn recording_emitter() -> (Emitter, std::sync::mpsc::Receiver<WorkerEvent>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let emit: Emitter = Arc::new(move |event| {
+            let _ = tx.send(event);
+        });
+        (emit, rx)
+    }
+
+    const START_FAILED: &str = "Der Hintergrund-Worker konnte nicht starten:";
+    const WORKER_GONE: Result<(), &str> = Err("Der Hintergrund-Worker läuft nicht mehr.");
+
+    #[test]
+    fn failed_thread_start_is_reported_and_commands_name_stopped_worker() {
+        let (emit, events) = recording_emitter();
+        // An impossible stack size makes spawning fail without exhausting resources.
+        let builder = thread::Builder::new().stack_size(usize::MAX);
+        let worker = WorkerHandle::spawn_with(builder, settings(), String::new(), emit);
+        assert!(worker.join.is_none());
+        let reported: Vec<_> = events.try_iter().collect();
+        assert!(matches!(
+            reported.as_slice(),
+            [WorkerEvent::Error(message)] if message.starts_with(START_FAILED)
+        ));
+        assert_eq!(worker.send(Command::Stop), WORKER_GONE);
+    }
+
+    #[test]
+    fn failed_runtime_closes_command_channel_before_reporting() {
+        let (worker, commands, control) = stalled_handle(COMMAND_CAPACITY);
+        let queue = worker.tx.clone();
+        let stop = worker.control.clone();
+        let (events_tx, events) = std::sync::mpsc::channel();
+        let emit: Emitter = Arc::new(move |event| {
+            let _ = events_tx.send((event, queue.is_closed() && stop.is_closed()));
+        });
+        block_on_runtime(Err(io::Error::other("Testfehler")), &emit, async move {
+            let _worker_side = (commands, control);
+            panic!("the worker must not run without a runtime");
+        });
+        let reported: Vec<_> = events.try_iter().collect();
+        assert!(matches!(
+            reported.as_slice(),
+            [(WorkerEvent::Error(message), true)] if *message == format!("{START_FAILED} Testfehler")
+        ));
+        assert_eq!(worker.send(Command::Stop), WORKER_GONE);
+        assert_eq!(worker.send(Command::Start(settings())), WORKER_GONE);
+    }
+
+    #[test]
+    fn full_command_channel_is_distinguished_from_stopped_worker() {
+        let (worker, commands, control) = stalled_handle(1);
+        assert_eq!(worker.send(Command::Start(settings())), Ok(()));
+        assert_eq!(
+            worker.send(Command::Start(settings())),
+            Err("Der interne Befehlskanal ist ausgelastet.")
+        );
+        // Stop does not use the queue, so it still reaches a busy worker.
+        assert_eq!(worker.send(Command::Stop), Ok(()));
+        drop(commands);
+        assert_eq!(worker.send(Command::Start(settings())), WORKER_GONE);
+        drop(control);
+        assert_eq!(worker.send(Command::Stop), WORKER_GONE);
     }
 
     #[test]

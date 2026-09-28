@@ -78,6 +78,7 @@ Klickmeister benötigt die Erlaubnis:
 Das Programm liest keine Tastatureingaben, Passwörter oder Zwischenablagen mit. Klickmeister fordert keine Screenshots an. Die Bildschirmfreigabe bei fester Position dient nur der Koordinatenzuordnung; dabei wird weder ein Bild noch ein Video gelesen. Alle Freigaben enden, sobald du Klickmeister schließt.
 
 Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So kannst du ihn immer sicher anhalten.
+Wenn du die Hotkey-Freigabe ablehnst, die Stop-Taste entfernst oder KDE die Hotkey-Sitzung beendet, kannst du sie im Abschnitt „Globaler Hotkey“ mit „Erneut versuchen“ neu einrichten, ohne Klickmeister neu zu starten.
 
 ## Gut zu wissen
 
