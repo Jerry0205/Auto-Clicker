@@ -27,7 +27,9 @@ QtObject {
     function initialize() {}
     function shutdown() {}
     function start() {}
-    function stop() { running = false; busy = false }
+    // Lets tests model the worker reporting state after an asynchronous stop.
+    property bool deferStop: false
+    function stop() { if (!deferStop) { running = false; busy = false } }
     function toggle() {}
     function configure_hotkey() {}
     function clear_error() { error_message = "" }

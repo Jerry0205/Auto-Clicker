@@ -13,6 +13,8 @@ Kirigami.ApplicationWindow {
     property var positionPicker: null
     property int captureSequence: 0
     property bool monitorRestored: false
+    // Keeps the stop reason visible until the stopped run has fully ended.
+    property bool monitorStopPending: false
     readonly property var monitorOptions: {
         const screens = Qt.application.screens
         const options = []
@@ -63,8 +65,9 @@ Kirigami.ApplicationWindow {
         // Cursor-position runs never use the selected monitor.
         if ((controller.running || controller.busy) && !controller.current_position
                 && (moved || !controller.fixed_position_confirmed)) {
-            controller.stop()
+            monitorStopPending = true
             monitorStopMessage.visible = true
+            controller.stop()
         }
         controller.monitor_identity = identity
         controller.monitor_x = x
@@ -169,6 +172,12 @@ Kirigami.ApplicationWindow {
         }
     }
     onScreenChanged: ensureMonitorSelection()
+    // A stop is asynchronous, so a run may still report Running(true) first.
+    function updateMonitorStopMessage() {
+        if (!controller.running && !controller.busy) monitorStopPending = false
+        else if (!monitorStopPending) monitorStopMessage.visible = false
+    }
+
     function handleScreensChanged() {
         finishPicker()
         ensureMonitorSelection()
@@ -216,8 +225,8 @@ Kirigami.ApplicationWindow {
                 function onError_messageChanged() {
                     errorBanner.visible = controller.error_message.length > 0
                 }
-                function onRunningChanged() { if (controller.running) monitorStopMessage.visible = false }
-                function onBusyChanged() { if (controller.busy) monitorStopMessage.visible = false }
+                function onRunningChanged() { root.updateMonitorStopMessage() }
+                function onBusyChanged() { root.updateMonitorStopMessage() }
             }
 
             Kirigami.InlineMessage {
