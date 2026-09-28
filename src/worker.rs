@@ -296,14 +296,21 @@ async fn discard_closed_click_session(
     active: &mut Option<ActiveRun>,
     emit: &Emitter,
 ) {
+    let was_running = matches!(machine.state(), RunState::Starting | RunState::Clicking);
     stop_run(machine, active, emit);
-    machine.fail();
     if let Some(session) = session.take() {
         session.close().await;
     }
-    (emit)(WorkerEvent::Error(
-        "Die Wayland-Berechtigung wurde beendet.".to_owned(),
-    ));
+    if was_running {
+        machine.fail();
+        (emit)(WorkerEvent::Error(
+            "Die Wayland-Berechtigung wurde beendet.".to_owned(),
+        ));
+    } else {
+        (emit)(WorkerEvent::Status(
+            "Wayland-Berechtigung beendet – wird beim nächsten Start neu angefragt".to_owned(),
+        ));
+    }
 }
 
 async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task::JoinError> {

@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc};
 
 use ashpd::desktop::{
     PersistMode, Session,
@@ -8,7 +8,7 @@ use ashpd::desktop::{
     },
     screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
 };
-use futures_util::{FutureExt, StreamExt};
+use futures_util::{FutureExt, StreamExt, future::FusedFuture};
 use thiserror::Error;
 use tokio::{
     sync::oneshot,
@@ -67,7 +67,7 @@ pub struct PortalClickSession {
     stream: Option<MonitorStream>,
 }
 
-type ClosedWatcher = Pin<Box<dyn Future<Output = ()> + Send>>;
+type ClosedWatcher = Pin<Box<dyn FusedFuture<Output = ()> + Send>>;
 
 #[derive(Debug, Clone, Copy)]
 struct MonitorStream {
@@ -101,7 +101,7 @@ impl PortalClickSession {
         match result {
             Ok((portal, stream)) => {
                 let mut closed = closed.ok_or(PortalError::SessionWatchUnavailable)?;
-                if closed.as_mut().now_or_never().is_some() {
+                if closed.is_terminated() || closed.as_mut().now_or_never().is_some() {
                     if let Some(session) = session {
                         let _ = timeout(CLOSE_TIMEOUT, session.close()).await;
                     }
@@ -154,12 +154,15 @@ impl PortalClickSession {
         let session = owned_session.as_ref().ok_or(PortalError::Cancelled)?;
         let watched_session = Arc::clone(session);
         let (ready_tx, ready_rx) = oneshot::channel();
-        let mut closed: ClosedWatcher = Box::pin(async move {
-            if let Ok(mut events) = watched_session.receive_closed().await {
-                let _ = ready_tx.send(());
-                let _ = events.next().await;
+        let mut closed: ClosedWatcher = Box::pin(
+            async move {
+                if let Ok(mut events) = watched_session.receive_closed().await {
+                    let _ = ready_tx.send(());
+                    let _ = events.next().await;
+                }
             }
-        });
+            .fuse(),
+        );
         let watching = timeout(CLOSE_TIMEOUT, async {
             tokio::select! {
                 result = ready_rx => result.is_ok(),
@@ -172,65 +175,76 @@ impl PortalClickSession {
             return Err(PortalError::SessionWatchUnavailable);
         }
         *owned_closed = Some(closed);
-        portal
-            .select_devices(
-                session,
-                SelectDevicesOptions::default()
-                    .set_devices(Some(DeviceType::Pointer.into()))
-                    .set_persist_mode(PersistMode::Application),
-            )
-            .await
-            .map_err(PortalError::Unavailable)?;
-
-        if fixed_position {
-            let screencast = Screencast::with_connection(connection.clone())
-                .await
-                .map_err(PortalError::Unavailable)?;
-            screencast
-                .select_sources(
+        let closed = owned_closed
+            .as_mut()
+            .ok_or(PortalError::SessionWatchUnavailable)?;
+        let permission = async {
+            portal
+                .select_devices(
                     session,
-                    SelectSourcesOptions::default()
-                        .set_sources(Some(SourceType::Monitor.into()))
-                        .set_multiple(false)
-                        .set_cursor_mode(CursorMode::Hidden),
+                    SelectDevicesOptions::default()
+                        .set_devices(Some(DeviceType::Pointer.into()))
+                        .set_persist_mode(PersistMode::Application),
                 )
                 .await
                 .map_err(PortalError::Unavailable)?;
-        }
 
-        let selected = portal
-            .start(session, None, Default::default())
-            .await
-            .map_err(PortalError::Unavailable)?
-            .response()
-            .map_err(PortalError::Denied)?;
-        if !selected.devices().contains(DeviceType::Pointer) {
-            return Err(PortalError::PointerNotGranted);
-        }
-
-        let stream = if fixed_position {
-            let Some(stream) = selected.streams().first() else {
-                return Err(PortalError::MissingMonitorStream);
-            };
-            let Some((width, height)) = stream.size() else {
-                return Err(PortalError::MissingMonitorStream);
-            };
-            if let Some(expected) = monitor
-                && let Err(error) = validate_monitor(expected, stream.position(), (width, height))
-            {
-                return Err(error);
+            if fixed_position {
+                let screencast = Screencast::with_connection(connection.clone())
+                    .await
+                    .map_err(PortalError::Unavailable)?;
+                screencast
+                    .select_sources(
+                        session,
+                        SelectSourcesOptions::default()
+                            .set_sources(Some(SourceType::Monitor.into()))
+                            .set_multiple(false)
+                            .set_cursor_mode(CursorMode::Hidden),
+                    )
+                    .await
+                    .map_err(PortalError::Unavailable)?;
             }
-            Some(MonitorStream {
-                node_id: stream.pipe_wire_node_id(),
-                position: stream.position(),
-                width,
-                height,
-            })
-        } else {
-            None
-        };
 
-        Ok((portal, stream))
+            let selected = portal
+                .start(session, None, Default::default())
+                .await
+                .map_err(PortalError::Unavailable)?
+                .response()
+                .map_err(PortalError::Denied)?;
+            if !selected.devices().contains(DeviceType::Pointer) {
+                return Err(PortalError::PointerNotGranted);
+            }
+
+            let stream = if fixed_position {
+                let Some(stream) = selected.streams().first() else {
+                    return Err(PortalError::MissingMonitorStream);
+                };
+                let Some((width, height)) = stream.size() else {
+                    return Err(PortalError::MissingMonitorStream);
+                };
+                if let Some(expected) = monitor
+                    && let Err(error) =
+                        validate_monitor(expected, stream.position(), (width, height))
+                {
+                    return Err(error);
+                }
+                Some(MonitorStream {
+                    node_id: stream.pipe_wire_node_id(),
+                    position: stream.position(),
+                    width,
+                    height,
+                })
+            } else {
+                None
+            };
+
+            Ok((portal, stream))
+        };
+        tokio::select! {
+            biased;
+            _ = closed.as_mut() => Err(PortalError::SessionClosed),
+            result = permission => result,
+        }
     }
 
     /// Reuse a session only when its granted monitor matches current settings.
@@ -251,7 +265,7 @@ impl PortalClickSession {
 
     /// Poll a queued revocation before reusing a session for a new run.
     pub fn is_closed(&mut self) -> bool {
-        self.closed.as_mut().now_or_never().is_some()
+        self.closed.is_terminated() || self.closed.as_mut().now_or_never().is_some()
     }
 
     /// Move within the verified monitor if needed and emit a bounded click cycle.
