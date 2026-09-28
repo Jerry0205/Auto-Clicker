@@ -29,7 +29,7 @@ class LanguageServer:
             cwd=checkout,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
         self.buffer = b""
 
@@ -152,11 +152,33 @@ def main():
         run("cargo", "build", "--locked", cwd=checkout, env=build_env)
         run("bash", "scripts/setup-qmlls.sh", cwd=checkout, env=build_env)
         configuration = (checkout / ".qmlls.ini").read_text()
-        expected_dir = target_dir / "cxxqt/qml_modules"
+        expected_dir = target_dir.resolve() / "cxxqt/qml_modules"
         if f'buildDir="{expected_dir}"' not in configuration:
             raise AssertionError(f"Wrong qmlls build directory:\n{configuration}")
         check_completion(checkout)
-        print("Fresh checkout: qmlls resolves AppController and its properties.")
+
+        cargo_config = checkout / ".cargo/config.toml"
+        cargo_config.parent.mkdir(exist_ok=True)
+        cargo_config.write_text(
+            f"[build]\ntarget-dir = {json.dumps(str(checkout / 'unused cargo output'))}\n"
+        )
+        run("bash", "scripts/setup-qmlls.sh", cwd=checkout, env=build_env)
+        configuration = (checkout / ".qmlls.ini").read_text()
+        if f'buildDir="{expected_dir}"' not in configuration:
+            raise AssertionError(f"CARGO_TARGET_DIR did not override Cargo config:\n{configuration}")
+
+        cargo_config.write_text(f"[build]\ntarget-dir = {json.dumps(str(target_dir))}\n")
+        config_env = build_env.copy()
+        config_env.pop("CARGO_TARGET_DIR")
+        config_env.pop("CARGO_BUILD_TARGET_DIR", None)
+        run("cargo", "build", "--locked", cwd=checkout, env=config_env)
+        (checkout / ".qmlls.ini").unlink()
+        run("bash", "scripts/setup-qmlls.sh", cwd=checkout, env=config_env)
+        configuration = (checkout / ".qmlls.ini").read_text()
+        if f'buildDir="{expected_dir}"' not in configuration:
+            raise AssertionError(f"Wrong qmlls build directory with Cargo config:\n{configuration}")
+        check_completion(checkout)
+        print("Fresh checkout: qmlls resolves AppController with environment and Cargo config target directories.")
 
 
 if __name__ == "__main__":
