@@ -11,8 +11,8 @@ use std::{
 use ashpd::desktop::{
     Session,
     global_shortcuts::{
-        Activated, BindShortcutsOptions, ConfigureShortcutsOptions, Deactivated, GlobalShortcuts,
-        NewShortcut, ShortcutsChanged,
+        Activated, BindShortcutsOptions, ConfigureShortcutsOptions, GlobalShortcuts, NewShortcut,
+        ShortcutsChanged,
     },
 };
 use futures_util::{Stream, StreamExt, future};
@@ -33,6 +33,9 @@ use crate::{
 const COMMAND_CAPACITY: usize = 16;
 const PORTAL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const HOTKEY_ID: &str = "toggle-clicking";
+/// A hotkey press right after a Stop cannot start a run. This covers portal
+/// signals that were still on the bus when Stop was requested.
+const HOTKEY_REARM_DELAY: Duration = Duration::from_millis(300);
 
 #[derive(Debug)]
 pub enum Command {
@@ -64,9 +67,13 @@ struct ControlState {
     shutdown: bool,
 }
 
-struct QueuedCommand {
-    command: Command,
-    generation: u64,
+/// Commands that wait in the bounded queue. Stop and Shutdown bypass it.
+enum QueuedCommand {
+    Start {
+        settings: ClickSettings,
+        generation: u64,
+    },
+    ConfigureHotkey,
 }
 
 impl WorkerHandle {
@@ -116,18 +123,26 @@ impl WorkerHandle {
         if self.control.is_closed() {
             return Err("Der Hintergrund-Worker ist nicht mehr erreichbar.");
         }
-        if matches!(command, Command::Stop) {
-            self.control.send_modify(|state| {
-                state.generation = state.generation.wrapping_add(1);
-            });
-            return Ok(());
+        match command {
+            Command::Stop => {
+                self.control.send_modify(|state| {
+                    state.generation = state.generation.wrapping_add(1);
+                });
+                Ok(())
+            }
+            Command::Shutdown => {
+                self.request_shutdown();
+                Ok(())
+            }
+            Command::Start(settings) => {
+                let generation = self.control.borrow().generation;
+                self.enqueue(QueuedCommand::Start {
+                    settings,
+                    generation,
+                })
+            }
+            Command::ConfigureHotkey => self.enqueue(QueuedCommand::ConfigureHotkey),
         }
-        if matches!(command, Command::Shutdown) {
-            self.request_shutdown();
-            return Ok(());
-        }
-        let generation = self.control.borrow().generation;
-        self.enqueue(command, generation)
     }
 
     pub fn send_start_for_generation(
@@ -140,21 +155,19 @@ impl WorkerHandle {
         }
         // Keep the original generation even if a concurrent Stop lands now.
         // The worker will discard the command if it processes Stop first.
-        self.enqueue(Command::Start(settings), generation)
+        self.enqueue(QueuedCommand::Start {
+            settings,
+            generation,
+        })
     }
 
-    fn enqueue(&self, command: Command, generation: u64) -> Result<(), &'static str> {
-        self.tx
-            .try_send(QueuedCommand {
-                command,
-                generation,
-            })
-            .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(_) => "Der interne Befehlskanal ist ausgelastet.",
-                mpsc::error::TrySendError::Closed(_) => {
-                    "Der Hintergrund-Worker ist nicht mehr erreichbar."
-                }
-            })
+    fn enqueue(&self, command: QueuedCommand) -> Result<(), &'static str> {
+        self.tx.try_send(command).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => "Der interne Befehlskanal ist ausgelastet.",
+            mpsc::error::TrySendError::Closed(_) => {
+                "Der Hintergrund-Worker ist nicht mehr erreichbar."
+            }
+        })
     }
 
     /// A queued Qt callback may outlive the Stop that invalidated its hotkey press.
@@ -202,7 +215,6 @@ struct QueuedHotkeySignal {
 
 enum HotkeySignal {
     Activated(Activated),
-    Deactivated(Deactivated),
     Changed(ShortcutsChanged),
     Closed,
 }
@@ -343,21 +355,53 @@ async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<QueuedHotkeySig
     }
 }
 
-/// Keep receiving portal signals while the worker waits for a click or cleanup.
+/// Stamp portal signals with the Stop generation as soon as they arrive.
+///
+/// The task never waits for the worker. Otherwise later signals would stay
+/// unstamped in the zbus queue and receive the generation of a Stop that
+/// happened after them. A full queue means the worker fell far behind; every
+/// queued press predates that point, so it is treated as a Stop.
 fn queue_hotkey_events(
     mut events: Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>,
-    control: watch::Receiver<ControlState>,
+    control: watch::Sender<ControlState>,
 ) -> (mpsc::Receiver<QueuedHotkeySignal>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
     let task = tokio::spawn(async move {
-        while let Some(signal) = events.next().await {
+        // A removed shortcut must still reach the worker after an overflow.
+        // Each change carries the full list, so only the latest one matters.
+        let mut pending_change: Option<ShortcutsChanged> = None;
+        loop {
+            let signal = tokio::select! {
+                signal = events.next() => signal,
+                permit = tx.reserve(), if pending_change.is_some() => {
+                    let (Ok(permit), Some(changed)) = (permit, pending_change.take()) else { break };
+                    let generation = control.borrow().generation;
+                    permit.send(QueuedHotkeySignal { signal: HotkeySignal::Changed(changed), generation });
+                    continue;
+                }
+            };
+            let signal = match signal {
+                // Ending the task closes the queue; the worker reports the
+                // closed session after the signals received before it.
+                Some(HotkeySignal::Closed) | None => break,
+                Some(HotkeySignal::Changed(changed)) if pending_change.is_some() => {
+                    pending_change = Some(changed);
+                    continue;
+                }
+                Some(signal) => signal,
+            };
             let generation = control.borrow().generation;
-            if tx
-                .send(QueuedHotkeySignal { signal, generation })
-                .await
-                .is_err()
-            {
-                break;
+            match tx.try_send(QueuedHotkeySignal { signal, generation }) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => break,
+                Err(mpsc::error::TrySendError::Full(QueuedHotkeySignal { signal, .. })) => {
+                    control.send_modify(|state| {
+                        state.generation = state.generation.wrapping_add(1);
+                    });
+                    if let HotkeySignal::Changed(changed) = signal {
+                        pending_change = Some(changed);
+                    }
+                }
             }
         }
     });
@@ -448,8 +492,7 @@ async fn run_worker(
     let mut hotkey_task = Some(tokio::spawn(setup_hotkey(preferred_hotkey, rx)));
     let mut configure_task: Option<JoinHandle<Result<(), String>>> = None;
     let mut hotkey: Option<HotkeyState> = None;
-    let mut hotkey_rearm_required = false;
-    let mut ignored_activation = false;
+    let mut hotkey_quiet_until: Option<Instant> = None;
 
     (emit)(WorkerEvent::Status(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
@@ -465,18 +508,15 @@ async fn run_worker(
                 }
                 cancel_start(&mut start_task, &mut start_cancel).await;
                 stop_run(&mut machine, &mut active, &emit);
-                // A portal activation already in flight must not toggle the
-                // stopped run back on. Require its release before rearming.
-                hotkey_rearm_required = true;
-                ignored_activation = false;
+                hotkey_quiet_until = Some(Instant::now() + HOTKEY_REARM_DELAY);
             }
             () = wait_click_session_closed(&mut click_session), if click_session.is_some() => {
                 discard_closed_click_session(&mut click_session, &mut machine, &mut active, &emit).await;
             }
             queued = commands.recv() => {
-                let Some(QueuedCommand { command, generation }) = queued else { break; };
+                let Some(command) = queued else { break; };
                 match command {
-                    Command::Start(settings) => {
+                    QueuedCommand::Start { settings, generation } => {
                         if generation != control.borrow().generation {
                             continue;
                         }
@@ -511,7 +551,7 @@ async fn run_worker(
                             start_task = Some(tokio::spawn(setup_click_session(settings.monitor, rx)));
                         }
                     }
-                    Command::ConfigureHotkey => {
+                    QueuedCommand::ConfigureHotkey => {
                         if configure_task.is_some() {
                             continue;
                         }
@@ -532,7 +572,6 @@ async fn run_worker(
                             (emit)(WorkerEvent::Error("Der globale Hotkey ist noch nicht verfügbar.".to_owned()));
                         }
                     }
-                    Command::Stop | Command::Shutdown => unreachable!("control commands bypass the bounded queue"),
                 }
             }
             result = wait_task(&mut start_task), if start_task.is_some() => {
@@ -572,12 +611,13 @@ async fn run_worker(
                     Ok(Ok(HotkeyRegistration { connection, portal, session, actual })) => {
                         let streams = timeout(PORTAL_CLOSE_TIMEOUT, async {
                             let activations = portal.receive_activated().await.map_err(|error| error.to_string())?;
-                            let deactivations = portal.receive_deactivated().await.map_err(|error| error.to_string())?;
                             let changes = portal.receive_shortcuts_changed().await.map_err(|error| error.to_string())?;
-                            Ok::<_, String>((activations, deactivations, changes))
-                        }).await;
+                            Ok::<_, String>((activations, changes))
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err("Zeitüberschreitung bei der Hotkey-Signalanmeldung".to_owned()));
                         match streams {
-                            Ok(Ok((activations, deactivations, changes))) => {
+                            Ok((activations, changes)) => {
                                 let session = Arc::new(session);
                                 let watched_session = Arc::clone(&session);
                                 let (ready_tx, ready_rx) = oneshot::channel();
@@ -599,15 +639,12 @@ async fn run_worker(
                                 }
                                 let events = futures_util::stream::select(
                                     futures_util::stream::select(
-                                        futures_util::stream::select(
-                                            activations.map(HotkeySignal::Activated),
-                                            deactivations.map(HotkeySignal::Deactivated),
-                                        ),
+                                        activations.map(HotkeySignal::Activated),
                                         changes.map(HotkeySignal::Changed),
                                     ),
                                     futures_util::stream::once(closed),
                                 );
-                                let (events, event_task) = queue_hotkey_events(Box::pin(events), control.clone());
+                                let (events, event_task) = queue_hotkey_events(Box::pin(events), control_tx.clone());
                                 hotkey = Some(HotkeyState {
                                     connection,
                                     portal: Arc::new(portal),
@@ -620,14 +657,9 @@ async fn run_worker(
                                     (emit)(WorkerEvent::Status("Bereit".to_owned()));
                                 }
                             }
-                            result => {
+                            Err(error) => {
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
-                                let error = match result {
-                                    Ok(Err(error)) => error,
-                                    Err(_) => "Zeitüberschreitung bei der Hotkey-Signalanmeldung".to_owned(),
-                                    Ok(Ok(_)) => unreachable!(),
-                                };
                                 (emit)(WorkerEvent::Error(format!("Hotkey-Signale sind nicht verfügbar: {error}")));
                             }
                         }
@@ -664,45 +696,25 @@ async fn run_worker(
                 };
                 match signal {
                     HotkeySignal::Activated(activation) if activation.shortcut_id() == HOTKEY_ID => {
+                        // The press was received before a later Stop.
                         if generation != control.borrow().generation {
-                            if hotkey_rearm_required {
-                                ignored_activation = true;
-                            }
-                            continue;
-                        }
-                        if hotkey_rearm_required {
-                            ignored_activation = true;
-                            // A manual restart does not rearm a key still in flight.
-                            // A press during that run may stop it, but never start it.
-                            if matches!(machine.state(), RunState::Starting | RunState::Clicking) {
-                                if invalidate_hotkey_starts(&mut control, &control_tx) {
-                                    break;
-                                }
-                                cancel_start(&mut start_task, &mut start_cancel).await;
-                                stop_run(&mut machine, &mut active, &emit);
-                            }
                             continue;
                         }
                         if matches!(machine.state(), RunState::Starting | RunState::Clicking) {
                             if invalidate_hotkey_starts(&mut control, &control_tx) {
                                 break;
                             }
-                            hotkey_rearm_required = true;
-                            ignored_activation = true;
+                            hotkey_quiet_until = Some(Instant::now() + HOTKEY_REARM_DELAY);
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
-                        } else {
+                        } else if hotkey_quiet_until.is_none_or(|until| Instant::now() >= until) {
                             // Ask the Qt side to start so the current UI values are
                             // collected, validated and saved. Keeping a settings copy
                             // here made hotkey starts use values from the previous run.
                             (emit)(WorkerEvent::StartRequested(generation));
                         }
-                    }
-                    HotkeySignal::Deactivated(deactivation) if deactivation.shortcut_id() == HOTKEY_ID => {
-                        if hotkey_rearm_required && ignored_activation {
-                            hotkey_rearm_required = false;
-                            ignored_activation = false;
-                        }
+                        // Otherwise the press was still on the bus when Stop was
+                        // requested. It may stop a run, but never start one.
                     }
                     HotkeySignal::Changed(changed) => {
                         if let Some(shortcut) = changed.shortcuts().iter().find(|shortcut| shortcut.id() == HOTKEY_ID) {
@@ -719,7 +731,7 @@ async fn run_worker(
                             (emit)(WorkerEvent::Error("Der globale Stop-Hotkey wurde entfernt.".to_owned()));
                         }
                     }
-                    HotkeySignal::Activated(_) | HotkeySignal::Deactivated(_) => {}
+                    HotkeySignal::Activated(_) => {}
                     HotkeySignal::Closed => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         stop_run(&mut machine, &mut active, &emit);
@@ -862,14 +874,17 @@ mod tests {
         assert!(handle.send_start_for_generation(settings(), 0).is_ok());
         assert!(control.has_changed().is_ok_and(|changed| changed));
         assert_eq!(control.borrow_and_update().generation, 1);
-        let old_start = commands.try_recv().unwrap_or_else(|_| unreachable!());
-        assert!(matches!(old_start.command, Command::Start(_)));
-        assert_ne!(old_start.generation, control.borrow().generation);
+        let Ok(QueuedCommand::Start { generation, .. }) = commands.try_recv() else {
+            panic!("the start queued before Stop must still be in the queue");
+        };
+        assert_ne!(generation, control.borrow().generation);
         assert!(commands.try_recv().is_err());
 
         assert!(handle.send_start_for_generation(settings(), 1).is_ok());
-        let new_start = commands.try_recv().unwrap_or_else(|_| unreachable!());
-        assert_eq!(new_start.generation, control.borrow().generation);
+        let Ok(QueuedCommand::Start { generation, .. }) = commands.try_recv() else {
+            panic!("a start for the current generation must be queued");
+        };
+        assert_eq!(generation, control.borrow().generation);
     }
 
     #[test]

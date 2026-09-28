@@ -38,7 +38,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 
 - Ohne bestätigten globalen Hotkey wird Start abgewiesen.
 - Hotkey und Stop-Button setzen den einzigen aktiven Run auf `Stopped` und entfernen seinen Termin.
-- Nach Stop verwirft der Worker Hotkey-Aktivierungen mit einer älteren Stop-Generation und sperrt weitere Starts bis zu einem Loslass-Ereignis. Diese Sicherung erfasst noch nicht alle verzögerten Portal-Signale; siehe die Einschränkung zu [Issue #18](https://github.com/Jerry0205/Auto-Clicker/issues/18) unten.
+- Hotkey-Signale erhalten beim Eintreffen die aktuelle Stop-Generation. Die empfangende Aufgabe wartet nie auf den Worker, deshalb bleiben vor Stop angekommene Signale auch bei ausgelastetem Worker als veraltet erkennbar ([Issue #18](https://github.com/Jerry0205/Auto-Clicker/issues/18)). Ein Überlauf ihrer Warteschlange beendet den Lauf. Für 300 ms nach einem Stop startet der Hotkey keinen neuen Lauf; ein Druck während eines Laufs stoppt ihn weiterhin.
 - Fenster-Schließen ruft synchron `shutdown` auf, beendet den Worker und schließt beide Portal-Sitzungen. Ausstehende RemoteDesktop- und Hotkey-Anfragen werden kooperativ abgebrochen. Jede Anfrage besitzt ihre D-Bus-Verbindung, die nach begrenztem `Session.Close` ebenfalls getrennt wird; die Bereinigung wird vor der Stop-/Shutdown-Bestätigung abgewartet.
 - Ein Prozessende trennt zusätzlich automatisch den D-Bus-Client; es gibt keinen separaten Clickerprozess.
 - Nach erfolgreichem Button-Press wird immer ein Release versucht. Schlägt Release fehl, folgt ein zweiter Best-Effort-Release und der Scheduler geht in Fehlerzustand.
@@ -50,7 +50,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 - Für absolute Positionen muss der Benutzer im KWin-Dialog denselben Monitor wählen. Position und Größe werden vor Nutzung mit der Auswahl abgeglichen; fehlende Metadaten verhindern den Start. Displayänderungen können die Sitzung ungültig machen und führen dann zum Stop mit Fehlermeldung.
 - Portal-Dialoge sind derzeit nicht an einen exportierten Wayland-Fensterhandle gekoppelt und können daher als separates KWin-Dialogfenster erscheinen.
 - Der Positionswähler fragt keine Bildschirmaufnahme an. Das Screenshot-Portal liefert zu Aufnahmen keine verlässliche Ausschnittgeometrie; der frühere Portal-Hänger ist im historischen [Gerätebericht](tests/DEVICE_TEST_REPORT.md) dokumentiert.
-- Bei vollem Hotkey-Ereigniskanal können vor Stop gesendete Signale nach der Stop-Bestätigung erneut einen Start auslösen; siehe [Issue #18](https://github.com/Jerry0205/Auto-Clicker/issues/18). Der priorisierte Stop-Befehl selbst bleibt unabhängig vom begrenzten Befehlskanal erreichbar.
+- Ein Hotkey-Druck, der beim Stop noch länger als 300 ms auf dem Bus unterwegs war, könnte danach einen Start anfragen. Die Sperrfrist ist bewusst großzügig gewählt; eine physische Hotkey-Betätigung wurde für diesen Fall nicht nativ geprüft.
 - `SIGKILL` verhindert anwendungsseitiges RAII-Cleanup; der D-Bus-Verbindungsabbruch beendet die compositorseitige Sitzung dennoch.
 - Die D-Bus-Notify-Methode ist bei 100 CPS bewusst konservativer als das empfohlene EIS-Protokoll. Sie vermeidet eine weitere native FFI-Abhängigkeit und ist für das gesetzte Limit ausreichend.
 
