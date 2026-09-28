@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     name: Rust, portal, QML and package checks
@@ -23,6 +27,23 @@ jobs:
           dbus python appstream desktop-file-utils
 
       - uses: actions/checkout@v6
+
+      - name: Identify build tool versions for the cache
+        id: build-versions
+        run: |
+          set -euo pipefail
+          echo "key=$(pacman -Q rust clang gcc lld qt6-base qt6-declarative | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Cargo downloads and build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ steps.build-versions.outputs.key }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ steps.build-versions.outputs.key }}-
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
@@ -44,8 +65,8 @@ jobs:
           /usr/lib/qt6/bin/qmltestrunner
           -import tests/qml/mocks -input tests/qml
 
-      - name: Run Python guard tests
-        run: python -m unittest discover -s tests/native -p 'test_guard.py'
+      - name: Run Python unit tests
+        run: python -m unittest discover -s tests/native -p 'test_*.py'
 
       - name: Validate desktop and AppStream metadata
         run: |
