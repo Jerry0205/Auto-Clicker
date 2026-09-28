@@ -37,6 +37,14 @@ cd Auto-Clicker
 makepkg -si
 ```
 
+`makepkg` lädt dafür den per Prüfsumme gesicherten Quellstand für Version 0.1.2
+herunter und baut ihn unter `$srcdir`. Lokale Änderungen im geklonten Verzeichnis
+gehen nicht in das Paket ein. Mit `makepkg --allsource --nodeps` kannst du ein
+Quellpaket einschließlich des heruntergeladenen Projektarchivs erstellen; es
+lässt sich in einem anderen Verzeichnis ohne den ursprünglichen Checkout bauen.
+Cargo-Abhängigkeiten werden beim Paketbau weiterhin mit `cargo fetch --locked`
+geladen.
+
 Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 
 ## Erste Schritte
@@ -79,6 +87,9 @@ Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So
 ## Für Entwickler
 
 Du möchtest Klickmeister selbst bauen, verändern oder überprüfen? Die wichtigsten Befehle sind:
+
+Die folgenden Cargo-Befehle verwenden den aktuellen Checkout einschließlich
+lokaler Änderungen. `makepkg` verwendet dagegen den oben genannten Quellstand.
 
 Für die QML-Codevervollständigung und Fehleranzeige mit `qmlls` zuerst `cargo build --locked` ausführen und danach `bash scripts/setup-qmlls.sh`. Das Skript ermittelt das wirksame Cargo-Buildverzeichnis (auch bei `CARGO_TARGET_DIR` oder `build.target-dir`) und schreibt die lokale, von Git ignorierte `.qmlls.ini`. Nach einem Wechsel des Buildverzeichnisses das Skript erneut ausführen. Für das Skript und den folgenden Test wird Python 3 benötigt. `python tests/check_qmlls_checkout.py` prüft den committeten Stand in einem frischen Checkout mit einem anderen Pfad und fragt die `AppController`-Eigenschaften direkt beim QML-Sprachserver ab.
 
