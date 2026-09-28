@@ -1,13 +1,12 @@
 # Security Review
 
-Stand: 2026-09-14, Version 0.1.2 (Portal-Bereinigung; native Geräteprüfung siehe Testbericht zu 0.1.1)
+Stand: 2026-09-28, Version 0.1.2 (Screenshot-Pfad deaktiviert; frühere native Geräteprüfung siehe Testbericht zu 0.1.1)
 
 ## 1. Benötigte Berechtigungen
 
 - Globale Shortcut-Aktion: erforderlich als sofort erreichbarer Start/Stop-Failsafe.
 - RemoteDesktop-Gerät `POINTER`: erforderlich, um linke, rechte oder mittlere Button-Ereignisse zu emulieren.
 - Ein Monitor als ScreenCast-Koordinatenreferenz: nur bei fester Position erforderlich.
-- Screenshot-Freigabe: nur für die ausdrücklich aktivierte Standbild-Lupe.
 
 Nicht angefordert werden `KEYBOARD`, `TOUCHSCREEN`, Clipboard, Kamera, Mikrofon, Dateien, Standort, Benachrichtigungen, Hintergrundausführung oder Netzwerk.
 
@@ -15,7 +14,6 @@ Nicht angefordert werden `KEYBOARD`, `TOUCHSCREEN`, Clipboard, Kamera, Mikrofon,
 
 - `org.freedesktop.portal.GlobalShortcuts`: `CreateSession`, `BindShortcuts`, `ConfigureShortcuts`, `Activated`, `ShortcutsChanged` und `Session.Close`.
 - `org.freedesktop.portal.RemoteDesktop`: `CreateSession`, `SelectDevices`, `Start`, `NotifyPointerButton`, optional `NotifyPointerMotionAbsolute` und `Session.Close`.
-- `org.freedesktop.portal.Screenshot`: `Screenshot` und `Request.Close`, ausschließlich für die optionale Lupe; nur lokale Datei-URIs werden geladen.
 - `org.freedesktop.portal.ScreenCast`: nur `SelectSources` auf derselben RemoteDesktop-Sitzung. `OpenPipeWireRemote` wird nicht aufgerufen.
 
 Sitzungen verwenden `PersistMode::Application`: keine anwendungsseitig gespeicherten Restore-Tokens und keine dauerhafte Berechtigung nach Prozessende.
@@ -27,8 +25,6 @@ Keine. Der Produktionscode enthält keine HTTP-, TCP-, UDP- oder DNS-API. D-Bus 
 ## 4. Gespeicherte Daten
 
 Nur `config.toml` im XDG-Konfigurationsverzeichnis der Anwendung. Gespeichert werden Intervall, Maustaste, Klicktyp, Wiederholungsmodus/-zahl, Positionsmodus, X/Y, Monitoridentität einschließlich Geometrie/Skalierung und sichtbare Hotkeybeschreibung. Der Austausch erfolgt über eine temporäre Datei im selben Verzeichnis und `rename`. Auf Unix wird die Datei mit Modus 0600 erstellt.
-
-Die optionale Lupe lädt eine vom Screenshot-Portal bereitgestellte Bilddatei; das Portal kann diese temporär speichern. Klickmeister leert die Bildquelle beim Beenden der Auswahl und führt kein Screenshot-Archiv.
 
 Keine Eingaben, Klickhistorien, Fenstertitel, Prozessinformationen, Clipboard-Inhalte, Kennwörter oder Portal-Restore-Tokens werden gespeichert.
 
@@ -52,7 +48,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 - Ein echtes globales Auslesen der Cursorposition ist unter Wayland absichtlich nicht möglich. Der Picker nutzt ein eigenes Vollbildfenster.
 - Für absolute Positionen muss der Benutzer im KWin-Dialog denselben Monitor wählen. Position und Größe werden vor Nutzung mit der Auswahl abgeglichen; fehlende Metadaten verhindern den Start. Displayänderungen können die Sitzung ungültig machen und führen dann zum Stop mit Fehlermeldung.
 - Portal-Dialoge sind derzeit nicht an einen exportierten Wayland-Fensterhandle gekoppelt und können daher als separates KWin-Dialogfenster erscheinen.
-- Auf dem geprüften xdg-desktop-portal 1.22.1 bleibt eine unbeantwortete Screenshot-Erstfreigabe trotz Request.Close und getrennter App-Verbindung offen und kann weitere Portal-Aufrufe blockieren. Der Picker fällt nach drei Sekunden auf Auswahl ohne Lupe zurück; der verbliebene KDE-Dialog musste regulär abgelehnt werden. Erfolgreiche Zustimmung vor dem Timeout funktioniert. Diese Desktop-Einschränkung ist mit Reproduktion und Quellen in [DEVICE_TEST_REPORT.md](tests/DEVICE_TEST_REPORT.md) dokumentiert.
+- Der Positionswähler fragt keine Bildschirmaufnahme an. Das Screenshot-Portal liefert für interaktive Aufnahmen keine verlässliche Ausschnittgeometrie; der frühere Portal-Hänger ist im historischen [Gerätebericht](tests/DEVICE_TEST_REPORT.md) dokumentiert.
 - `SIGKILL` verhindert anwendungsseitiges RAII-Cleanup; der D-Bus-Verbindungsabbruch beendet die compositorseitige Sitzung dennoch.
 - Die D-Bus-Notify-Methode ist bei 100 CPS bewusst konservativer als das empfohlene EIS-Protokoll. Sie vermeidet eine weitere native FFI-Abhängigkeit und ist für das gesetzte Limit ausreichend.
 

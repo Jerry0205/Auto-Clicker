@@ -60,12 +60,12 @@ TestCase {
         }
     }
 
-    function test_position_selection_does_not_request_unverifiable_screenshot() {
+    function test_position_selection_opens_without_capture_delay() {
         controller.current_position = false
         main.beginPicker(false)
+        verify(main.positionPicker !== null)
+        compare(main.positionPicker.visible, true)
         tryVerify(function() { return main.positionPicker && main.positionPicker.inputReady })
-        wait(350) // The former capture delay would have requested the portal here.
-        compare(controller.screenshot_requests, 0)
         main.finishPicker()
     }
 }

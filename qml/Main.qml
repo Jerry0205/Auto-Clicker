@@ -11,7 +11,6 @@ Kirigami.ApplicationWindow {
     property bool monitorSelectionReady: false
     property var selectedMonitor: null
     property var positionPicker: null
-    property int captureSequence: 0
     property bool monitorRestored: false
     readonly property var monitorOptions: {
         const screens = Qt.application.screens
@@ -28,13 +27,10 @@ Kirigami.ApplicationWindow {
 
     function beginPicker(preview) {
         if (positionPicker || !selectedMonitor) return
-        captureSequence += 1
-        const picker = positionPickerComponent.createObject(root, {
-            "screen": selectedMonitor, "captureId": captureSequence
-        })
+        const picker = positionPickerComponent.createObject(root, { "screen": selectedMonitor })
         if (!picker) return
         positionPicker = picker
-        picker.begin(selectedMonitor, controller.fixed_x, controller.fixed_y, preview, false)
+        picker.begin(selectedMonitor, controller.fixed_x, controller.fixed_y, preview)
     }
 
     function confirmMonitor() {
@@ -118,8 +114,6 @@ Kirigami.ApplicationWindow {
             id: picker
             hostWindow: root
             onSelectingChanged: controller.selecting_position = selecting
-            onScreenshotRequested: function(requestId) { controller.capture_screenshot(requestId) }
-            onScreenshotCancelled: function(requestId) { controller.cancel_screenshot(requestId) }
             onPicked: function(x, y) {
                 controller.fixed_x = x
                 controller.fixed_y = y
@@ -136,7 +130,6 @@ Kirigami.ApplicationWindow {
     Connections {
         target: controller
 
-        function onScreenshot_ready(requestId, uri, error) { if (positionPicker) positionPicker.acceptScreenshot(requestId, uri, error) }
         function onFixed_xChanged() { xInput.value = controller.fixed_x }
         function onFixed_yChanged() { yInput.value = controller.fixed_y }
     }

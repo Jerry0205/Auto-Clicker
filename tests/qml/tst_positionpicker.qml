@@ -11,12 +11,11 @@ TestCase {
 
     Window { id: host; width: 400; height: 300; visible: true }
     PositionPicker { id: picker; hostWindow: host }
-    SignalSpy { id: cancelled; target: picker; signalName: "screenshotCancelled" }
     SignalSpy { id: finished; target: picker; signalName: "finished" }
     SignalSpy { id: picked; target: picker; signalName: "picked" }
 
     function init() {
-        picked.clear(); cancelled.clear(); finished.clear()
+        picked.clear(); finished.clear()
         host.show()
         host.requestActivate()
         tryCompare(host, "active", true)
@@ -25,7 +24,7 @@ TestCase {
     function begin() {
         host.requestActivate()
         tryVerify(function() { return host.active })
-        picker.begin(host.screen, 100, 150, false, false)
+        picker.begin(host.screen, 100, 150, false)
         tryCompare(picker, "inputReady", true)
         tryVerify(function() { return picker.active })
         wait(20)
@@ -157,7 +156,7 @@ TestCase {
             verify(fresh !== null)
             let result = null
             fresh.picked.connect(function(x, y) { result = { x: x, y: y } })
-            fresh.begin(screens[i], 40, 50, false, false)
+            fresh.begin(screens[i], 40, 50, false)
             tryCompare(fresh, "inputReady", true)
             tryVerify(function() { return fresh.active })
             compare(fresh.screen.name, screens[i].name)
@@ -174,7 +173,7 @@ TestCase {
     }
 
     function test_preview_does_not_modify_position() {
-        picker.begin(host.screen, 20, 30, true, false)
+        picker.begin(host.screen, 20, 30, true)
         tryCompare(picker, "inputReady", true)
         picker.confirm()
         compare(picked.count, 0)
@@ -182,97 +181,11 @@ TestCase {
         compare(host.visible, true)
     }
 
-    function test_capture_failure_falls_back() {
-        picker.begin(host.screen, 20, 30, false, true)
-        verify(picker.waitingForScreenshot)
-        picker.acceptScreenshot(picker.captureId, "", "denied")
-        tryCompare(picker, "inputReady", true)
-        verify(picker.captureError.length > 0)
-        tryVerify(function() { return picker.active })
-        wait(20)
-        keyClick(Qt.Key_Return)
-        tryCompare(picked, "count", 1)
-        compare(host.visible, true)
-    }
-
-    function test_capture_timeout_restores_interactive_selection() {
-        picker.begin(host.screen, 20, 30, false, true)
-        const requestId = picker.captureId
-        tryCompare(picker, "inputReady", true, 4000)
-        compare(picker.waitingForScreenshot, false)
-        compare(cancelled.count, 1)
-        compare(cancelled.signalArguments[0][0], requestId)
-        picker.acceptScreenshot(requestId, "", "late response")
-        verify(picker.captureError.indexOf("zu lange") >= 0)
-        verify(picker.captureError.indexOf("Deny") >= 0)
-        verify(picker.captureError.indexOf("Verweigern") >= 0)
-        tryVerify(function() { return picker.active })
-        wait(20)
-        keyClick(Qt.Key_Escape)
-        tryCompare(picker, "selecting", false)
-        compare(host.visible, true)
-        compare(picked.count, 0)
-    }
-
-    function test_finish_is_idempotent_and_cancels_capture() {
-        picker.begin(host.screen, 20, 30, false, true)
+    function test_finish_is_idempotent() {
+        picker.begin(host.screen, 20, 30, false)
         picker.finish()
         picker.finish()
-        compare(cancelled.count, 1)
         compare(finished.count, 1)
-        compare(host.visible, true)
-    }
-
-    function test_unverified_capture_falls_back_data() {
-        const screens = Qt.application.screens
-        let left = screens[0].virtualX
-        let top = screens[0].virtualY
-        let right = left + screens[0].width
-        let bottom = top + screens[0].height
-        for (const screen of screens) {
-            left = Math.min(left, screen.virtualX)
-            top = Math.min(top, screen.virtualY)
-            right = Math.max(right, screen.virtualX + screen.width)
-            bottom = Math.max(bottom, screen.virtualY + screen.height)
-        }
-        const width = right - left
-        const height = bottom - top
-        return [
-            { tag: "matching desktop size", width: width, height: height },
-            { tag: "proportional crop", width: width / 2, height: height / 2 },
-            { tag: "single monitor", width: screens[0].width, height: screens[0].height },
-            { tag: "scaled desktop", width: width * 1.5, height: height * 1.5 }
-        ]
-    }
-
-    function test_unverified_capture_falls_back(data) {
-        picker.begin(host.screen, 20, 30, false, true)
-        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'
-            + Math.round(data.width) + '" height="' + Math.round(data.height) + '"/>'
-        picker.acceptScreenshot(picker.captureId, "data:image/svg+xml," + encodeURIComponent(svg), "")
-        tryCompare(picker, "inputReady", true)
-        verify(picker.captureError.indexOf("Positionsdaten") >= 0)
-        picker.setTarget(20, 30)
-        picker.confirm()
-        compare(picked.count, 1)
-        compare(picked.signalArguments[0][0], 20)
-        compare(picked.signalArguments[0][1], 30)
-    }
-
-    function test_previous_capture_is_ignored() {
-        picker.begin(host.screen, 20, 30, false, true)
-        const previousId = picker.captureId
-        picker.finish()
-        picker.begin(host.screen, 20, 30, false, true)
-        picker.acceptScreenshot(previousId, "", "denied")
-        verify(picker.waitingForScreenshot)
-        compare(picker.visible, false)
-    }
-
-    function test_late_capture_does_not_reopen_picker() {
-        picker.begin(host.screen, 20, 30, false, true)
-        picker.finish()
-        picker.acceptScreenshot(picker.captureId, "", "denied")
         compare(picker.selecting, false)
         compare(picker.visible, false)
         compare(host.visible, true)

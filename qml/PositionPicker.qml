@@ -8,21 +8,16 @@ Window {
     MonitorSelection { id: monitors }
 
     required property Window hostWindow
-    property int captureId: 0
     property bool inputReady: false
     property bool selecting: false
     property bool previewOnly: false
     property bool positionPinned: false
-    property bool waitingForScreenshot: false
     property int targetX: 0
     property int targetY: 0
     property int hostVisibility: Window.Windowed
-    property string captureError: ""
     property bool hintAtBottom: false
     signal finished()
-    signal screenshotCancelled(int requestId)
     signal picked(int x, int y)
-    signal screenshotRequested(int requestId)
 
     function setTarget(x, y) {
         targetX = Math.max(0, Math.min(Math.round(x), Math.max(0, width - 1)))
@@ -32,9 +27,8 @@ Window {
         else if (targetY > height - 110) hintAtBottom = false
     }
 
-    function begin(targetScreen, x, y, preview, magnifier) {
+    function begin(targetScreen, x, y, preview) {
         if (selecting || !targetScreen) return
-        captureId += 1
         // Set geometry as well as screen before creating the native surface:
         // Qt Wayland uses the initial geometry to select the fullscreen output.
         screen = targetScreen
@@ -47,17 +41,10 @@ Window {
         positionPinned = false
         selecting = true
         inputReady = false
-        captureError = ""
         targetX = x
         targetY = y
         hintAtBottom = y < 110
-        waitingForScreenshot = magnifier && !preview
-        if (waitingForScreenshot) {
-            hostWindow.showMinimized()
-            captureDelay.start()
-            captureFallback.start()
-        }
-        else showPicker()
+        showPicker()
     }
 
     function showPicker() {
@@ -77,20 +64,6 @@ Window {
         if (!selecting || !visible || !active) return
         keyboard.forceActiveFocus()
         hostWindow.showMinimized()
-    }
-
-    function acceptScreenshot(requestId, uri, error) {
-        if (!selecting || !waitingForScreenshot || requestId !== captureId) return
-        captureDelay.stop()
-        captureFallback.stop()
-        waitingForScreenshot = false
-        // The Screenshot portal returns a URI without the capture rectangle.
-        // Even matching dimensions cannot prove that the image starts at the
-        // virtual desktop origin, so it must never guide target coordinates.
-        captureError = error.length > 0
-            ? qsTr("Bildschirmaufnahme nicht verfügbar – Auswahl ohne Lupe")
-            : qsTr("Bildschirmaufnahme ohne Positionsdaten – Auswahl ohne Lupe")
-        showPicker()
     }
 
     function updateInputReady() {
@@ -115,10 +88,6 @@ Window {
         if (!selecting) return
         selecting = false
         inputReady = false
-        if (waitingForScreenshot) screenshotCancelled(captureId)
-        waitingForScreenshot = false
-        captureFallback.stop()
-        captureDelay.stop()
         previewTimer.stop()
         hide()
         if (restoreHost !== false) {
@@ -146,19 +115,6 @@ Window {
     onScreenChanged: updateInputReady()
     onClosing: function(close) { close.accepted = false; finish() }
 
-    Timer { id: captureDelay; interval: 250; onTriggered: picker.screenshotRequested(picker.captureId) }
-    Timer {
-        id: captureFallback
-        interval: 3000
-        onTriggered: {
-            if (!picker.selecting || !picker.waitingForScreenshot) return
-            captureDelay.stop()
-            picker.waitingForScreenshot = false
-            picker.screenshotCancelled(picker.captureId)
-            picker.captureError = qsTr("Bildschirmaufnahme dauert zu lange – Auswahl ohne Lupe. Falls ein KDE-Freigabedialog offen bleibt: mit „Deny“/„Verweigern“ schließen.")
-            picker.showPicker()
-        }
-    }
     Timer { id: previewTimer; interval: 1800; onTriggered: picker.finish() }
 
     Connections {
@@ -229,7 +185,6 @@ Window {
                 : !picker.inputReady ? qsTr("Vollbild wird vorbereitet … · Esc: abbrechen")
                 : qsTr("%1 · X: %2 · Y: %3\nKlicken: Ziel setzen · Enter: übernehmen · Pfeiltasten: 1 Schritt · Umschalt: 10 · Esc / Rechtsklick: abbrechen")
                     .arg(monitors.displayName(picker.screen, Qt.application.screens)).arg(picker.targetX).arg(picker.targetY)
-                    + (picker.captureError.length ? "\n" + picker.captureError : "")
         }
     }
 
