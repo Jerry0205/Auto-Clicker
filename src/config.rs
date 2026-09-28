@@ -213,6 +213,20 @@ mod tests {
             Some(MAX_REPEAT_COUNT)
         );
         let _ = fs::remove_file(too_large);
+
+        let at_bounds = test_path("at-bounds");
+        for (interval_ms, repeat_count) in
+            [(MIN_INTERVAL_MS, 1), (MAX_INTERVAL_MS, MAX_REPEAT_COUNT)]
+        {
+            let contents = format!("interval_ms = {interval_ms}\nrepeat_count = {repeat_count}\n");
+            assert!(fs::write(&at_bounds, contents).is_ok());
+            let config = load_from(&at_bounds).ok();
+            assert_eq!(
+                config.map(|config| (config.interval_ms, config.repeat_count)),
+                Some((interval_ms, repeat_count))
+            );
+        }
+        let _ = fs::remove_file(at_bounds);
     }
 
     #[test]
