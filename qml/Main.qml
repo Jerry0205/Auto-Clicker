@@ -20,6 +20,32 @@ Kirigami.ApplicationWindow {
         }
         return options
     }
+    readonly property string rateDescription: describeRate(intervalInput.value, controller.click_type)
+
+    function formatRateNumber(value, decimalPlaces) {
+        return value.toLocaleString(Qt.locale(), 'f', decimalPlaces)
+            .replace(/([,.]\d*?)0+$/, "$1")
+            .replace(/[,.]$/, "")
+    }
+
+    function describeRate(intervalMs, clickType) {
+        const clicksPerCycle = clickType === 1 ? 2 : 1
+        if (intervalMs <= 1000) {
+            const cyclesPerSecond = 1000 / intervalMs
+            // Three places distinguish every whole-millisecond interval below
+            // one second from an exact rate of one cycle per second.
+            const cycleRate = Number(cyclesPerSecond.toFixed(3))
+            const clickRate = Number((cyclesPerSecond * clicksPerCycle).toFixed(3))
+            const cycleUnit = cycleRate === 1 ? qsTr("Zyklus/s") : qsTr("Zyklen/s")
+            const clickUnit = clickRate === 1 ? qsTr("Klick/s") : qsTr("Klicks/s")
+            return qsTr("%1 %2 · %3 %4")
+                .arg(formatRateNumber(cycleRate, 3)).arg(cycleUnit)
+                .arg(formatRateNumber(clickRate, 3)).arg(clickUnit)
+        }
+        const seconds = formatRateNumber(intervalMs / 1000, 3)
+        const clicks = clicksPerCycle === 1 ? qsTr("1 Klick") : qsTr("2 Klicks")
+        return qsTr("1 Zyklus alle %1 s · %2 alle %1 s").arg(seconds).arg(clicks)
+    }
 
     function finishPicker(restoreHost) {
         if (positionPicker) positionPicker.finish(restoreHost)
@@ -250,8 +276,11 @@ Kirigami.ApplicationWindow {
                         text: qsTr("ms")
                     }
                     Controls.Label {
+                        id: rateLabel
+                        objectName: "rateLabel"
                         color: Kirigami.Theme.disabledTextColor
-                        text: qsTr("%1 CPS").arg((1000 / intervalInput.value).toFixed(1))
+                        text: root.rateDescription
+                        wrapMode: Text.WordWrap
                     }
                 }
             }
@@ -295,7 +324,8 @@ Kirigami.ApplicationWindow {
                     }
                     RowLayout {
                         Controls.RadioButton {
-                            text: qsTr("Anzahl")
+                            objectName: "repeatCountLabel"
+                            text: qsTr("Klickzyklen")
                             checked: !controller.repeat_until_stopped
                             enabled: !controller.running && !controller.busy
                             onToggled: if (checked) controller.repeat_until_stopped = false
@@ -462,7 +492,12 @@ Kirigami.ApplicationWindow {
                     color: controller.running ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
                 }
                 Controls.Label {
-                    text: qsTr("Status: %1").arg(controller.status)
+                    objectName: "statusLabel"
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: controller.running
+                        ? qsTr("Status: %1 · %2").arg(controller.status).arg(root.rateDescription)
+                        : qsTr("Status: %1").arg(controller.status)
                 }
                 Item { Layout.fillWidth: true }
                 Controls.BusyIndicator {
