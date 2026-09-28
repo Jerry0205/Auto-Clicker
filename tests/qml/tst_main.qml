@@ -85,4 +85,52 @@ TestCase {
             controller[state] = false
         }
     }
+
+    function test_screen_changes_keep_cursor_position_runs() {
+        compare(controller.current_position, true)
+        controller.monitor_width += 1
+        controller.running = true
+        main.handleScreensChanged()
+        compare(controller.running, true)
+        compare(findChild(main, "monitorStopMessage").visible, false)
+    }
+
+    function test_unchanged_monitor_keeps_fixed_position_runs() {
+        controller.current_position = false
+        controller.fixed_position_confirmed = true
+        controller.running = true
+        main.handleScreensChanged()
+        compare(controller.running, true)
+        compare(findChild(main, "monitorStopMessage").visible, false)
+    }
+
+    function test_changed_monitor_stops_fixed_position_runs_with_reason() {
+        const message = findChild(main, "monitorStopMessage")
+        for (const state of ["running", "busy"]) {
+            controller.current_position = false
+            controller.fixed_position_confirmed = true
+            controller.monitor_width += 1
+            controller[state] = true
+            main.handleScreensChanged()
+            compare(controller[state], false)
+            tryCompare(message, "visible", true)
+            controller[state] = true
+            tryCompare(message, "visible", false)
+            controller[state] = false
+        }
+    }
+
+    function test_monitor_activation_does_not_confirm_clamped_coordinates() {
+        controller.current_position = false
+        const monitorInput = findChild(main, "monitorInput")
+        const screen = main.monitorOptions[0].screen
+        controller.fixed_x = screen.width + 100
+        controller.fixed_position_confirmed = true
+        monitorInput.activated(0)
+        compare(controller.fixed_x, screen.width - 1)
+        compare(controller.fixed_position_confirmed, false)
+
+        monitorInput.activated(0)
+        compare(controller.fixed_position_confirmed, true)
+    }
 }

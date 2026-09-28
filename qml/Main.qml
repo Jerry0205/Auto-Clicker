@@ -42,14 +42,35 @@ Kirigami.ApplicationWindow {
         controller.fixed_position_confirmed = !!selectedMonitor
     }
 
+    // Coordinates clamped to a smaller monitor were never chosen by the user.
+    function selectMonitor(screen) {
+        const fits = !!screen && controller.fixed_x < screen.width && controller.fixed_y < screen.height
+        selectedMonitor = screen
+        syncMonitor()
+        controller.fixed_position_confirmed = fits
+    }
+
     function syncMonitor() {
         const screen = selectedMonitor
-        if (controller.running || controller.busy) controller.stop()
-        controller.monitor_identity = screen ? monitors.identity(screen) : ""
-        controller.monitor_x = screen ? screen.virtualX : 0
-        controller.monitor_y = screen ? screen.virtualY : 0
-        controller.monitor_width = screen ? screen.width : 0
-        controller.monitor_height = screen ? screen.height : 0
+        const identity = screen ? monitors.identity(screen) : ""
+        const x = screen ? screen.virtualX : 0
+        const y = screen ? screen.virtualY : 0
+        const width = screen ? screen.width : 0
+        const height = screen ? screen.height : 0
+        const moved = identity !== controller.monitor_identity
+            || x !== controller.monitor_x || y !== controller.monitor_y
+            || width !== controller.monitor_width || height !== controller.monitor_height
+        // Cursor-position runs never use the selected monitor.
+        if ((controller.running || controller.busy) && !controller.current_position
+                && (moved || !controller.fixed_position_confirmed)) {
+            controller.stop()
+            monitorStopMessage.visible = true
+        }
+        controller.monitor_identity = identity
+        controller.monitor_x = x
+        controller.monitor_y = y
+        controller.monitor_width = width
+        controller.monitor_height = height
         controller.fixed_x = Math.max(0, Math.min(controller.fixed_x, xInput.to))
         controller.fixed_y = Math.max(0, Math.min(controller.fixed_y, yInput.to))
         // SpinBox initially clamps saved coordinates to its zero-sized monitor.
@@ -148,13 +169,14 @@ Kirigami.ApplicationWindow {
         }
     }
     onScreenChanged: ensureMonitorSelection()
+    function handleScreensChanged() {
+        finishPicker()
+        ensureMonitorSelection()
+        syncMonitor()
+    }
     Connections {
         target: Qt.application
-        function onScreensChanged() {
-            root.finishPicker()
-            root.ensureMonitorSelection()
-            root.syncMonitor()
-        }
+        function onScreensChanged() { root.handleScreensChanged() }
     }
     Connections {
         target: root.selectedMonitor
@@ -194,6 +216,18 @@ Kirigami.ApplicationWindow {
                 function onError_messageChanged() {
                     errorBanner.visible = controller.error_message.length > 0
                 }
+                function onRunningChanged() { if (controller.running) monitorStopMessage.visible = false }
+                function onBusyChanged() { if (controller.busy) monitorStopMessage.visible = false }
+            }
+
+            Kirigami.InlineMessage {
+                id: monitorStopMessage
+                objectName: "monitorStopMessage"
+                Layout.fillWidth: true
+                visible: false
+                type: Kirigami.MessageType.Warning
+                text: qsTr("Klicken wurde gestoppt, weil sich der Monitor der festen Position geändert hat. Bitte Position prüfen und neu starten.")
+                showCloseButton: true
             }
 
             Controls.GroupBox {
@@ -345,7 +379,7 @@ Kirigami.ApplicationWindow {
                                 root.monitorSelectionReady = true
                                 root.ensureMonitorSelection()
                             }
-                            onActivated: { root.selectedMonitor = model[currentIndex].screen; root.confirmMonitor() }
+                            onActivated: root.selectMonitor(model[currentIndex].screen)
                             Accessible.name: qsTr("Monitor für die feste Position")
                         }
                     }
