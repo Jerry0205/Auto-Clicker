@@ -1,4 +1,5 @@
 /target/
+/.qmlls.ini
 /pkg/
 /srcpkg/
 /*.pkg.tar.*
