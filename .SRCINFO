@@ -1,7 +1,7 @@
 pkgbase = klickmeister
 	pkgdesc = Small, safe auto clicker for KDE Plasma Wayland
 	pkgver = 0.1.2
-	pkgrel = 1
+	pkgrel = 2
 	url = https://github.com/jerry0205/Auto-Clicker
 	arch = x86_64
 	license = MIT
@@ -19,5 +19,7 @@ pkgbase = klickmeister
 	depends = xdg-desktop-portal
 	depends = xdg-desktop-portal-kde
 	options = !lto
+	source = Auto-Clicker-4b9d1d711889ddfbfc9f92e5a363cd35aabbf10f.tar.gz::https://github.com/Jerry0205/Auto-Clicker/archive/4b9d1d711889ddfbfc9f92e5a363cd35aabbf10f.tar.gz
+	b2sums = adbeeec692c1d41becbdb4295c5ff862b6954c9c7776664965a6d54943847d3cf7bb6fa725cd1607ef9d8ae301bf7eb0e16c56c09da3600669b95994d1ef2611
 
 pkgname = klickmeister
