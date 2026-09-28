@@ -26,7 +26,6 @@ QtObject {
     property int monitor_width: 0
     property int monitor_height: 0
     property bool selecting_position: false
-    signal screenshot_ready(int requestId, string uri, string error)
     function initialize() {}
     function shutdown() {}
     function start() {}
@@ -34,6 +33,4 @@ QtObject {
     function toggle() {}
     function configure_hotkey() {}
     function clear_error() { error_message = "" }
-    function capture_screenshot(requestId) {}
-    function cancel_screenshot(requestId) {}
 }

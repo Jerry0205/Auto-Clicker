@@ -43,20 +43,6 @@ pub mod qobject {
         #[qproperty(bool, selecting_position)]
         type AppController = super::AppControllerRust;
 
-        #[qsignal]
-        fn screenshot_ready(
-            self: Pin<&mut AppController>,
-            request_id: i32,
-            uri: QString,
-            error: QString,
-        );
-
-        #[qinvokable]
-        fn capture_screenshot(self: Pin<&mut AppController>, request_id: i32);
-
-        #[qinvokable]
-        fn cancel_screenshot(self: Pin<&mut AppController>, request_id: i32);
-
         #[qinvokable]
         fn initialize(self: Pin<&mut AppController>);
 
@@ -190,26 +176,6 @@ impl qobject::AppController {
             });
         });
         self.as_mut().rust_mut().get_mut().worker = Some(worker);
-    }
-
-    /// Request a screenshot and report queue failures back to the picker.
-    pub fn capture_screenshot(mut self: Pin<&mut Self>, request_id: i32) {
-        let result = self
-            .rust()
-            .worker
-            .as_ref()
-            .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")
-            .and_then(|worker| worker.send(Command::CaptureScreenshot(request_id)));
-        if let Err(error) = result {
-            self.as_mut()
-                .screenshot_ready(request_id, QString::default(), QString::from(error));
-        }
-    }
-
-    /// Cancels only the screenshot belonging to the picker being closed.
-    pub fn cancel_screenshot(mut self: Pin<&mut Self>, request_id: i32) {
-        self.as_mut()
-            .send_command(Command::CancelScreenshot(request_id));
     }
 
     /// Validate and save current controls before requesting a click run.
@@ -376,20 +342,9 @@ impl qobject::AppController {
         self.as_mut().set_error_message(QString::from(message));
     }
 
-    /// Apply worker results on the Qt thread and route capture responses.
+    /// Apply worker results on the Qt thread.
     fn handle_worker_event(mut self: Pin<&mut Self>, event: WorkerEvent) {
         match event {
-            WorkerEvent::Screenshot(request_id, result) => {
-                let (uri, error) = match result {
-                    Ok(uri) => (uri, String::new()),
-                    Err(error) => (String::new(), error),
-                };
-                self.as_mut().screenshot_ready(
-                    request_id,
-                    QString::from(&uri),
-                    QString::from(&error),
-                );
-            }
             WorkerEvent::Status(status) => {
                 let busy = status.contains("Warte auf Wayland");
                 self.as_mut().set_busy(busy);

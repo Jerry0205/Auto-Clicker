@@ -21,7 +21,7 @@ use tokio::{
 type Options = HashMap<String, OwnedValue>;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 const PATH: &str = "/org/freedesktop/portal/desktop";
-static PORTAL_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static BUS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Default)]
 struct Observed {
@@ -317,10 +317,6 @@ impl FakeRemote {
                 state.start_release.clone(),
             )
         };
-        if delay {
-            seen.notify_one();
-            release.notified().await;
-        }
         let mut results = HashMap::from([("devices".into(), OwnedValue::from(2_u32))]);
         if fixed {
             let stream = vec![(
@@ -335,7 +331,29 @@ impl FakeRemote {
                 Value::new(stream).try_into().map_err(failed)?,
             );
         }
-        respond(connection, &header, &options, results).await
+        if delay {
+            // Return the request handle now, but keep its Response pending.
+            let path = handle(&header, &options, "handle_token", "request")?;
+            let destination = header.sender().map(ToString::to_string);
+            let connection = connection.clone();
+            let response_path = path.clone();
+            tokio::spawn(async move {
+                seen.notify_one();
+                release.notified().await;
+                let _ = connection
+                    .emit_signal(
+                        destination.as_deref(),
+                        &response_path,
+                        "org.freedesktop.portal.Request",
+                        "Response",
+                        &(0_u32, results),
+                    )
+                    .await;
+            });
+            Ok(path)
+        } else {
+            respond(connection, &header, &options, results).await
+        }
     }
     async fn notify_pointer_button(
         &self,
@@ -451,7 +469,7 @@ async fn shortcuts_changed(service: &zbus::Connection, session: &str, trigger: &
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> TestResult {
-    let _serial = PORTAL_TEST_LOCK.lock().await;
+    let _serial = BUS_TEST_LOCK.lock().await;
     let observed = Shared::default();
     observed
         .lock()
@@ -588,11 +606,80 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
     Ok(())
 }
 
+async fn close_remote_session(service: &zbus::Connection, observed: &Shared) -> TestResult {
+    let session = observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remote_session
+        .clone()
+        .ok_or("missing RemoteDesktop session")?;
+    service
+        .emit_signal(
+            None::<&str>,
+            &session,
+            "org.freedesktop.portal.Session",
+            "Closed",
+            &(Options::new(),),
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn revocation_ends_start_while_response_is_pending() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = zbus::connection::Builder::session()?
+        .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeHotkeys(observed.clone()))?
+        .serve_at(PATH, FakeRemote(observed.clone()))?
+        .build()
+        .await?;
+    let settings = ClickSettings {
+        interval_ms: 100,
+        button: MouseButton::Left,
+        click_type: ClickType::Single,
+        repeat: Some(1),
+        position: None,
+        monitor: None,
+    };
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let (seen, release) = {
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        state.delay_start = true;
+        (state.start_seen.clone(), state.start_release.clone())
+    };
+    let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+        worker.send(Command::Start(settings))?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        close_remote_session(&service, &observed).await?;
+        // Neither the pending Response nor the delayed request is released here.
+        timeout(
+            Duration::from_millis(700),
+            event(&mut events, |e| matches!(e, WorkerEvent::Running(false))),
+        )
+        .await??;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+        assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.is_empty());
+        Ok(())
+    }
+    .await;
+    release.notify_one();
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
 /// Run with: dbus-run-session -- cargo test --test worker_portal -- --ignored
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
-    let _serial = PORTAL_TEST_LOCK.lock().await;
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
     let observed = Shared::default();
     let service = zbus::connection::Builder::session()?
         .name("org.freedesktop.portal.Desktop")?
@@ -633,6 +720,70 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             )
             .await?;
         event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
+        // A revoked long-running session must stop before the next scheduled click.
+        let long_run = ClickSettings {
+            interval_ms: 60_000,
+            repeat: None,
+            ..settings.clone()
+        };
+        worker.send(Command::Start(long_run))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        timeout(Duration::from_secs(3), async {
+            loop {
+                if observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len() >= 2 {
+                    break;
+                }
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let first_session = observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session.clone();
+        close_remote_session(&service, &observed).await?;
+        timeout(Duration::from_millis(500), event(&mut events, |e| matches!(e, WorkerEvent::Running(false)))).await??;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+
+        // A stopped session must also be discarded, so a later start asks again.
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert_ne!(observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session, first_session);
+        let stopped_session = observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session.clone();
+        close_remote_session(&service, &observed).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Status(message) if message.contains("Wayland-Berechtigung beendet"))).await?;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert_ne!(observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session, stopped_session);
+
+        // If permission is revoked during Start, no run may be confirmed.
+        close_remote_session(&service, &observed).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Status(message) if message.contains("Wayland-Berechtigung beendet"))).await?;
+        let (seen, release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.delay_start = true;
+            (state.start_seen.clone(), state.start_release.clone())
+        };
+        worker.send(Command::Start(settings.clone()))?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        close_remote_session(&service, &observed).await?;
+        release.notify_one();
+        let mut incorrectly_started = false;
+        timeout(Duration::from_secs(3), async {
+            while let Some(event) = events.recv().await {
+                match event {
+                    WorkerEvent::Running(true) => incorrectly_started = true,
+                    WorkerEvent::Error(_) => break,
+                    _ => {}
+                }
+            }
+        })
+        .await?;
+        assert!(!incorrectly_started, "revoked permission must not start a run");
+        observed.lock().unwrap_or_else(|e| e.into_inner()).delay_start = false;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+
         for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
             for click_type in [ClickType::Single, ClickType::Double] {
                 observed
