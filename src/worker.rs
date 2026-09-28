@@ -70,7 +70,7 @@ impl WorkerHandle {
         Self::spawn_with(builder, initial, preferred_hotkey, Arc::new(emit))
     }
 
-    /// Report thread and runtime start failures instead of leaving the UI at "Bereit".
+    /// Spawn with an injectable thread builder and report start failures as errors.
     fn spawn_with(
         builder: thread::Builder,
         initial: ClickSettings,
@@ -135,15 +135,18 @@ fn worker_start_failed(error: &dyn fmt::Display) -> WorkerEvent {
     ))
 }
 
-/// Without a runtime the unpolled worker is dropped, which closes its command channel.
 fn block_on_runtime(
     runtime: io::Result<Runtime>,
     emit: &Emitter,
-    worker: impl Future<Output = ()>,
+    worker: impl std::future::Future<Output = ()>,
 ) {
     match runtime {
         Ok(runtime) => runtime.block_on(worker),
-        Err(error) => (emit)(worker_start_failed(&error)),
+        Err(error) => {
+            // Close the command channel before the UI can react to the error.
+            drop(worker);
+            (emit)(worker_start_failed(&error));
+        }
     }
 }
 
@@ -796,9 +799,13 @@ mod tests {
     }
 
     #[test]
-    fn failed_runtime_is_reported_and_closes_command_channel() {
-        let (emit, events) = recording_emitter();
+    fn failed_runtime_closes_command_channel_before_reporting() {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
+        let commands = tx.clone();
+        let (events_tx, events) = std::sync::mpsc::channel();
+        let emit: Emitter = Arc::new(move |event| {
+            let _ = events_tx.send((event, commands.is_closed()));
+        });
         block_on_runtime(Err(io::Error::other("Testfehler")), &emit, async move {
             let _commands = rx;
             panic!("the worker must not run without a runtime");
@@ -806,7 +813,7 @@ mod tests {
         let reported: Vec<_> = events.try_iter().collect();
         assert!(matches!(
             reported.as_slice(),
-            [WorkerEvent::Error(message)] if *message == format!("{START_FAILED} Testfehler")
+            [(WorkerEvent::Error(message), true)] if *message == format!("{START_FAILED} Testfehler")
         ));
         assert_eq!(handle(tx).send(Command::Stop), WORKER_GONE);
     }
