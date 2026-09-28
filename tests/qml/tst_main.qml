@@ -144,4 +144,14 @@ TestCase {
         compare(x.contentItem.Accessible.name, x.Accessible.name)
         compare(y.contentItem.Accessible.name, y.Accessible.name)
     }
+
+    function test_position_selection_opens_without_capture_delay() {
+        controller.current_position = false
+        main.beginPicker(false)
+        verify(main.positionPicker !== null)
+        compare(main.positionPicker.visible, true)
+        tryVerify(function() { return main.positionPicker && main.positionPicker.inputReady })
+        main.finishPicker()
+        compare(main.positionPicker, null)
+    }
 }
