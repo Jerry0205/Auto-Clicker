@@ -321,12 +321,13 @@ async fn wait_click_session_closed(session: &mut Option<PortalClickSession>) {
     }
 }
 
+/// Report whether an active or pending run ended with the closed session.
 async fn discard_closed_click_session(
     session: &mut Option<PortalClickSession>,
     machine: &mut StateMachine,
     active: &mut Option<ActiveRun>,
     emit: &Emitter,
-) {
+) -> bool {
     let was_running = stop_run(machine, active, emit);
     if let Some(session) = session.take() {
         session.close().await;
@@ -341,6 +342,7 @@ async fn discard_closed_click_session(
             "Wayland-Berechtigung beendet – wird beim nächsten Start neu angefragt".to_owned(),
         ));
     }
+    was_running
 }
 
 async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task::JoinError> {
@@ -406,12 +408,10 @@ async fn run_worker(
                             (emit)(WorkerEvent::Error("Vor dem Start muss der globale Stop-Hotkey von KWin bestätigt sein.".to_owned()));
                             continue;
                         }
-                        if click_session.as_mut().is_some_and(PortalClickSession::is_closed) {
-                            let was_running = matches!(machine.state(), RunState::Starting | RunState::Clicking);
-                            discard_closed_click_session(&mut click_session, &mut machine, &mut active, &emit).await;
-                            if was_running {
-                                continue;
-                            }
+                        if click_session.as_mut().is_some_and(PortalClickSession::is_closed)
+                            && discard_closed_click_session(&mut click_session, &mut machine, &mut active, &emit).await
+                        {
+                            continue;
                         }
                         match request_validated_start(&mut machine, &settings) {
                             Ok(true) => {
@@ -585,10 +585,12 @@ async fn run_worker(
                     }
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
+                        cancel_start(&mut start_task, &mut start_cancel).await;
                         abort_run(&mut machine, &mut active, &emit);
                         (emit)(WorkerEvent::Error(error));
                     }
                     Err(error) if !error.is_cancelled() => {
+                        cancel_start(&mut start_task, &mut start_cancel).await;
                         abort_run(&mut machine, &mut active, &emit);
                         (emit)(WorkerEvent::Error(format!("Hotkey-Dialog ist fehlgeschlagen: {error}")));
                     }

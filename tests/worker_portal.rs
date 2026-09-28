@@ -459,6 +459,16 @@ async fn events_until(
     .await?
 }
 
+fn run_states(events: &[WorkerEvent]) -> Vec<RunState> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            WorkerEvent::State(state) => Some(*state),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Hotkey problems without an active run must only change the hotkey phase.
 fn assert_hotkey_only(events: &[WorkerEvent]) {
     assert!(
@@ -972,6 +982,42 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             )
             .await?;
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+
+        // Removing the hotkey fails a pending start and cancels its permission request.
+        let hotkey_session = observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_session.clone();
+        let (seen, release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.delay_start = true;
+            (state.start_seen.clone(), state.start_release.clone())
+        };
+        worker.send(Command::Start(ClickSettings {
+            position: Some((1919, 1079)),
+            monitor: Some(MonitorGeometry { x: -1920, y: 0, width: 1920, height: 1080 }),
+            ..settings.clone()
+        }))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Starting))).await?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        shortcuts_changed(&service, &hotkey_session, "").await?;
+        let removed = events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?;
+        assert_eq!(run_states(&removed), [RunState::Stopped, RunState::Error]);
+        release.notify_one();
+        observed.lock().unwrap_or_else(|e| e.into_inner()).delay_start = false;
+        shortcuts_changed(&service, &hotkey_session, "Pause").await?;
+        let rebound = events_until(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+        assert!(run_states(&rebound).is_empty(), "a cancelled start must not resume: {rebound:?}");
+
+        // Removing the hotkey also fails an active run.
+        worker.send(Command::Start(ClickSettings {
+            repeat: None,
+            ..settings.clone()
+        }))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        shortcuts_changed(&service, &hotkey_session, "").await?;
+        let removed = events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?;
+        assert_eq!(run_states(&removed), [RunState::Stopped, RunState::Error]);
+        shortcuts_changed(&service, &hotkey_session, "Pause").await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+
         worker.send(Command::Start(ClickSettings {
             repeat: None,
             ..settings
