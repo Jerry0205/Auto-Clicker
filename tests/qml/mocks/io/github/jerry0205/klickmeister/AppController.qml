@@ -5,6 +5,9 @@ QtObject {
     property string status: "Bereit"
     property string error_message: ""
     property string hotkey: "Pause"
+    property bool hotkey_ready: true
+    property bool hotkey_pending: false
+    property bool hotkey_configuring: false
     property bool running: false
     property bool busy: false
     property double interval_ms: 100

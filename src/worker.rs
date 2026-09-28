@@ -38,7 +38,7 @@ const HOTKEY_ID: &str = "toggle-clicking";
 pub enum Command {
     Start(ClickSettings),
     Stop,
-    ConfigureHotkey,
+    ConfigureHotkey(String),
     Shutdown,
 }
 
@@ -47,8 +47,17 @@ pub enum WorkerEvent {
     Status(String),
     Running(bool),
     Hotkey(String),
+    HotkeyPhase(HotkeyPhase),
     StartRequested,
     Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyPhase {
+    Unavailable,
+    Registering,
+    Ready,
+    Configuring(bool),
 }
 
 pub struct WorkerHandle {
@@ -142,7 +151,7 @@ struct HotkeyRegistration {
     connection: ashpd::zbus::Connection,
     portal: GlobalShortcuts,
     session: Session<GlobalShortcuts>,
-    actual: String,
+    actual: Option<String>,
 }
 
 /// Bind the stop hotkey on an owned connection and clean up failed or cancelled requests.
@@ -180,12 +189,13 @@ async fn setup_hotkey(
             .map_err(|error| format!("Hotkey konnte nicht angefragt werden: {error}"))?
             .response()
             .map_err(|error| format!("Hotkey wurde nicht freigegeben: {error}"))?;
-        let actual = response
+        let shortcut = response
             .shortcuts()
             .iter()
             .find(|shortcut| shortcut.id() == HOTKEY_ID)
-            .map(|shortcut| shortcut.trigger_description().to_owned())
-            .ok_or_else(|| "KWin hat keinen globalen Hotkey gebunden.".to_owned())?;
+            .ok_or_else(|| "KWin hat keinen globalen Stop-Hotkey gebunden.".to_owned())?;
+        let actual = (!shortcut.trigger_description().trim().is_empty())
+            .then(|| shortcut.trigger_description().to_owned());
         Ok((portal, actual))
     };
     let result = tokio::select! {
@@ -336,10 +346,12 @@ async fn run_worker(
     let mut hotkey_task = Some(tokio::spawn(setup_hotkey(preferred_hotkey, rx)));
     let mut configure_task: Option<JoinHandle<Result<(), String>>> = None;
     let mut hotkey: Option<HotkeyState> = None;
+    let mut hotkey_bound = false;
 
     (emit)(WorkerEvent::Status(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
     ));
+    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
 
     loop {
         let tick_deadline = active.as_ref().map(|run| run.next_tick);
@@ -352,7 +364,7 @@ async fn run_worker(
                 let Some(command) = command else { break; };
                 match command {
                     Command::Start(settings) => {
-                        if hotkey.is_none() {
+                        if !hotkey_bound || configure_task.is_some() {
                             (emit)(WorkerEvent::Error("Vor dem Start muss der globale Stop-Hotkey von KWin bestätigt sein.".to_owned()));
                             continue;
                         }
@@ -387,13 +399,14 @@ async fn run_worker(
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         stop_run(&mut machine, &mut active, &emit);
                     }
-                    Command::ConfigureHotkey => {
-                        if configure_task.is_some() {
+                    Command::ConfigureHotkey(preferred) => {
+                        if configure_task.is_some() || hotkey_task.is_some() {
                             continue;
                         }
                         if let Some(state) = &hotkey {
                             let portal = Arc::clone(&state.portal);
                             let session = Arc::clone(&state.session);
+                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(hotkey_bound)));
                             configure_task = Some(tokio::spawn(async move {
                                 portal
                                     .configure_shortcuts(
@@ -405,7 +418,11 @@ async fn run_worker(
                                     .map_err(|error| format!("Hotkey-Dialog konnte nicht geöffnet werden: {error}"))
                             }));
                         } else {
-                            (emit)(WorkerEvent::Error("Der globale Hotkey ist noch nicht verfügbar.".to_owned()));
+                            let (tx, rx) = oneshot::channel();
+                            hotkey_cancel = Some(tx);
+                            hotkey_task = Some(tokio::spawn(setup_hotkey(preferred, rx)));
+                            (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
+                            (emit)(WorkerEvent::Status("Hotkey wird erneut eingerichtet …".to_owned()));
                         }
                     }
                     Command::Shutdown => break,
@@ -465,6 +482,7 @@ async fn run_worker(
                                 if !watching {
                                     let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                     let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+                                    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
                                     (emit)(WorkerEvent::Error("Die Hotkey-Sitzung kann nicht überwacht werden.".to_owned()));
                                     continue;
                                 }
@@ -481,26 +499,50 @@ async fn run_worker(
                                     session,
                                     events: Box::pin(events),
                                 });
-                                (emit)(WorkerEvent::Hotkey(actual));
-                                if machine.state() == RunState::Ready {
-                                    (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                                if let Some(actual) = actual {
+                                    hotkey_bound = true;
+                                    (emit)(WorkerEvent::Hotkey(actual));
+                                    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Ready));
+                                    if matches!(machine.state(), RunState::Ready | RunState::Stopped | RunState::Error) {
+                                        (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                                    }
+                                } else {
+                                    hotkey_bound = false;
+                                    (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                                    (emit)(WorkerEvent::Error("KWin hat keinen globalen Stop-Hotkey gebunden.".to_owned()));
                                 }
                             }
                             (Err(error), _) | (_, Err(error)) => {
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+                                (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
                                 (emit)(WorkerEvent::Error(format!("Hotkey-Signale sind nicht verfügbar: {error}")));
                             }
                         }
                     }
-                    Ok(Err(error)) => (emit)(WorkerEvent::Error(error)),
-                    Err(error) if !error.is_cancelled() => (emit)(WorkerEvent::Error(format!("Hotkey-Aufgabe ist fehlgeschlagen: {error}"))),
-                    Err(_) => {}
+                    Ok(Err(error)) => {
+                        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                        (emit)(WorkerEvent::Error(error));
+                    }
+                    Err(error) if !error.is_cancelled() => {
+                        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
+                        (emit)(WorkerEvent::Error(format!("Hotkey-Aufgabe ist fehlgeschlagen: {error}")));
+                    }
+                    Err(_) => (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable)),
                 }
             }
             result = wait_task(&mut configure_task), if configure_task.is_some() => {
                 configure_task = None;
+                // ConfigureShortcuts only acknowledges the method call. The portal
+                // does not report when its settings window is closed.
+                (emit)(WorkerEvent::HotkeyPhase(if hotkey_bound { HotkeyPhase::Ready } else { HotkeyPhase::Unavailable }));
                 match result {
+                    Ok(Ok(())) if hotkey_bound && !matches!(machine.state(), RunState::Starting | RunState::Clicking) => {
+                        (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                    }
+                    Ok(Ok(())) if !hotkey_bound => {
+                        (emit)(WorkerEvent::Status("Warte auf globalen Stop-Hotkey …".to_owned()));
+                    }
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
                         stop_run(&mut machine, &mut active, &emit);
@@ -517,11 +559,11 @@ async fn run_worker(
             }
             hotkey_event = next_hotkey(&mut hotkey), if hotkey.is_some() => {
                 match hotkey_event {
-                    Some(HotkeySignal::Activated(activation)) if activation.shortcut_id() == HOTKEY_ID => {
+                    Some(HotkeySignal::Activated(activation)) if activation.shortcut_id() == HOTKEY_ID && hotkey_bound => {
                         if matches!(machine.state(), RunState::Starting | RunState::Clicking) {
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
-                        } else {
+                        } else if configure_task.is_none() {
                             // Ask the Qt side to start so the current UI values are
                             // collected, validated and saved. Keeping a settings copy
                             // here made hotkey starts use values from the previous run.
@@ -529,16 +571,19 @@ async fn run_worker(
                         }
                     }
                     Some(HotkeySignal::Changed(changed)) => {
-                        if let Some(shortcut) = changed.shortcuts().iter().find(|shortcut| shortcut.id() == HOTKEY_ID) {
+                        if let Some(shortcut) = changed.shortcuts().iter().find(|shortcut| shortcut.id() == HOTKEY_ID && !shortcut.trigger_description().trim().is_empty()) {
+                            hotkey_bound = true;
                             (emit)(WorkerEvent::Hotkey(shortcut.trigger_description().to_owned()));
+                            (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(true) } else { HotkeyPhase::Ready }));
+                            if configure_task.is_none() && !matches!(machine.state(), RunState::Starting | RunState::Clicking) {
+                                (emit)(WorkerEvent::Status("Bereit".to_owned()));
+                            }
                         } else {
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
                             machine.fail();
-                            if let Some(state) = hotkey.take() {
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
-                            }
+                            hotkey_bound = false;
+                            (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(false) } else { HotkeyPhase::Unavailable }));
                             (emit)(WorkerEvent::Error("Der globale Stop-Hotkey wurde entfernt.".to_owned()));
                         }
                     }
@@ -547,6 +592,9 @@ async fn run_worker(
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         stop_run(&mut machine, &mut active, &emit);
                         machine.fail();
+                        if let Some(task) = configure_task.take() { task.abort(); }
+                        hotkey_bound = false;
+                        (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
                         (emit)(WorkerEvent::Error("Die globale Hotkey-Sitzung wurde beendet.".to_owned()));
                         if let Some(state) = hotkey.take() {
                             let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
