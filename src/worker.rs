@@ -18,20 +18,23 @@ use ashpd::desktop::{
 use futures_util::{Stream, StreamExt, future};
 use tokio::{
     runtime::Builder,
-    sync::{mpsc, oneshot},
+    sync::{
+        mpsc::{self, error::TrySendError},
+        oneshot,
+    },
     task::JoinHandle,
     time::{Instant, sleep_until, timeout},
 };
 
 use crate::{
     model::{ClickSettings, MonitorGeometry, ValidationError},
-    portal::PortalClickSession,
+    portal::{CLOSE_TIMEOUT, PortalClickSession, close_session},
     scheduler::Schedule,
     state::{RunState, StateMachine},
 };
 
 const COMMAND_CAPACITY: usize = 16;
-const PORTAL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+const HOTKEY_WATCH_TIMEOUT: Duration = Duration::from_secs(1);
 const HOTKEY_ID: &str = "toggle-clicking";
 
 #[derive(Debug)]
@@ -61,32 +64,34 @@ pub struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    pub fn spawn<F>(initial: ClickSettings, preferred_hotkey: String, emit: F) -> Self
+    pub fn spawn<F>(preferred_hotkey: String, emit: F) -> Self
     where
         F: Fn(WorkerEvent) + Send + Sync + 'static,
     {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = Arc::clone(&closing);
-        let emit = Arc::new(emit);
+        let emit: Emitter = Arc::new(emit);
+        let worker_emit = Arc::clone(&emit);
+        let start_failed = |error: &dyn std::fmt::Display| {
+            WorkerEvent::Error(format!(
+                "Der Hintergrund-Worker konnte nicht starten: {error}"
+            ))
+        };
         let join = thread::Builder::new()
             .name("klickmeister-worker".to_owned())
-            .spawn(move || {
-                let runtime = Builder::new_current_thread().enable_all().build();
-                match runtime {
+            .spawn(
+                move || match Builder::new_current_thread().enable_all().build() {
                     Ok(runtime) => runtime.block_on(run_worker(
                         rx,
-                        initial,
                         preferred_hotkey,
-                        emit,
+                        worker_emit,
                         worker_closing,
                     )),
-                    Err(error) => {
-                        // Runtime construction only fails for OS resource exhaustion.
-                        eprintln!("Klickmeister worker runtime failed: {error}");
-                    }
-                }
-            })
+                    Err(error) => (worker_emit)(start_failed(&error)),
+                },
+            )
+            .inspect_err(|error| (emit)(start_failed(error)))
             .ok();
         Self { tx, closing, join }
     }
@@ -95,9 +100,10 @@ impl WorkerHandle {
         if self.closing.load(Ordering::Acquire) {
             return Err("Die Anwendung wird bereits beendet.");
         }
-        self.tx
-            .try_send(command)
-            .map_err(|_| "Der interne Befehlskanal ist ausgelastet.")
+        self.tx.try_send(command).map_err(|error| match error {
+            TrySendError::Full(_) => "Der interne Befehlskanal ist ausgelastet.",
+            TrySendError::Closed(_) => "Der Hintergrund-Worker läuft nicht mehr.",
+        })
     }
 
     pub fn shutdown(mut self) {
@@ -127,6 +133,12 @@ struct HotkeyState {
     events: Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>,
 }
 
+impl HotkeyState {
+    async fn close(self) {
+        close_session(Some(&*self.session), self.connection).await;
+    }
+}
+
 enum HotkeySignal {
     Activated(Activated),
     Changed(ShortcutsChanged),
@@ -146,6 +158,12 @@ struct HotkeyRegistration {
     portal: GlobalShortcuts,
     session: Session<GlobalShortcuts>,
     actual: String,
+}
+
+impl HotkeyRegistration {
+    async fn close(self) {
+        close_session(Some(&self.session), self.connection).await;
+    }
 }
 
 /// Bind the stop hotkey on an owned connection and clean up failed or cancelled requests.
@@ -204,10 +222,7 @@ async fn setup_hotkey(
             session: session.ok_or("Hotkey-Sitzung fehlt.")?,
         }),
         Err(error) => {
-            if let Some(session) = session {
-                let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
-            }
-            let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+            close_session(session.as_ref(), connection).await;
             Err(error)
         }
     }
@@ -224,8 +239,7 @@ async fn cancel_hotkey(
     if let Some(task) = task.take()
         && let Ok(Ok(registration)) = task.await
     {
-        let _ = timeout(PORTAL_CLOSE_TIMEOUT, registration.session.close()).await;
-        let _ = timeout(PORTAL_CLOSE_TIMEOUT, registration.connection.close()).await;
+        registration.close().await;
     }
 }
 
@@ -259,7 +273,6 @@ async fn cancel_start(
     }
 }
 
-/// Create a portal session for the selected monitor or current cursor.
 async fn setup_click_session(
     monitor: Option<MonitorGeometry>,
     cancel: oneshot::Receiver<()>,
@@ -295,7 +308,7 @@ async fn register_hotkey_watcher(
     ready: oneshot::Receiver<()>,
     closed: impl std::future::Future<Output = HotkeySignal>,
 ) -> bool {
-    timeout(PORTAL_CLOSE_TIMEOUT, async {
+    timeout(HOTKEY_WATCH_TIMEOUT, async {
         tokio::select! {
             result = ready => result.is_ok(),
             _ = closed => false,
@@ -308,7 +321,6 @@ async fn register_hotkey_watcher(
 /// Serialize clicks, permissions, shortcut events and cancellable captures.
 async fn run_worker(
     mut commands: mpsc::Receiver<Command>,
-    mut latest_settings: ClickSettings,
     preferred_hotkey: String,
     emit: Emitter,
     closing: Arc<AtomicBool>,
@@ -318,6 +330,7 @@ async fn run_worker(
     let mut active: Option<ActiveRun> = None;
     let mut start_task: Option<JoinHandle<Result<PortalClickSession, String>>> = None;
     let mut start_cancel = None;
+    let mut pending_settings: Option<ClickSettings> = None;
     let (tx, rx) = oneshot::channel();
     let mut hotkey_cancel = Some(tx);
     let mut hotkey_task = Some(tokio::spawn(setup_hotkey(preferred_hotkey, rx)));
@@ -343,7 +356,7 @@ async fn run_worker(
                             continue;
                         }
                         match request_validated_start(&mut machine, &settings) {
-                            Ok(true) => latest_settings = settings.clone(),
+                            Ok(true) => {}
                             Ok(false) => continue,
                             Err(error) => {
                                 (emit)(WorkerEvent::Error(error.to_string()));
@@ -360,6 +373,7 @@ async fn run_worker(
                             let (tx, rx) = oneshot::channel();
                             start_cancel = Some(tx);
                             start_task = Some(tokio::spawn(setup_click_session(settings.monitor, rx)));
+                            pending_settings = Some(settings);
                         }
                     }
                     Command::Stop => {
@@ -413,7 +427,9 @@ async fn run_worker(
                 match result {
                     Ok(Ok(session)) => {
                         click_session = Some(session);
-                        start_run(&mut machine, &mut active, latest_settings.clone(), &emit);
+                        if let Some(settings) = pending_settings.take() {
+                            start_run(&mut machine, &mut active, settings, &emit);
+                        }
                     }
                     Ok(Err(error)) => {
                         machine.fail();
@@ -452,8 +468,7 @@ async fn run_worker(
                                 // Register the Closed signal before any start can be accepted.
                                 let watching = register_hotkey_watcher(ready_rx, &mut closed).await;
                                 if !watching {
-                                    let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
-                                    let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+                                    close_session(Some(&*session), connection).await;
                                     (emit)(WorkerEvent::Error("Die Hotkey-Sitzung kann nicht überwacht werden.".to_owned()));
                                     continue;
                                 }
@@ -476,8 +491,7 @@ async fn run_worker(
                                 }
                             }
                             (Err(error), _) | (_, Err(error)) => {
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
+                                close_session(Some(&session), connection).await;
                                 (emit)(WorkerEvent::Error(format!("Hotkey-Signale sind nicht verfügbar: {error}")));
                             }
                         }
@@ -511,9 +525,7 @@ async fn run_worker(
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
                         } else {
-                            // Ask the Qt side to start so the current UI values are
-                            // collected, validated and saved. Keeping a settings copy
-                            // here made hotkey starts use values from the previous run.
+                            // Qt collects, validates and saves the current controls first.
                             (emit)(WorkerEvent::StartRequested);
                         }
                     }
@@ -525,8 +537,7 @@ async fn run_worker(
                             stop_run(&mut machine, &mut active, &emit);
                             machine.fail();
                             if let Some(state) = hotkey.take() {
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
-                                let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
+                                state.close().await;
                             }
                             (emit)(WorkerEvent::Error("Der globale Stop-Hotkey wurde entfernt.".to_owned()));
                         }
@@ -538,7 +549,8 @@ async fn run_worker(
                         machine.fail();
                         (emit)(WorkerEvent::Error("Die globale Hotkey-Sitzung wurde beendet.".to_owned()));
                         if let Some(state) = hotkey.take() {
-                            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
+                            // The portal has already closed the session itself.
+                            let _ = timeout(CLOSE_TIMEOUT, state.connection.close()).await;
                         }
                     }
                 }
@@ -569,9 +581,7 @@ async fn run_worker(
                 if run.schedule.is_finished() {
                     stop_run(&mut machine, &mut active, &emit);
                 } else {
-                    let scheduled = run.next_tick + run.schedule.interval();
-                    let now = Instant::now();
-                    run.next_tick = if scheduled > now { scheduled } else { now + run.schedule.interval() };
+                    run.next_tick = run.schedule.next_deadline(run.next_tick, Instant::now());
                 }
             }
         }
@@ -589,8 +599,7 @@ async fn run_worker(
         session.close().await;
     }
     if let Some(state) = hotkey {
-        let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
-        let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
+        state.close().await;
     }
     (emit)(WorkerEvent::Running(false));
 }
@@ -619,15 +628,13 @@ fn start_run(
     if !machine.started() {
         return;
     }
-    let schedule = Schedule::new(settings.interval(), settings.repeat);
-    let cps = settings.cps();
     *active = Some(ActiveRun {
+        schedule: Schedule::new(settings.interval(), settings.repeat),
         settings,
-        schedule,
         next_tick: Instant::now(),
     });
     (emit)(WorkerEvent::Running(true));
-    (emit)(WorkerEvent::Status(format!("Klickt • {cps:.0} CPS")));
+    (emit)(WorkerEvent::Status("Klickt".to_owned()));
 }
 
 fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &Emitter) {
@@ -646,7 +653,7 @@ mod tests {
     async fn stalled_hotkey_registration_times_out() {
         let (_ready_tx, ready_rx) = oneshot::channel();
         let result = timeout(
-            PORTAL_CLOSE_TIMEOUT * 2,
+            HOTKEY_WATCH_TIMEOUT * 2,
             register_hotkey_watcher(ready_rx, future::pending()),
         )
         .await;
@@ -665,7 +672,7 @@ mod tests {
         assert!(register_hotkey_watcher(ready_rx, &mut closed).await);
         assert!(close_tx.send(()).is_ok());
         assert!(matches!(
-            timeout(PORTAL_CLOSE_TIMEOUT, closed).await,
+            timeout(HOTKEY_WATCH_TIMEOUT, closed).await,
             Ok(HotkeySignal::Closed)
         ));
     }

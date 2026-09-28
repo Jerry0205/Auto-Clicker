@@ -28,7 +28,7 @@ QtObject {
     function shutdown() {}
     function start() {}
     function stop() { running = false; busy = false }
-    function toggle() {}
+    function toggle() { if (running || busy) stop(); else start() }
     function configure_hotkey() {}
     function clear_error() { error_message = "" }
     function capture_screenshot(requestId) {}

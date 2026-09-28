@@ -1,7 +1,6 @@
 import QtQuick
 
 QtObject {
-    // Qt supplies these fields from the current system's display metadata.
     function modelName(screen) {
         const model = String(screen.model || "").trim()
         return model !== String(screen.name || "").trim() ? model : ""

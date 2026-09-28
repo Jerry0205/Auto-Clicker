@@ -24,8 +24,8 @@ verwendet. Andere Sprachen/Layouts müssen vor Wiederverwendung angepasst werden
 Die Tests prüfen Timeout, Ablehnung, Zustimmung mit echtem Vollbild-Screenshot,
 einen unabhängigen bereits freigegebenen RemoteDesktop-Client, Klicks und Stop
 nach Screenshotfehlern sowie App-Schließen bei offener Screenshot-Anfrage.
-Zusätzlich laufen alle drei Maustasten mit Einzel-/Doppelklick; Menüwerte werden
-über sichtbare Einträge gewählt und anschließend gelesen. Jeder neue Picker wird
+Zusätzlich laufen alle drei Maustasten mit Einzel-/Doppelklick; die Optionen werden
+über die sichtbaren Auswahlknöpfe gewählt und anschließend als ausgewählt geprüft. Jeder neue Picker wird
 bei (80, 400) fixiert und vor dem Start bestätigt.
 
 Die aus den temporären Hilfsskripten übernommenen Korrekturen sind fest enthalten:

@@ -1,4 +1,7 @@
-use crate::model::{ClickType, MouseButton, PositionMode, RepeatMode};
+use crate::model::{
+    ClickType, MAX_INTERVAL_MS, MAX_REPEAT_COUNT, MIN_INTERVAL_MS, MouseButton, PositionMode,
+    RepeatMode,
+};
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -45,6 +48,15 @@ impl Default for AppConfig {
     }
 }
 
+impl AppConfig {
+    /// The SpinBoxes silently clamp out-of-range values, so the saved value would fail validation.
+    fn within_limits(mut self) -> Self {
+        self.interval_ms = self.interval_ms.clamp(MIN_INTERVAL_MS, MAX_INTERVAL_MS);
+        self.repeat_count = self.repeat_count.clamp(1, MAX_REPEAT_COUNT);
+        self
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("HOME und XDG_CONFIG_HOME sind nicht gesetzt")]
@@ -81,7 +93,9 @@ pub fn load() -> Result<AppConfig, ConfigError> {
 
 pub fn load_from(path: &Path) -> Result<AppConfig, ConfigError> {
     match fs::read_to_string(path) {
-        Ok(contents) => toml::from_str(&contents).map_err(ConfigError::Parse),
+        Ok(contents) => toml::from_str(&contents)
+            .map(AppConfig::within_limits)
+            .map_err(ConfigError::Parse),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(AppConfig::default()),
         Err(error) => Err(ConfigError::Read(error)),
     }
@@ -168,6 +182,35 @@ mod tests {
             "position_mode = \"fixed\"\nfixed_x = 640\nfixed_y = 480\n",
         );
         assert!(config.is_ok_and(|config| config.monitor_identity.is_empty()));
+    }
+
+    #[test]
+    fn out_of_range_values_are_clamped_on_load() {
+        for (contents, interval_ms, repeat_count) in [
+            (
+                "interval_ms = 5\nrepeat_count = 0\n".to_owned(),
+                MIN_INTERVAL_MS,
+                1,
+            ),
+            (
+                format!(
+                    "interval_ms = {}\nrepeat_count = {}\n",
+                    MAX_INTERVAL_MS + 1,
+                    MAX_REPEAT_COUNT + 1
+                ),
+                MAX_INTERVAL_MS,
+                MAX_REPEAT_COUNT,
+            ),
+        ] {
+            let path = test_path("limits");
+            assert!(fs::write(&path, contents).is_ok());
+            let config = load_from(&path);
+            let _ = fs::remove_file(path);
+            assert!(
+                config.is_ok_and(|config| config.interval_ms == interval_ms
+                    && config.repeat_count == repeat_count)
+            );
+        }
     }
 
     #[test]

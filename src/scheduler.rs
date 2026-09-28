@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use tokio::time::Instant;
+
 #[derive(Debug, Clone)]
 pub struct Schedule {
     interval: Duration,
@@ -28,6 +30,16 @@ impl Schedule {
         matches!(self.remaining, Some(0))
     }
 
+    /// Deadlines missed by a slow portal call are dropped instead of being sent as a burst.
+    pub fn next_deadline(&self, previous: Instant, now: Instant) -> Instant {
+        let scheduled = previous + self.interval;
+        if scheduled > now {
+            scheduled
+        } else {
+            now + self.interval
+        }
+    }
+
     pub fn record_tick(&mut self) -> bool {
         if self.is_finished() {
             return false;
@@ -52,6 +64,19 @@ mod tests {
         assert!(schedule.record_tick());
         assert!(!schedule.record_tick());
         assert_eq!(schedule.emitted(), 3);
+    }
+
+    #[test]
+    fn late_ticks_do_not_catch_up() {
+        let interval = Duration::from_millis(100);
+        let schedule = Schedule::new(interval, None);
+        let start = Instant::now();
+        assert_eq!(
+            schedule.next_deadline(start, start + Duration::from_millis(30)),
+            start + interval
+        );
+        let late = start + Duration::from_millis(350);
+        assert_eq!(schedule.next_deadline(start, late), late + interval);
     }
 
     #[test]

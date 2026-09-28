@@ -5,6 +5,25 @@ use crate::{
     model::{ClickSettings, ClickType, MonitorGeometry, MouseButton, PositionMode, RepeatMode},
     worker::{Command, WorkerEvent, WorkerHandle},
 };
+
+/// QML exposes the choices as integer indices in this order.
+const MOUSE_BUTTONS: [MouseButton; 3] =
+    [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
+const CLICK_TYPES: [ClickType; 2] = [ClickType::Single, ClickType::Double];
+
+fn index_of<T: PartialEq>(choices: &[T], value: &T) -> i32 {
+    choices
+        .iter()
+        .position(|choice| choice == value)
+        .and_then(|index| i32::try_from(index).ok())
+        .unwrap_or_default()
+}
+
+fn choice_at<T: Copy>(choices: &[T], index: i32) -> Option<T> {
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| choices.get(index).copied())
+}
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 
@@ -105,7 +124,7 @@ pub struct AppControllerRust {
 }
 
 impl Default for AppControllerRust {
-    /// Load saved controls while requiring fixed-position monitor restoration.
+    /// A saved fixed position stays unconfirmed until QML has matched its monitor.
     fn default() -> Self {
         let (config, startup_error) = match config::load() {
             Ok(config) => (config, None),
@@ -118,15 +137,8 @@ impl Default for AppControllerRust {
             running: false,
             busy: false,
             interval_ms: i64::try_from(config.interval_ms).unwrap_or(100),
-            mouse_button: match config.mouse_button {
-                MouseButton::Left => 0,
-                MouseButton::Right => 1,
-                MouseButton::Middle => 2,
-            },
-            click_type: match config.click_type {
-                ClickType::Single => 0,
-                ClickType::Double => 1,
-            },
+            mouse_button: index_of(&MOUSE_BUTTONS, &config.mouse_button),
+            click_type: index_of(&CLICK_TYPES, &config.click_type),
             repeat_until_stopped: config.repeat_mode == RepeatMode::UntilStopped,
             repeat_count: i64::try_from(config.repeat_count).unwrap_or(100),
             current_position: config.position_mode == PositionMode::CurrentCursor,
@@ -146,7 +158,6 @@ impl Default for AppControllerRust {
 }
 
 impl Drop for AppControllerRust {
-    /// Shut down the worker before destroying the Qt controller.
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
             worker.shutdown();
@@ -155,7 +166,6 @@ impl Drop for AppControllerRust {
 }
 
 impl qobject::AppController {
-    /// Start the worker and hotkey even if saved coordinates need confirmation.
     pub fn initialize(mut self: Pin<&mut Self>) {
         if self.rust().worker.is_some() {
             return;
@@ -163,19 +173,9 @@ impl qobject::AppController {
         if let Some(error) = self.as_mut().rust_mut().get_mut().startup_error.take() {
             self.as_mut().set_error_message(QString::from(&error));
         }
-        // The worker must remain available even when restored fixed coordinates
-        // need confirmation. Every actual start still validates the current UI.
-        let settings = ClickSettings {
-            interval_ms: 100,
-            button: MouseButton::Left,
-            click_type: ClickType::Single,
-            repeat: None,
-            position: None,
-            monitor: None,
-        };
         let preferred_hotkey = self.hotkey().to_string();
         let qt_thread = self.qt_thread();
-        let worker = WorkerHandle::spawn(settings, preferred_hotkey, move |event| {
+        let worker = WorkerHandle::spawn(preferred_hotkey, move |event| {
             let _ = qt_thread.queue(move |mut controller| {
                 controller.as_mut().handle_worker_event(event);
             });
@@ -183,51 +183,41 @@ impl qobject::AppController {
         self.as_mut().rust_mut().get_mut().worker = Some(worker);
     }
 
-    /// Request a screenshot and report queue failures back to the picker.
     pub fn capture_screenshot(mut self: Pin<&mut Self>, request_id: i32) {
-        let result = self
-            .rust()
-            .worker
-            .as_ref()
-            .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")
-            .and_then(|worker| worker.send(Command::CaptureScreenshot(request_id)));
-        if let Err(error) = result {
+        if let Err(error) = self.try_send(Command::CaptureScreenshot(request_id)) {
             self.as_mut()
                 .screenshot_ready(request_id, QString::default(), QString::from(error));
         }
     }
 
-    /// Cancels only the screenshot belonging to the picker being closed.
     pub fn cancel_screenshot(mut self: Pin<&mut Self>, request_id: i32) {
         self.as_mut()
             .send_command(Command::CancelScreenshot(request_id));
     }
 
-    /// Validate and save current controls before requesting a click run.
+    /// Validate and save the current controls, then request a click run.
     pub fn start(mut self: Pin<&mut Self>) {
         if *self.selecting_position() {
             return;
         }
         self.as_mut().clear_error();
-        let settings = match self.as_ref().settings() {
+        let settings = match self.settings() {
             Ok(settings) => settings,
             Err(error) => {
                 self.as_mut().show_error(&error);
                 return;
             }
         };
-        if let Err(error) = self.as_ref().save_config() {
+        if let Err(error) = self.save_config(&settings) {
             self.as_mut().set_error_message(QString::from(&error));
         }
         self.as_mut().send_command(Command::Start(settings));
     }
 
-    /// Stop a run or an outstanding start request.
     pub fn stop(mut self: Pin<&mut Self>) {
         self.as_mut().send_command(Command::Stop);
     }
 
-    /// Toggle clicking using the latest controls rather than cached settings.
     pub fn toggle(mut self: Pin<&mut Self>) {
         if *self.running() || *self.busy() {
             self.as_mut().stop();
@@ -236,17 +226,15 @@ impl qobject::AppController {
         }
     }
 
-    /// Open the desktop portal configuration for the global shortcut.
     pub fn configure_hotkey(mut self: Pin<&mut Self>) {
         self.as_mut().send_command(Command::ConfigureHotkey);
     }
 
-    /// Dismiss the current user-visible error message.
     pub fn clear_error(mut self: Pin<&mut Self>) {
         self.as_mut().set_error_message(QString::default());
     }
 
-    /// Join the worker and clear running indicators during window closure.
+    /// Join the worker so that portal sessions are closed before the window goes away.
     pub fn shutdown(mut self: Pin<&mut Self>) {
         if let Some(worker) = self.as_mut().rust_mut().get_mut().worker.take() {
             worker.shutdown();
@@ -255,35 +243,29 @@ impl qobject::AppController {
         self.as_mut().set_busy(false);
     }
 
-    /// Send through the bounded worker channel and surface delivery failures.
-    fn send_command(mut self: Pin<&mut Self>, command: Command) {
-        let result = self
-            .rust()
+    fn try_send(&self, command: Command) -> Result<(), &'static str> {
+        self.rust()
             .worker
             .as_ref()
-            .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")
-            .and_then(|worker| worker.send(command));
-        if let Err(error) = result {
+            .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")?
+            .send(command)
+    }
+
+    fn send_command(mut self: Pin<&mut Self>, command: Command) {
+        if let Err(error) = self.try_send(command) {
             self.as_mut().show_error(error);
         }
     }
 
-    /// Build validated settings; unconfirmed fixed positions cannot start.
-    fn settings(self: Pin<&Self>) -> Result<ClickSettings, String> {
+    /// Unconfirmed fixed positions cannot start.
+    fn settings(&self) -> Result<ClickSettings, String> {
         if !*self.current_position() && !*self.fixed_position_confirmed() {
             return Err("Bitte den Monitor und die feste Position erneut bestätigen.".to_owned());
         }
-        let button = match *self.mouse_button() {
-            0 => MouseButton::Left,
-            1 => MouseButton::Right,
-            2 => MouseButton::Middle,
-            _ => return Err("Unbekannte Maustaste.".to_owned()),
-        };
-        let click_type = match *self.click_type() {
-            0 => ClickType::Single,
-            1 => ClickType::Double,
-            _ => return Err("Unbekannter Klicktyp.".to_owned()),
-        };
+        let button =
+            choice_at(&MOUSE_BUTTONS, *self.mouse_button()).ok_or("Unbekannte Maustaste.")?;
+        let click_type =
+            choice_at(&CLICK_TYPES, *self.click_type()).ok_or("Unbekannter Klicktyp.")?;
         let interval_ms = u64::try_from(*self.interval_ms())
             .map_err(|_| "Das Intervall muss positiv sein.".to_owned())?;
         let repeat = if *self.repeat_until_stopped() {
@@ -321,9 +303,8 @@ impl qobject::AppController {
         Ok(settings)
     }
 
-    /// Persist monitor identity together with monitor-relative coordinates.
-    fn save_config(self: Pin<&Self>) -> Result<(), String> {
-        let settings = self.settings()?;
+    /// The monitor identity is only saved for a confirmed position.
+    fn save_config(&self, settings: &ClickSettings) -> Result<(), String> {
         let config = AppConfig {
             interval_ms: settings.interval_ms,
             mouse_button: settings.button,
@@ -351,7 +332,6 @@ impl qobject::AppController {
         config::save(&config).map_err(|error| error.to_string())
     }
 
-    /// Display an error and reset the running and busy indicators.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
         self.as_mut().set_running(false);
         self.as_mut().set_busy(false);
@@ -359,7 +339,6 @@ impl qobject::AppController {
         self.as_mut().set_error_message(QString::from(message));
     }
 
-    /// Apply worker results on the Qt thread and route capture responses.
     fn handle_worker_event(mut self: Pin<&mut Self>, event: WorkerEvent) {
         match event {
             WorkerEvent::Screenshot(request_id, result) => {

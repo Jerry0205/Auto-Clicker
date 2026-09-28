@@ -21,6 +21,7 @@ Window {
     property rect desktopBounds: Qt.rect(0, 0, 1, 1)
     property bool hintAtBottom: false
     readonly property bool magnifierReady: snapshot.status === Image.Ready
+    readonly property bool adjustable: inputReady && !previewOnly
     signal finished()
     signal screenshotCancelled(int requestId)
     signal picked(int x, int y)
@@ -109,13 +110,13 @@ Window {
     }
 
     function moveTarget(dx, dy) {
-        if (!inputReady || previewOnly) return
+        if (!adjustable) return
         positionPinned = true
         setTarget(targetX + dx, targetY + dy)
     }
 
     function confirm() {
-        if (!inputReady || previewOnly) return
+        if (!adjustable) return
         picked(targetX, targetY)
         finish()
     }
@@ -154,6 +155,9 @@ Window {
         focusSelection()
     }
     onScreenChanged: updateInputReady()
+    onVisibilityChanged: updateInputReady()
+    onWidthChanged: updateInputReady()
+    onHeightChanged: updateInputReady()
     onClosing: function(close) { close.accepted = false; finish() }
 
     Timer { id: captureDelay; interval: 250; onTriggered: picker.screenshotRequested(picker.captureId) }
@@ -170,13 +174,6 @@ Window {
         }
     }
     Timer { id: previewTimer; interval: 1800; onTriggered: picker.finish() }
-
-    Connections {
-        target: picker
-        function onHeightChanged() { picker.updateInputReady() }
-        function onVisibilityChanged() { picker.updateInputReady() }
-        function onWidthChanged() { picker.updateInputReady() }
-    }
 
     // A portal screenshot is a still image of the virtual desktop. Keeping it
     // behind the overlay makes the magnified detail match the selected point.
@@ -211,7 +208,7 @@ Window {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: picker.inputReady ? Qt.CrossCursor : Qt.BusyCursor
         onPositionChanged: function(mouse) {
-            if (picker.inputReady && !picker.previewOnly && !picker.positionPinned) picker.setTarget(mouse.x, mouse.y)
+            if (picker.adjustable && !picker.positionPinned) picker.setTarget(mouse.x, mouse.y)
         }
         onPressed: function(mouse) {
             if (mouse.button === Qt.LeftButton) {
@@ -282,9 +279,9 @@ Window {
             wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             text: picker.previewOnly
-                ? qsTr("Zielposition · X: %1 · Y: %2").arg(picker.targetX).arg(picker.targetY)
+                ? qsTr("Ziel · X: %1 · Y: %2").arg(picker.targetX).arg(picker.targetY)
                 : !picker.inputReady ? qsTr("Vollbild wird vorbereitet … · Esc: abbrechen")
-                : qsTr("%1 · X: %2 · Y: %3\nKlicken: Ziel setzen · Enter: übernehmen · Pfeiltasten: 1 Schritt · Umschalt: 10 · Esc / Rechtsklick: abbrechen")
+                : qsTr("%1 · X: %2 · Y: %3\nKlick: Ziel setzen · ↵ übernehmen · ←↑↓→ 1 px · ⇧ + ←↑↓→ 10 px · Esc / Rechtsklick: abbrechen")
                     .arg(monitors.displayName(picker.screen, Qt.application.screens)).arg(picker.targetX).arg(picker.targetY)
                     + (picker.magnifierReady ? qsTr("\nLupe 4× · Standbild") : "")
                     + (picker.captureError.length ? "\n" + picker.captureError : "")
@@ -295,13 +292,13 @@ Window {
     // Window shortcuts work even when Wayland changes the focused Quick item.
     // Keep them scoped to this window so they cannot affect the host controls.
     Item { id: keyboard; focus: true }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequences: ["Return", "Enter"]; context: Qt.WindowShortcut; onActivated: picker.confirm() }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-1, 0) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(1, 0) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -1) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 1) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-10, 0) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(10, 0) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -10) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 10) }
+    Shortcut { enabled: picker.adjustable; sequences: ["Return", "Enter"]; context: Qt.WindowShortcut; onActivated: picker.confirm() }
+    Shortcut { enabled: picker.adjustable; sequence: "Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-1, 0) }
+    Shortcut { enabled: picker.adjustable; sequence: "Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(1, 0) }
+    Shortcut { enabled: picker.adjustable; sequence: "Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -1) }
+    Shortcut { enabled: picker.adjustable; sequence: "Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 1) }
+    Shortcut { enabled: picker.adjustable; sequence: "Shift+Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-10, 0) }
+    Shortcut { enabled: picker.adjustable; sequence: "Shift+Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(10, 0) }
+    Shortcut { enabled: picker.adjustable; sequence: "Shift+Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -10) }
+    Shortcut { enabled: picker.adjustable; sequence: "Shift+Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 10) }
 }
