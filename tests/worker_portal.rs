@@ -12,7 +12,7 @@ use ashpd::zbus::{
 use klickmeister::{
     model::{ClickSettings, ClickType, MonitorGeometry, MouseButton},
     state::RunState,
-    worker::{Command, WorkerEvent, WorkerHandle},
+    worker::{Command, HotkeyPhase, WorkerEvent, WorkerHandle},
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -22,10 +22,14 @@ use tokio::{
 type Options = HashMap<String, OwnedValue>;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 const PATH: &str = "/org/freedesktop/portal/desktop";
+static BUS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Default)]
 struct Observed {
     hotkey_session: String,
+    hotkey_created: usize,
+    reject_hotkey: bool,
+    empty_hotkey_trigger: bool,
     remote_session: Option<OwnedObjectPath>,
     revoked_session: Option<OwnedObjectPath>,
     buttons: Vec<(i32, u32)>,
@@ -40,6 +44,9 @@ struct Observed {
     delay_hotkey: bool,
     hotkey_seen: Arc<Notify>,
     hotkey_release: Arc<Notify>,
+    configure_calls: usize,
+    configure_seen: Arc<Notify>,
+    configure_release: Arc<Notify>,
     delay_start: bool,
     start_seen: Arc<Notify>,
     start_release: Arc<Notify>,
@@ -129,10 +136,9 @@ async fn create(
         .await
         .map_err(failed)?;
     if hotkey {
-        observed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .hotkey_session = session.to_string();
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        state.hotkey_session = session.to_string();
+        state.hotkey_created += 1;
     } else {
         observed
             .lock()
@@ -161,7 +167,7 @@ async fn create(
 struct FakeHotkeys(Shared);
 #[zbus::interface(name = "org.freedesktop.portal.GlobalShortcuts", crate = "ashpd::zbus")]
 impl FakeHotkeys {
-    #[zbus(property)]
+    #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
         2
     }
@@ -196,11 +202,40 @@ impl FakeHotkeys {
             seen.notify_one();
             release.notified().await;
         }
+        if self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .reject_hotkey
+        {
+            let path = handle(&header, &options, "handle_token", "request")?;
+            connection
+                .emit_signal(
+                    header.sender().cloned(),
+                    &path,
+                    "org.freedesktop.portal.Request",
+                    "Response",
+                    &(1_u32, Options::new()),
+                )
+                .await
+                .map_err(failed)?;
+            return Ok(path);
+        }
+        let trigger = if self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .empty_hotkey_trigger
+        {
+            ""
+        } else {
+            "Pause"
+        };
         let shortcuts = vec![(
             "toggle-clicking",
             HashMap::from([
                 ("description", Value::from("Start/Stop")),
-                ("trigger_description", Value::from("Pause")),
+                ("trigger_description", Value::from(trigger)),
             ]),
         )];
         let results = HashMap::from([(
@@ -208,6 +243,24 @@ impl FakeHotkeys {
             Value::new(shortcuts).try_into().map_err(failed)?,
         )]);
         respond(connection, &header, &options, results).await
+    }
+
+    async fn configure_shortcuts(
+        &self,
+        _session: OwnedObjectPath,
+        _parent: String,
+        _options: Options,
+    ) {
+        let (seen, release) = {
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.configure_calls += 1;
+            (
+                state.configure_seen.clone(),
+                state.configure_release.clone(),
+            )
+        };
+        seen.notify_one();
+        release.notified().await;
     }
 }
 
@@ -265,10 +318,6 @@ impl FakeRemote {
                 state.start_release.clone(),
             )
         };
-        if delay {
-            seen.notify_one();
-            release.notified().await;
-        }
         let mut results = HashMap::from([("devices".into(), OwnedValue::from(2_u32))]);
         if fixed {
             let stream = vec![(
@@ -283,7 +332,29 @@ impl FakeRemote {
                 Value::new(stream).try_into().map_err(failed)?,
             );
         }
-        respond(connection, &header, &options, results).await
+        if delay {
+            // Return the request handle now, but keep its Response pending.
+            let path = handle(&header, &options, "handle_token", "request")?;
+            let destination = header.sender().map(ToString::to_string);
+            let connection = connection.clone();
+            let response_path = path.clone();
+            tokio::spawn(async move {
+                seen.notify_one();
+                release.notified().await;
+                let _ = connection
+                    .emit_signal(
+                        destination.as_deref(),
+                        &response_path,
+                        "org.freedesktop.portal.Request",
+                        "Response",
+                        &(0_u32, results),
+                    )
+                    .await;
+            });
+            Ok(path)
+        } else {
+            respond(connection, &header, &options, results).await
+        }
     }
     async fn notify_pointer_button(
         &self,
@@ -369,10 +440,249 @@ async fn event(
     .await?
 }
 
+async fn shortcuts_changed(service: &zbus::Connection, session: &str, trigger: &str) -> TestResult {
+    let session = OwnedObjectPath::try_from(session)?;
+    let shortcuts: Vec<(String, Options)> = vec![(
+        "toggle-clicking".to_owned(),
+        HashMap::from([
+            (
+                "description".to_owned(),
+                Value::from("Start/Stop").try_into()?,
+            ),
+            (
+                "trigger_description".to_owned(),
+                Value::from(trigger).try_into()?,
+            ),
+        ]),
+    )];
+    service
+        .emit_signal(
+            None::<&str>,
+            PATH,
+            "org.freedesktop.portal.GlobalShortcuts",
+            "ShortcutsChanged",
+            &(session, shortcuts),
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .reject_hotkey = true;
+    let service = zbus::connection::Builder::session()?
+        .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeHotkeys(observed.clone()))?
+        .serve_at(PATH, FakeRemote(observed.clone()))?
+        .serve_at(PATH, FakeScreencast(observed.clone()))?
+        .build()
+        .await?;
+    let settings = ClickSettings {
+        interval_ms: 100,
+        button: MouseButton::Left,
+        click_type: ClickType::Single,
+        repeat: Some(1),
+        position: None,
+        monitor: None,
+    };
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey wurde nicht freigegeben"))).await?;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+
+        let (seen, release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.reject_hotkey = false;
+            state.delay_hotkey = true;
+            (state.hotkey_seen.clone(), state.hotkey_release.clone())
+        };
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Registering))).await?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+        assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_created, 2);
+        release.notify_one();
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+        let old_session = observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_session.clone();
+
+        service
+            .emit_signal(
+                None::<&str>,
+                old_session.as_str(),
+                "org.freedesktop.portal.Session",
+                "Closed",
+                &(Options::new(),),
+            )
+            .await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey-Sitzung"))).await?;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+
+        {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.delay_hotkey = false;
+            state.empty_hotkey_trigger = true;
+        }
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("keinen globalen Stop-Hotkey"))).await?;
+        {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(state.hotkey_created, 3);
+            assert_ne!(state.hotkey_session, old_session);
+        }
+        let session = observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_session.clone();
+        let (seen, release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.empty_hotkey_trigger = false;
+            (state.configure_seen.clone(), state.configure_release.clone())
+        };
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(false)))).await?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        shortcuts_changed(&service, &session, "Pause").await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(true)))).await?;
+        release.notify_one();
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Status(status) if status == "Bereit")).await?;
+        let (seen, release) = {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            (state.configure_seen.clone(), state.configure_release.clone())
+        };
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(true)))).await?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+        release.notify_one();
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+        assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).configure_calls, 2);
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Starting))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        let (session, created_before, calls_before) = {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            (state.hotkey_session.clone(), state.hotkey_created, state.configure_calls)
+        };
+        shortcuts_changed(&service, &session, "").await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?;
+        worker.send(Command::Start(settings))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(false)))).await?;
+        let (seen, release) = {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            (state.configure_seen.clone(), state.configure_release.clone())
+        };
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        shortcuts_changed(&service, &session, "Pause").await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(true)))).await?;
+        release.notify_one();
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(state.hotkey_created, created_before);
+        assert_eq!(state.configure_calls, calls_before + 1);
+        Ok(())
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    result?;
+    service.close().await?;
+    Ok(())
+}
+
+async fn close_remote_session(service: &zbus::Connection, observed: &Shared) -> TestResult {
+    let session = observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remote_session
+        .clone()
+        .ok_or("missing RemoteDesktop session")?;
+    service
+        .emit_signal(
+            None::<&str>,
+            &session,
+            "org.freedesktop.portal.Session",
+            "Closed",
+            &(Options::new(),),
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn revocation_ends_start_while_response_is_pending() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = zbus::connection::Builder::session()?
+        .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeHotkeys(observed.clone()))?
+        .serve_at(PATH, FakeRemote(observed.clone()))?
+        .build()
+        .await?;
+    let settings = ClickSettings {
+        interval_ms: 100,
+        button: MouseButton::Left,
+        click_type: ClickType::Single,
+        repeat: Some(1),
+        position: None,
+        monitor: None,
+    };
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let (seen, release) = {
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        state.delay_start = true;
+        (state.start_seen.clone(), state.start_release.clone())
+    };
+    let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+        worker.send(Command::Start(settings))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Starting))).await?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        close_remote_session(&service, &observed).await?;
+        // Neither the pending Response nor the delayed request is released here.
+        timeout(
+            Duration::from_millis(700),
+            event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))),
+        )
+        .await??;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+        assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.is_empty());
+        Ok(())
+    }
+    .await;
+    release.notify_one();
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
 /// Run with: dbus-run-session -- cargo test --test worker_portal -- --ignored
 #[tokio::test]
 #[ignore = "requires a private D-Bus session via dbus-run-session"]
 async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
     let observed = Shared::default();
     let service = zbus::connection::Builder::session()?
         .name("org.freedesktop.portal.Desktop")?
@@ -414,6 +724,74 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             )
             .await?;
         event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
+        // A revoked long-running session must stop before the next scheduled click.
+        let long_run = ClickSettings {
+            interval_ms: 60_000,
+            repeat: None,
+            ..settings.clone()
+        };
+        worker.send(Command::Start(long_run))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        timeout(Duration::from_secs(3), async {
+            loop {
+                if observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len() >= 2 {
+                    break;
+                }
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let first_session = observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session.clone();
+        close_remote_session(&service, &observed).await?;
+        timeout(Duration::from_millis(500), async {
+            event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+            event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await
+        })
+        .await??;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+
+        // A stopped session must also be discarded, so a later start asks again.
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        assert_ne!(observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session, first_session);
+        let stopped_session = observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session.clone();
+        close_remote_session(&service, &observed).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Status(message) if message.contains("Wayland-Berechtigung beendet"))).await?;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        assert_ne!(observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session, stopped_session);
+
+        // If permission is revoked during Start, no run may be confirmed.
+        close_remote_session(&service, &observed).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Status(message) if message.contains("Wayland-Berechtigung beendet"))).await?;
+        let (seen, release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.delay_start = true;
+            (state.start_seen.clone(), state.start_release.clone())
+        };
+        worker.send(Command::Start(settings.clone()))?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        close_remote_session(&service, &observed).await?;
+        release.notify_one();
+        let mut incorrectly_started = false;
+        timeout(Duration::from_secs(3), async {
+            while let Some(event) = events.recv().await {
+                match event {
+                    WorkerEvent::State(RunState::Clicking) => incorrectly_started = true,
+                    WorkerEvent::Error(_) => break,
+                    _ => {}
+                }
+            }
+        })
+        .await?;
+        assert!(!incorrectly_started, "revoked permission must not start a run");
+        observed.lock().unwrap_or_else(|e| e.into_inner()).delay_start = false;
+        worker.send(Command::Start(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+
         for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
             for click_type in [ClickType::Single, ClickType::Double] {
                 observed
@@ -426,7 +804,6 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                     click_type,
                     ..settings.clone()
                 }))?;
-                event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Starting))).await?;
                 event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
                 event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
                 let buttons = observed
@@ -473,6 +850,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             monitor: Some(MonitorGeometry { x: 0, y: 0, width: 1920, height: 1080 }),
             ..fixed.clone()
         }))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Monitor stimmt nicht"))).await?;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len(), before);
 
@@ -579,6 +957,8 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                 &(Options::new(),),
             )
             .await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
         event(
             &mut events,
             |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey-Sitzung")),
