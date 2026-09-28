@@ -6,7 +6,7 @@ use crate::{
         ClickSettings, ClickType, MAX_REPEAT_COUNT, MonitorGeometry, MouseButton, PositionMode,
         RepeatMode, validate_interval,
     },
-    worker::{Command, WorkerEvent, WorkerHandle},
+    worker::{Command, HotkeyPhase, WorkerEvent, WorkerHandle},
 };
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
@@ -24,6 +24,9 @@ pub mod qobject {
         #[qproperty(QString, status)]
         #[qproperty(QString, error_message)]
         #[qproperty(QString, hotkey)]
+        #[qproperty(bool, hotkey_ready)]
+        #[qproperty(bool, hotkey_pending)]
+        #[qproperty(bool, hotkey_configuring)]
         #[qproperty(bool, running)]
         #[qproperty(bool, busy)]
         #[qproperty(i64, interval_ms)]
@@ -42,20 +45,6 @@ pub mod qobject {
         #[qproperty(i32, monitor_height)]
         #[qproperty(bool, selecting_position)]
         type AppController = super::AppControllerRust;
-
-        #[qsignal]
-        fn screenshot_ready(
-            self: Pin<&mut AppController>,
-            request_id: i32,
-            uri: QString,
-            error: QString,
-        );
-
-        #[qinvokable]
-        fn capture_screenshot(self: Pin<&mut AppController>, request_id: i32);
-
-        #[qinvokable]
-        fn cancel_screenshot(self: Pin<&mut AppController>, request_id: i32);
 
         #[qinvokable]
         fn initialize(self: Pin<&mut AppController>);
@@ -98,6 +87,9 @@ pub struct AppControllerRust {
     status: QString,
     error_message: QString,
     hotkey: QString,
+    hotkey_ready: bool,
+    hotkey_pending: bool,
+    hotkey_configuring: bool,
     running: bool,
     busy: bool,
     interval_ms: i64,
@@ -169,6 +161,9 @@ impl AppControllerRust {
             status: QString::from("Bereit"),
             error_message: QString::default(),
             hotkey: QString::from(&config.hotkey),
+            hotkey_ready: false,
+            hotkey_pending: true,
+            hotkey_configuring: false,
             running: false,
             busy: false,
             interval_ms: i64::try_from(config.interval_ms).unwrap_or(100),
@@ -319,6 +314,9 @@ impl qobject::AppController {
         if self.rust().worker.is_some() {
             return;
         }
+        self.as_mut().set_hotkey_ready(false);
+        self.as_mut().set_hotkey_pending(true);
+        self.as_mut().set_hotkey_configuring(false);
         if let Some(error) = self.as_mut().rust_mut().get_mut().startup_error.take() {
             self.as_mut().set_error_message(QString::from(&error));
         }
@@ -342,26 +340,6 @@ impl qobject::AppController {
             });
         });
         self.as_mut().rust_mut().get_mut().worker = Some(worker);
-    }
-
-    /// Request a screenshot and report queue failures back to the picker.
-    pub fn capture_screenshot(mut self: Pin<&mut Self>, request_id: i32) {
-        let result = self
-            .rust()
-            .worker
-            .as_ref()
-            .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")
-            .and_then(|worker| worker.send(Command::CaptureScreenshot(request_id)));
-        if let Err(error) = result {
-            self.as_mut()
-                .screenshot_ready(request_id, QString::default(), QString::from(error));
-        }
-    }
-
-    /// Cancels only the screenshot belonging to the picker being closed.
-    pub fn cancel_screenshot(mut self: Pin<&mut Self>, request_id: i32) {
-        self.as_mut()
-            .send_command(Command::CancelScreenshot(request_id));
     }
 
     /// Validate and save current controls before requesting a click run.
@@ -397,7 +375,15 @@ impl qobject::AppController {
 
     /// Open the desktop portal configuration for the global shortcut.
     pub fn configure_hotkey(mut self: Pin<&mut Self>) {
-        self.as_mut().send_command(Command::ConfigureHotkey);
+        if *self.hotkey_pending() {
+            return;
+        }
+        if !*self.hotkey_ready() {
+            self.as_mut().clear_error();
+        }
+        let preferred = self.hotkey().to_string();
+        self.as_mut()
+            .send_command(Command::ConfigureHotkey(preferred));
     }
 
     /// Dismiss the current user-visible error message.
@@ -450,6 +436,9 @@ impl qobject::AppController {
         }
         self.as_mut().set_running(false);
         self.as_mut().set_busy(false);
+        self.as_mut().set_hotkey_ready(false);
+        self.as_mut().set_hotkey_pending(false);
+        self.as_mut().set_hotkey_configuring(false);
         self.as_mut().set_status(QString::from("Bereit"));
     }
 
@@ -527,23 +516,12 @@ impl qobject::AppController {
         self.as_mut().set_error_message(QString::from(message));
     }
 
-    /// Apply worker results on the Qt thread and route capture responses.
+    /// Apply results only from the current worker on the Qt thread.
     fn handle_worker_event(mut self: Pin<&mut Self>, worker_epoch: u64, event: WorkerEvent) {
         if worker_epoch != self.rust().worker_epoch {
             return;
         }
         match event {
-            WorkerEvent::Screenshot(request_id, result) => {
-                let (uri, error) = match result {
-                    Ok(uri) => (uri, String::new()),
-                    Err(error) => (String::new(), error),
-                };
-                self.as_mut().screenshot_ready(
-                    request_id,
-                    QString::from(&uri),
-                    QString::from(&error),
-                );
-            }
             WorkerEvent::Status(status) => {
                 let busy = status.contains("Warte auf Wayland");
                 self.as_mut().set_busy(busy);
@@ -558,6 +536,18 @@ impl qobject::AppController {
                     self.as_mut().set_hotkey(QString::from(&hotkey));
                     self.as_mut().mark_settings_changed();
                 }
+            }
+            WorkerEvent::HotkeyPhase(phase) => {
+                self.as_mut().set_hotkey_ready(matches!(
+                    phase,
+                    HotkeyPhase::Ready | HotkeyPhase::Configuring(true)
+                ));
+                self.as_mut().set_hotkey_pending(matches!(
+                    phase,
+                    HotkeyPhase::Registering | HotkeyPhase::Configuring(_)
+                ));
+                self.as_mut()
+                    .set_hotkey_configuring(matches!(phase, HotkeyPhase::Configuring(_)));
             }
             WorkerEvent::StartRequested => {
                 if !*self.running() && !*self.busy() {

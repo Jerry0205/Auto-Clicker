@@ -4,6 +4,9 @@
 > durch den nativ geprüften interaktiven Ablauf umgangen. Siehe
 > [Portal-Fix-Bericht](PORTAL_FIX_REPORT.md). Dieser Bericht bleibt als historische
 > Reproduktion und Ursachenanalyse erhalten.
+>
+> Nachtrag 28.09.2026: Seit Issue #19 fordert Klickmeister keine Screenshots mehr
+> an; der Screenshot-Pfad und die Lupe wurden entfernt.
 
 ## Stand und Ergebnisgrenze
 
