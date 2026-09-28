@@ -29,6 +29,32 @@ TestCase {
         compare(findChild(main, "yInput").value, controller.fixed_y)
     }
 
+    function closeButtonIn(item) {
+        if (item.icon && item.icon.name === "dialog-close") return item
+        for (const child of item.children) {
+            const button = closeButtonIn(child)
+            if (button) return button
+        }
+        return null
+    }
+
+    function test_error_banner_reappears_after_close() {
+        const banner = findChild(main, "errorBanner")
+        verify(banner !== null)
+
+        for (const message of ["First error", "Second error", "Second error"]) {
+            controller.error_message = message
+            tryCompare(banner, "visible", true)
+            compare(banner.text, message)
+
+            const closeButton = closeButtonIn(banner)
+            verify(closeButton !== null)
+            mouseClick(closeButton)
+            tryCompare(banner, "visible", false)
+            compare(controller.error_message, "")
+        }
+    }
+
     function test_typed_values_reach_hotkey_without_focus_loss_data() {
         return [
             { tag: "interval", input: "intervalInput", property: "interval_ms", value: 250 },
