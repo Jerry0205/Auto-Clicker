@@ -112,6 +112,9 @@ TestCase {
         compare(controller.fixed_x, 300)
         compare(controller.fixed_y, 200)
         compare(findChild(main, "xInput").value, 300)
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.positionDirty, false)
+        main.confirmMonitor()
         compare(controller.fixed_position_confirmed, true)
         compare(controller.positionDirty, true)
 
@@ -134,6 +137,9 @@ TestCase {
         const screen = main.monitorOptions[0].screen
         main.selectMonitor(screen)
 
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.positionDirty, false)
+        main.confirmMonitor()
         compare(controller.fixed_position_confirmed, true)
         compare(controller.configDirty, true)
         compare(controller.positionDirty, true)
@@ -160,8 +166,41 @@ TestCase {
         compare(controller.fixed_x, 99)
         compare(controller.fixed_y, 99)
         compare(controller.fixed_position_confirmed, false)
-        compare(controller.positionDirty, true)
+        compare(controller.positionDirty, false)
         compare(controller.savedMonitorIdentity, "")
+    }
+
+    function test_reselecting_saved_monitor_at_smaller_resolution_keeps_saved_coordinates() {
+        const smaller = Qt.createQmlObject('import QtQuick; QtObject {'
+            + 'property string name: "saved-monitor"; property string manufacturer: "";'
+            + 'property string model: ""; property string serialNumber: "";'
+            + 'property int width: 400; property int height: 300;'
+            + 'property int virtualX: 0; property int virtualY: 0;'
+            + 'property real devicePixelRatio: 1}', main)
+        verify(smaller !== null)
+        controller.current_position = false
+        main.selectedMonitor = smaller
+        controller.savedMonitorIdentity = controller.monitor_identity
+        controller.savedFixedX = 300
+        controller.savedFixedY = 200
+        controller.fixed_x = 300
+        controller.fixed_y = 200
+        controller.fixed_position_confirmed = true
+        smaller.width = 100
+        smaller.height = 100
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.fixed_x, 99)
+        compare(controller.fixed_y, 99)
+        const savedIdentity = controller.savedMonitorIdentity
+        main.selectMonitor(smaller)
+
+        compare(controller.fixed_x, 99)
+        compare(controller.fixed_y, 99)
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.positionDirty, false)
+        compare(controller.savedFixedX, 300)
+        compare(controller.savedFixedY, 200)
+        compare(controller.savedMonitorIdentity, savedIdentity)
     }
 
     function test_mouse_wheel_cannot_replace_saved_position() {
@@ -304,6 +343,8 @@ TestCase {
         compare(controller.fixed_position_confirmed, false)
 
         monitorInput.activated(0)
+        compare(controller.fixed_position_confirmed, false)
+        main.confirmMonitor()
         compare(controller.fixed_position_confirmed, true)
     }
 

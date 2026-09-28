@@ -69,12 +69,19 @@ Kirigami.ApplicationWindow {
 
     // Coordinates clamped to a smaller monitor were never chosen by the user.
     function selectMonitor(screen) {
+        const sameSelection = screen === selectedMonitor
+        const wasConfirmed = controller.fixed_position_confirmed
         monitorSelectionInProgress = true
         selectedMonitor = screen
         monitorSelectionInProgress = false
         const fits = syncMonitor()
-        controller.fixed_position_confirmed = fits
-        controller.mark_position_changed()
+        // Reselecting an unconfirmed screen must not accept coordinates that
+        // an earlier geometry change already clamped on that same screen.
+        const confirmed = fits && (!sameSelection || wasConfirmed)
+        controller.fixed_position_confirmed = confirmed
+        // Clamping to a smaller monitor is not a chosen position. Keep the
+        // saved coordinates until the user confirms or edits the displayed ones.
+        if (confirmed && !sameSelection) controller.mark_position_changed()
     }
 
     function syncMonitor() {
