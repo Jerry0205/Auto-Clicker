@@ -782,8 +782,12 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
 
         // A short manual run can finish before a delayed activation arrives.
-        // Inside the lock it must not become another start request.
-        worker.send(Command::Start(settings.clone()))?;
+        // Inside the lock it must not become another start request. A single
+        // click keeps this well within the 300 ms lock.
+        worker.send(Command::Start(ClickSettings {
+            repeat: Some(1),
+            ..settings.clone()
+        }))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(true))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
         emit_activation(&service, &activation).await?;
@@ -924,13 +928,18 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
     Ok(())
 }
 
-/// Hold a click and send `presses` hotkey presses with releases meanwhile.
+/// Hold a click and send `presses` hotkey presses meanwhile.
+///
+/// Returns once the worker's hotkey queue has overflowed for every press
+/// beyond its 16 slots. Each overflow counts as a Stop, so the generation
+/// then is `generation + presses - 16`.
 async fn flood_hotkey_during_click(
     service: &zbus::Connection,
     observed: &Shared,
     worker: &WorkerHandle,
     events: &mut mpsc::UnboundedReceiver<WorkerEvent>,
     settings: &ClickSettings,
+    generation: u64,
     presses: u64,
 ) -> Result<(OwnedObjectPath, Arc<Notify>), Box<dyn std::error::Error>> {
     let session = OwnedObjectPath::try_from(
@@ -951,18 +960,21 @@ async fn flood_hotkey_during_click(
     // All of these arrive before Stop. The worker is blocked in the click,
     // and its hotkey queue holds only 16 signals.
     for timestamp in 1..=presses {
-        for signal in ["Activated", "Deactivated"] {
-            service
-                .emit_signal(
-                    None::<&str>,
-                    PATH,
-                    "org.freedesktop.portal.GlobalShortcuts",
-                    signal,
-                    &(&session, "toggle-clicking", timestamp, Options::new()),
-                )
-                .await?;
-        }
+        emit_activation(
+            service,
+            &(&session, "toggle-clicking", timestamp, Options::new()),
+        )
+        .await?;
     }
+    // The held click fails after 250 ms, so this must finish well before.
+    let flooded = generation + presses - 16;
+    timeout(Duration::from_millis(150), async {
+        while !worker.accepts_hotkey_start(flooded) {
+            sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .map_err(|_| "a full hotkey queue must count as a Stop")?;
     Ok((session, button_release))
 }
 
@@ -994,9 +1006,8 @@ async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
     let result: TestResult = async {
         event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
         let (session, button_release) =
-            flood_hotkey_during_click(&service, &observed, &worker, &mut events, &settings, 20)
+            flood_hotkey_during_click(&service, &observed, &worker, &mut events, &settings, 0, 20)
                 .await?;
-        sleep(Duration::from_millis(20)).await;
         worker.send(Command::Stop)?;
         observed
             .lock()
@@ -1044,10 +1055,16 @@ async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
         // Presses from before Stop must not stop a run started right after it
         // either. The worker handles the button start before the old presses.
         sleep(Duration::from_millis(350)).await;
-        let (_, button_release) =
-            flood_hotkey_during_click(&service, &observed, &worker, &mut events, &settings, 20)
-                .await?;
-        sleep(Duration::from_millis(20)).await;
+        let (_, button_release) = flood_hotkey_during_click(
+            &service,
+            &observed,
+            &worker,
+            &mut events,
+            &settings,
+            generation + 1,
+            20,
+        )
+        .await?;
         worker.send(Command::Stop)?;
         worker.send(Command::Start(settings.clone()))?;
         observed
@@ -1108,7 +1125,7 @@ async fn hotkey_queue_overflow_keeps_shortcut_removal() -> TestResult {
     let result: TestResult = async {
         event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
         let (session, button_release) =
-            flood_hotkey_during_click(&service, &observed, &worker, &mut events, &settings, 20)
+            flood_hotkey_during_click(&service, &observed, &worker, &mut events, &settings, 0, 20)
                 .await?;
         // The queue is full now. The shortcut list without our entry must
         // still reach the worker once it catches up.
@@ -1158,6 +1175,93 @@ async fn hotkey_queue_overflow_keeps_shortcut_removal() -> TestResult {
         Ok(())
     }
     .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+/// A second press during a slow cancel falls into the lock after that cancel.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn double_press_during_slow_cancel_does_not_restart() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = zbus::connection::Builder::session()?
+        .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeHotkeys(observed.clone()))?
+        .serve_at(PATH, FakeRemote(observed.clone()))?
+        .serve_at(PATH, FakeScreencast(observed.clone()))?
+        .build()
+        .await?;
+    let settings = ClickSettings {
+        interval_ms: 100,
+        button: MouseButton::Left,
+        click_type: ClickType::Single,
+        repeat: Some(1),
+        position: None,
+        monitor: None,
+    };
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let (seen, release) = {
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        state.delay_start = true;
+        state.stall_close = true;
+        (state.start_seen.clone(), state.start_release.clone())
+    };
+    let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+        let session = OwnedObjectPath::try_from(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .hotkey_session
+                .clone(),
+        )?;
+        worker.send(Command::Start(settings.clone()))?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        // The first press cancels the permission request. Its Session.Close
+        // stalls until the bounded close timeout ends the cancel.
+        emit_activation(
+            &service,
+            &(&session, "toggle-clicking", 1_u64, Options::new()),
+        )
+        .await?;
+        sleep(Duration::from_millis(80)).await;
+        emit_activation(
+            &service,
+            &(&session, "toggle-clicking", 2_u64, Options::new()),
+        )
+        .await?;
+        let started = std::time::Instant::now();
+        event(&mut events, |e| matches!(e, WorkerEvent::Running(false))).await?;
+        assert!(
+            started.elapsed() > Duration::from_millis(400),
+            "the cancel must outlast the lock for this test to be meaningful"
+        );
+        sleep(Duration::from_millis(150)).await;
+        while let Ok(event) = events.try_recv() {
+            if let WorkerEvent::StartRequested(generation) = event {
+                assert!(
+                    !worker.accepts_hotkey_start(generation),
+                    "the second press of a double tap must not request a new start"
+                );
+            }
+        }
+        Ok(())
+    }
+    .await;
+    {
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        state.stall_close = false;
+        state.delay_start = false;
+        for close_release in std::mem::take(&mut state.close_releases) {
+            close_release.notify_one();
+        }
+    }
+    release.notify_one();
     tokio::task::spawn_blocking(move || worker.shutdown()).await?;
     service.close().await?;
     result

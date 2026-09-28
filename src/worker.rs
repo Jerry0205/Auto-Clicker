@@ -704,9 +704,9 @@ async fn run_worker(
                             if invalidate_hotkey_starts(&mut control, &control_tx) {
                                 break;
                             }
-                            hotkey_quiet_until = Some(Instant::now() + HOTKEY_REARM_DELAY);
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
+                            hotkey_quiet_until = Some(Instant::now() + HOTKEY_REARM_DELAY);
                         } else if hotkey_quiet_until.is_none_or(|until| Instant::now() >= until) {
                             // Ask the Qt side to start so the current UI values are
                             // collected, validated and saved. Keeping a settings copy
