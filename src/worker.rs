@@ -1,4 +1,5 @@
 use std::{
+    fmt, io,
     pin::Pin,
     sync::{
         Arc,
@@ -17,8 +18,11 @@ use ashpd::desktop::{
 };
 use futures_util::{Stream, StreamExt, future};
 use tokio::{
-    runtime::Builder,
-    sync::{mpsc, oneshot},
+    runtime::{Builder, Runtime},
+    sync::{
+        mpsc::{self, error::TrySendError},
+        oneshot,
+    },
     task::JoinHandle,
     time::{Instant, sleep_until, timeout},
 };
@@ -62,28 +66,35 @@ impl WorkerHandle {
     where
         F: Fn(WorkerEvent) + Send + Sync + 'static,
     {
+        let builder = thread::Builder::new().name("klickmeister-worker".to_owned());
+        Self::spawn_with(builder, initial, preferred_hotkey, Arc::new(emit))
+    }
+
+    /// Report thread and runtime start failures instead of leaving the UI at "Bereit".
+    fn spawn_with(
+        builder: thread::Builder,
+        initial: ClickSettings,
+        preferred_hotkey: String,
+        emit: Emitter,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = Arc::clone(&closing);
-        let emit = Arc::new(emit);
-        let join = thread::Builder::new()
-            .name("klickmeister-worker".to_owned())
+        let worker_emit = Arc::clone(&emit);
+        let join = builder
             .spawn(move || {
+                // Runtime construction only fails for OS resource exhaustion.
                 let runtime = Builder::new_current_thread().enable_all().build();
-                match runtime {
-                    Ok(runtime) => runtime.block_on(run_worker(
-                        rx,
-                        initial,
-                        preferred_hotkey,
-                        emit,
-                        worker_closing,
-                    )),
-                    Err(error) => {
-                        // Runtime construction only fails for OS resource exhaustion.
-                        eprintln!("Klickmeister worker runtime failed: {error}");
-                    }
-                }
+                let worker = run_worker(
+                    rx,
+                    initial,
+                    preferred_hotkey,
+                    Arc::clone(&worker_emit),
+                    worker_closing,
+                );
+                block_on_runtime(runtime, &worker_emit, worker);
             })
+            .inspect_err(|error| (emit)(worker_start_failed(error)))
             .ok();
         Self { tx, closing, join }
     }
@@ -92,9 +103,10 @@ impl WorkerHandle {
         if self.closing.load(Ordering::Acquire) {
             return Err("Die Anwendung wird bereits beendet.");
         }
-        self.tx
-            .try_send(command)
-            .map_err(|_| "Der interne Befehlskanal ist ausgelastet.")
+        self.tx.try_send(command).map_err(|error| match error {
+            TrySendError::Full(_) => "Der interne Befehlskanal ist ausgelastet.",
+            TrySendError::Closed(_) => "Der Hintergrund-Worker läuft nicht mehr.",
+        })
     }
 
     pub fn shutdown(mut self) {
@@ -114,6 +126,24 @@ impl Drop for WorkerHandle {
         }
         // Rust does not wait for detached threads at process exit. Explicit
         // shutdown joins in the window closing handler.
+    }
+}
+
+fn worker_start_failed(error: &dyn fmt::Display) -> WorkerEvent {
+    WorkerEvent::Error(format!(
+        "Der Hintergrund-Worker konnte nicht starten: {error}"
+    ))
+}
+
+/// Without a runtime the unpolled worker is dropped, which closes its command channel.
+fn block_on_runtime(
+    runtime: io::Result<Runtime>,
+    emit: &Emitter,
+    worker: impl Future<Output = ()>,
+) {
+    match runtime {
+        Ok(runtime) => runtime.block_on(worker),
+        Err(error) => (emit)(worker_start_failed(&error)),
     }
 }
 
@@ -729,6 +759,69 @@ mod tests {
         assert_eq!(machine.state(), RunState::Error);
         assert_eq!(request_validated_start(&mut machine, &settings()), Ok(true));
         assert!(machine.started());
+    }
+
+    fn recording_emitter() -> (Emitter, std::sync::mpsc::Receiver<WorkerEvent>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let emit: Emitter = Arc::new(move |event| {
+            let _ = tx.send(event);
+        });
+        (emit, rx)
+    }
+
+    fn handle(tx: mpsc::Sender<Command>) -> WorkerHandle {
+        WorkerHandle {
+            tx,
+            closing: Arc::new(AtomicBool::new(false)),
+            join: None,
+        }
+    }
+
+    const START_FAILED: &str = "Der Hintergrund-Worker konnte nicht starten:";
+    const WORKER_GONE: Result<(), &str> = Err("Der Hintergrund-Worker läuft nicht mehr.");
+
+    #[test]
+    fn failed_thread_start_is_reported_and_commands_name_stopped_worker() {
+        let (emit, events) = recording_emitter();
+        // An impossible stack size makes spawning fail without exhausting resources.
+        let builder = thread::Builder::new().stack_size(usize::MAX);
+        let worker = WorkerHandle::spawn_with(builder, settings(), String::new(), emit);
+        assert!(worker.join.is_none());
+        let reported: Vec<_> = events.try_iter().collect();
+        assert!(matches!(
+            reported.as_slice(),
+            [WorkerEvent::Error(message)] if message.starts_with(START_FAILED)
+        ));
+        assert_eq!(worker.send(Command::Stop), WORKER_GONE);
+    }
+
+    #[test]
+    fn failed_runtime_is_reported_and_closes_command_channel() {
+        let (emit, events) = recording_emitter();
+        let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
+        block_on_runtime(Err(io::Error::other("Testfehler")), &emit, async move {
+            let _commands = rx;
+            panic!("the worker must not run without a runtime");
+        });
+        let reported: Vec<_> = events.try_iter().collect();
+        assert!(matches!(
+            reported.as_slice(),
+            [WorkerEvent::Error(message)] if *message == format!("{START_FAILED} Testfehler")
+        ));
+        assert_eq!(handle(tx).send(Command::Stop), WORKER_GONE);
+    }
+
+    #[test]
+    fn full_command_channel_is_distinguished_from_stopped_worker() {
+        let (tx, rx) = mpsc::channel(1);
+        let worker = handle(tx);
+        assert_eq!(worker.send(Command::Stop), Ok(()));
+        assert_eq!(
+            worker.send(Command::Stop),
+            Err("Der interne Befehlskanal ist ausgelastet.")
+        );
+        drop(rx);
+        assert_eq!(worker.send(Command::Stop), WORKER_GONE);
     }
 
     #[test]
