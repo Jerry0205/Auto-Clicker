@@ -440,6 +440,40 @@ async fn event(
     .await?
 }
 
+/// Collect events up to the first match so skipped events can be checked too.
+async fn events_until(
+    events: &mut mpsc::UnboundedReceiver<WorkerEvent>,
+    matches: impl Fn(&WorkerEvent) -> bool,
+) -> Result<Vec<WorkerEvent>, Box<dyn std::error::Error>> {
+    timeout(Duration::from_secs(3), async {
+        let mut seen = Vec::new();
+        while let Some(event) = events.recv().await {
+            let found = matches(&event);
+            seen.push(event);
+            if found {
+                return Ok(seen);
+            }
+        }
+        Err("worker event stream ended".into())
+    })
+    .await?
+}
+
+/// Hotkey problems without an active run must only change the hotkey phase.
+fn assert_hotkey_only(events: &[WorkerEvent]) {
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable)))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, WorkerEvent::State(state) if *state != RunState::Ready)),
+        "an idle hotkey failure must not change the run state: {events:?}"
+    );
+}
+
 async fn shortcuts_changed(service: &zbus::Connection, session: &str, trigger: &str) -> TestResult {
     let session = OwnedObjectPath::try_from(session)?;
     let shortcuts: Vec<(String, Options)> = vec![(
@@ -496,8 +530,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         let _ = tx.send(event);
     });
     let result: TestResult = async {
-        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey wurde nicht freigegeben"))).await?;
+        assert_hotkey_only(&events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey wurde nicht freigegeben"))).await?);
         worker.send(Command::Start(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
 
@@ -527,9 +560,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
                 &(Options::new(),),
             )
             .await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey-Sitzung"))).await?;
+        assert_hotkey_only(&events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey-Sitzung"))).await?);
         worker.send(Command::Start(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
 
@@ -582,9 +613,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
             (state.hotkey_session.clone(), state.hotkey_created, state.configure_calls)
         };
         shortcuts_changed(&service, &session, "").await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?;
+        assert_hotkey_only(&events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?);
         worker.send(Command::Start(settings))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
         worker.send(Command::ConfigureHotkey("Pause".into()))?;

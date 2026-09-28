@@ -327,8 +327,7 @@ async fn discard_closed_click_session(
     active: &mut Option<ActiveRun>,
     emit: &Emitter,
 ) {
-    let was_running = matches!(machine.state(), RunState::Starting | RunState::Clicking);
-    stop_run(machine, active, emit);
+    let was_running = stop_run(machine, active, emit);
     if let Some(session) = session.take() {
         session.close().await;
     }
@@ -586,13 +585,11 @@ async fn run_worker(
                     }
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
-                        stop_run(&mut machine, &mut active, &emit);
-                        fail_run(&mut machine, &emit);
+                        abort_run(&mut machine, &mut active, &emit);
                         (emit)(WorkerEvent::Error(error));
                     }
                     Err(error) if !error.is_cancelled() => {
-                        stop_run(&mut machine, &mut active, &emit);
-                        fail_run(&mut machine, &emit);
+                        abort_run(&mut machine, &mut active, &emit);
                         (emit)(WorkerEvent::Error(format!("Hotkey-Dialog ist fehlgeschlagen: {error}")));
                     }
                     Err(_) => {}
@@ -621,8 +618,7 @@ async fn run_worker(
                             }
                         } else {
                             cancel_start(&mut start_task, &mut start_cancel).await;
-                            stop_run(&mut machine, &mut active, &emit);
-                            fail_run(&mut machine, &emit);
+                            abort_run(&mut machine, &mut active, &emit);
                             hotkey_bound = false;
                             (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(false) } else { HotkeyPhase::Unavailable }));
                             (emit)(WorkerEvent::Error("Der globale Stop-Hotkey wurde entfernt.".to_owned()));
@@ -631,8 +627,7 @@ async fn run_worker(
                     Some(HotkeySignal::Activated(_)) => {}
                     Some(HotkeySignal::Closed) | None => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
-                        stop_run(&mut machine, &mut active, &emit);
-                        fail_run(&mut machine, &emit);
+                        abort_run(&mut machine, &mut active, &emit);
                         if let Some(task) = configure_task.take() { task.abort(); }
                         hotkey_bound = false;
                         (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
@@ -732,11 +727,21 @@ fn start_run(
     (emit)(WorkerEvent::Status("Klickt".to_owned()));
 }
 
-fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &Emitter) {
-    if machine.stop() {
-        *active = None;
-        (emit)(WorkerEvent::State(machine.state()));
-        (emit)(WorkerEvent::Status("Gestoppt".to_owned()));
+/// Report whether an active or pending run was stopped.
+fn stop_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &Emitter) -> bool {
+    if !machine.stop() {
+        return false;
+    }
+    *active = None;
+    (emit)(WorkerEvent::State(machine.state()));
+    (emit)(WorkerEvent::Status("Gestoppt".to_owned()));
+    true
+}
+
+/// Fail only an active or pending run; hotkey problems use `HotkeyPhase` instead.
+fn abort_run(machine: &mut StateMachine, active: &mut Option<ActiveRun>, emit: &Emitter) {
+    if stop_run(machine, active, emit) {
+        fail_run(machine, emit);
     }
 }
 
