@@ -4,6 +4,8 @@ Ein kleiner Auto Clicker für KDE Plasma 6 unter Wayland.
 
 Klickmeister übernimmt wiederholte Mausklicks für dich – zum Beispiel in Spielen, beim Testen oder bei Aufgaben, bei denen du sonst immer wieder dieselbe Stelle anklicken müsstest.
 
+![Klickmeister mit festem Klickpunkt](docs/screenshot.png)
+
 ## „Moment, was macht das Programm genau?“
 
 Du entscheidest, wie geklickt werden soll:
@@ -13,9 +15,9 @@ Du entscheidest, wie geklickt werden soll:
 - an der aktuellen Mausposition oder an einer festen Stelle
 - feste Positionen per Vollbild-Positionswähler auf einem ausgewählten Bildschirm
 - so lange, bis du stoppst, oder nur eine bestimmte Anzahl
-- langsam oder bis zu 100 Klicks pro Sekunde
+- langsam oder bis zu 100 Klicks (bzw. Doppelklicks) pro Sekunde
 
-Gestartet und gestoppt wird Klickmeister über einen globalen Hotkey. Standardmäßig ist dafür die `Pause`-Taste vorgesehen. Du kannst den Klicker jederzeit über den Hotkey oder den Stop-Button beenden.
+Gestartet und gestoppt wird Klickmeister über einen globalen Hotkey. Standardmäßig ist dafür die `Pause`-Taste vorgesehen. Du kannst den Klicker jederzeit über den Hotkey oder den Button „Stoppen“ unten rechts beenden – er bleibt auch bei kleinem Fenster immer sichtbar.
 
 Klickmeister wurde speziell für KDE Plasma unter Wayland gebaut. Es gibt keinen Hintergrunddienst, keinen Autostart und keine versteckten Prozesse. Wenn du das Fenster schließt, ist das Programm wirklich beendet.
 
@@ -42,14 +44,16 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 ## Erste Schritte
 
 1. Öffne Klickmeister.
-2. Wähle Maustaste, Klickart und Geschwindigkeit aus.
-3. Entscheide, ob an der aktuellen oder an einer festen Position geklickt werden soll.
-4. Starte den Klicker mit dem Hotkey.
-5. Drücke den Hotkey erneut, um ihn zu stoppen.
+2. Wähle Maustaste, Klick (1× oder 2×), Intervall und Wiederholung (∞ oder eine Anzahl) aus. Neben dem Intervall steht, wie oft pro Sekunde geklickt wird.
+3. Wähle als Ziel den **Mauszeiger** oder einen **festen Punkt**.
+4. Starte den Klicker mit dem Hotkey oder „Starten“.
+5. Drücke den Hotkey erneut oder „Stoppen“, um ihn anzuhalten.
 
-Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. „Position anzeigen“ markiert das gespeicherte Ziel kurz, ohne zu klicken.
+Unten im Fenster stehen immer Status, Hotkey und Start/Stopp. Ein Klick auf den Hotkey (z. B. „Pause“) öffnet die KDE-Einstellung für die Tastenkombination. Symbole ohne Text erklären sich per Tooltip.
 
-Optional verwendet „Mit 4×-Lupe auswählen“ eine über das interaktive Screenshot-Portal freigegebene Bildschirmaufnahme als Standbild. Wähle im KDE-Dialog **Vollbild**, dann **Übernehmen** (je nach Übersetzung „Aufnehmen“) und **Speichern**. Bei Ablehnung, Fehler oder nach spätestens drei Sekunden Wartezeit funktioniert die Auswahl ohne Lupe weiter; die ausstehende Anfrage wird geschlossen. Dieser Ablauf umgeht die blockierende nichtinteraktive Erstfreigabe von xdg-desktop-portal 1.22.1 und wurde mit echten KDE-Dialogen geprüft. Falls dennoch ein alter KDE-Freigabedialog offen bleibt, schließe ihn mit „Deny“/„Verweigern“. Details stehen im [Regressionstestbericht](tests/PORTAL_FIX_REPORT.md). Die Aufnahme ist keine Live-Vorschau.
+Für einen festen Punkt wählst du zuerst den Monitor und klickst danach über „Auswählen …“ im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. Das Augensymbol („Punkt anzeigen“) markiert das gespeicherte Ziel kurz, ohne zu klicken.
+
+Optional verwendet „4×-Lupe“ eine über das interaktive Screenshot-Portal freigegebene Bildschirmaufnahme als Standbild. Wähle im KDE-Dialog **Vollbild**, dann **Übernehmen** (je nach Übersetzung „Aufnehmen“) und **Speichern**. Bei Ablehnung, Fehler oder nach spätestens drei Sekunden Wartezeit funktioniert die Auswahl ohne Lupe weiter; die ausstehende Anfrage wird geschlossen. Dieser Ablauf umgeht die blockierende nichtinteraktive Erstfreigabe von xdg-desktop-portal 1.22.1 und wurde mit echten KDE-Dialogen geprüft. Falls dennoch ein alter KDE-Freigabedialog offen bleibt, schließe ihn mit „Deny“/„Verweigern“. Details stehen im [Regressionstestbericht](tests/PORTAL_FIX_REPORT.md). Die Aufnahme ist keine Live-Vorschau.
 
 Beim Start fragt KDE, auf welchem Bildschirm geklickt werden darf. Wähle dort denselben Bildschirm aus. Position und Größe des freigegebenen Monitors werden vor dem ersten Klick geprüft. Ein anderer Monitor oder fehlende Zuordnungsdaten führen zu einer Fehlermeldung. Nach einem Monitorwechsel wird eine passende Freigabe erneut angefragt. Monitoridentität, Größe und Skalierung werden mit den Koordinaten gespeichert. Nach einem Neustart wird nur eine eindeutige Übereinstimmung wiederhergestellt; andernfalls müssen Monitor und Koordinaten bestätigt oder neu gewählt werden.
 
@@ -69,7 +73,7 @@ Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So
 
 ## Gut zu wissen
 
-- Das kleinste Intervall beträgt 10 Millisekunden. Mehr als 100 Klicks pro Sekunde sind nicht möglich.
+- Das kleinste Intervall beträgt 10 Millisekunden. Mehr als 100 Klicks pro Sekunde sind nicht möglich. Im Modus 2× sind das 100 Doppelklicks, also 200 einzelne Klicks pro Sekunde; auch die Wiederholungsanzahl zählt dann Doppelklicks.
 - Eine feste Position gilt immer für den Bildschirm, den du im KDE-Dialog ausgewählt hast.
 - Die Monitorauswahl zeigt Hersteller und Modell aus den Systemdaten. Bei gleichen Modellen oder fehlenden Modellangaben wird der Anschluss zur Unterscheidung ergänzt.
 - Der Positionswähler öffnet sich auf dem Bildschirm, den du zuvor in Klickmeister ausgewählt hast.

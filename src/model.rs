@@ -77,7 +77,9 @@ pub struct ClickSettings {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ValidationError {
-    #[error("Das Intervall muss mindestens {MIN_INTERVAL_MS} ms betragen ({MAX_CPS} CPS).")]
+    #[error(
+        "Das Intervall muss mindestens {MIN_INTERVAL_MS} ms betragen (höchstens {MAX_CPS} Klicks pro Sekunde)."
+    )]
     IntervalTooShort,
     #[error("Das Intervall darf höchstens 24 Stunden betragen.")]
     IntervalTooLong,

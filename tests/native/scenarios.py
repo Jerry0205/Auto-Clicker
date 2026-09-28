@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 import tomllib
-from access import Atspi, action, find, nodes, walk
+from access import Atspi, action, find, nodes
 from control import BASE, events, mark, rpc, wait_for
 from gi.repository import GLib
 
@@ -65,31 +65,31 @@ def type_value(name, value):
     assert actual.replace(".", "").replace(",", "") == str(value), (name, actual, value)
 
 
-def combo(name, index):
+CHOICES = {
+    "Maustaste": ["Links", "Rechts", "Mitte"],
+    "Klicktyp": ["Einfach", "Doppelt"],
+}
+
+
+def choose(name, index):
+    """Press a visible segment button and verify that it became the checked option."""
     focus_app()
-    n = find(name, role="combo box")
-    assert Atspi.Component.grab_focus(n)
-    time.sleep(0.1)
-    key(0x20)
-    label = {
-        "Maustaste": ["Links", "Rechts", "Mitte"],
-        "Klicktyp": ["Einfach", "Doppelt"],
-    }[name][index]
-    wait_for(
-        lambda: any(
-            x.get_name() == label
-            and x.get_role_name() == "menu item"
-            and x.get_state_set().contains(Atspi.StateType.SHOWING)
-            for x, d in nodes()
-        )
-    )
-    action(label, role="menu item")
-    time.sleep(0.1)
+    label = CHOICES[name][index]
+    action(label, role="radio button")
     pump()
-    text = [
-        Atspi.Text.get_text(x, 0, -1) for x, d in walk(n) if x.get_role_name() == "text"
-    ]
-    assert label in text, (name, label, text)
+    wait_for(
+        lambda: find(label, role="radio button")
+        .get_state_set()
+        .contains(Atspi.StateType.CHECKED)
+    )
+
+
+def fixed_point():
+    """Return the X/Y values currently shown in the main window."""
+    return tuple(
+        int(Atspi.Value.get_current_value(find(name, role="spin button")))
+        for name in ("X-Koordinate auf dem Monitor", "Y-Koordinate auf dem Monitor")
+    )
 
 
 def mouse_events():
@@ -105,15 +105,13 @@ def run_counted(
     hotkey=True,
     allow_permission=False,
 ):
-    assert any("X: 80 · Y: 400" in n.get_name() for n, d in nodes()), (
-        "Restore the test coordinates before starting"
-    )
+    assert fixed_point() == (80, 400), "Restore the test coordinates before starting"
     before = len(mouse_events())
     focus_target()
     if hotkey:
         key(0xFF13)
     else:
-        action("▶  Starten", role="button")
+        action("Starten", role="button")
     if allow_permission:
         wait_for(
             lambda: any(

@@ -8,7 +8,8 @@ from pathlib import Path
 from access import Atspi, action, nodes, walk
 from control import BASE, mark, rpc, wait_for
 from scenarios import (
-    combo,
+    choose,
+    fixed_point,
     focus_app,
     focus_target,
     key,
@@ -66,7 +67,7 @@ def screenshot_dialog():
 
 
 def open_capture():
-    action("Position wählen / Neu wählen …", role="button")
+    action("Auswählen …", role="button")
     wait_for(screenshot_dialog)
 
 
@@ -102,7 +103,7 @@ def pin_target():
     rpc("driver", cmd="click")
     wait_for(lambda: "X: 80 · Y: 400" in picker_text())
     key(0xFF0D)
-    wait_for(lambda: any("X: 80 · Y: 400" in n.get_name() for n, _ in nodes()))
+    wait_for(lambda: fixed_point() == (80, 400))
 
 
 def main():
@@ -110,7 +111,7 @@ def main():
     wait_for(lambda: rpc("driver", cmd="state")["ready"])
     kwin("place")
     wait_for(lambda: "Bereit" in status())
-    action("Mit 4×-Lupe auswählen (Bildschirmaufnahme)", role="check box")
+    action("4×-Lupe", role="check box")
 
     open_capture()
     probe_driver("independent_client_during_dialog")
@@ -159,7 +160,7 @@ def main():
     # Exercise actual clicks and Stop after the screenshot failure paths.
     before = len(mouse_events())
     focus_target()
-    action("▶  Starten", role="button")
+    action("Starten", role="button")
     grant_remote()
     wait_for(lambda: "Gestoppt" in status())
     new = mouse_events()[before:]
@@ -169,22 +170,22 @@ def main():
     mark("clicks_after_capture_failures", passed=True, mouse_events=len(new))
     action("Bis zum Stoppen", role="radio button")
     focus_target()
-    action("▶  Starten", role="button")
+    action("Starten", role="button")
     wait_for(lambda: "Klickt" in status())
     wait_for(lambda: len(mouse_events()) >= before + 10)
-    action("■  Stoppen", role="button")
+    action("Stoppen", role="button")
     wait_for(lambda: "Gestoppt" in status())
     count = len(mouse_events())
     time.sleep(0.3)
     assert len(mouse_events()) == count
     mark("stop_after_capture_failures", passed=True, quiet_ms=300)
 
-    # Saved helpers exercise real visible menu choices and verify their values.
+    # Saved helpers exercise the visible option buttons and verify the selection.
     action("Anzahl", role="radio button")
     for index, button in enumerate([1, 2, 4]):
-        combo("Maustaste", index)
+        choose("Maustaste", index)
         for click_type in [0, 1]:
-            combo("Klicktyp", click_type)
+            choose("Klicktyp", click_type)
             run_counted(
                 "native_click_matrix",
                 button=button,
