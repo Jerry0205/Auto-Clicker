@@ -352,9 +352,11 @@ impl qobject::AppController {
         config::save(&config).map_err(|error| error.to_string())
     }
 
-    /// Display an error without changing the worker-confirmed run state.
+    /// Display an error without replacing an active worker status.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
-        self.as_mut().set_status(QString::from("Fehler"));
+        if should_mark_status_as_error(*self.running(), *self.busy()) {
+            self.as_mut().set_status(QString::from("Fehler"));
+        }
         self.as_mut().set_error_message(QString::from(message));
     }
 
@@ -399,6 +401,10 @@ fn run_indicators(state: RunState) -> (bool, bool) {
     }
 }
 
+fn should_mark_status_as_error(running: bool, busy: bool) -> bool {
+    !running && !busy
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +417,12 @@ mod tests {
         for state in [RunState::Stopped, RunState::Error, RunState::Closing] {
             assert_eq!(run_indicators(state), (false, false));
         }
+    }
+
+    #[test]
+    fn local_errors_preserve_active_and_pending_run_status() {
+        assert!(should_mark_status_as_error(false, false));
+        assert!(!should_mark_status_as_error(true, false));
+        assert!(!should_mark_status_as_error(false, true));
     }
 }
