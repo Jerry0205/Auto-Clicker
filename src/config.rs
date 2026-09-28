@@ -1,4 +1,7 @@
-use crate::model::{ClickType, MouseButton, PositionMode, RepeatMode};
+use crate::model::{
+    ClickType, MAX_INTERVAL_MS, MAX_REPEAT_COUNT, MIN_INTERVAL_MS, MouseButton, PositionMode,
+    RepeatMode,
+};
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -45,6 +48,15 @@ impl Default for AppConfig {
     }
 }
 
+impl AppConfig {
+    /// Limits hand-edited values to the ranges the UI can display and start with.
+    fn clamp_to_valid_ranges(mut self) -> Self {
+        self.interval_ms = self.interval_ms.clamp(MIN_INTERVAL_MS, MAX_INTERVAL_MS);
+        self.repeat_count = self.repeat_count.clamp(1, MAX_REPEAT_COUNT);
+        self
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("HOME und XDG_CONFIG_HOME sind nicht gesetzt")]
@@ -81,7 +93,9 @@ pub fn load() -> Result<AppConfig, ConfigError> {
 
 pub fn load_from(path: &Path) -> Result<AppConfig, ConfigError> {
     match fs::read_to_string(path) {
-        Ok(contents) => toml::from_str(&contents).map_err(ConfigError::Parse),
+        Ok(contents) => toml::from_str::<AppConfig>(&contents)
+            .map(AppConfig::clamp_to_valid_ranges)
+            .map_err(ConfigError::Parse),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(AppConfig::default()),
         Err(error) => Err(ConfigError::Read(error)),
     }
@@ -168,6 +182,37 @@ mod tests {
             "position_mode = \"fixed\"\nfixed_x = 640\nfixed_y = 480\n",
         );
         assert!(config.is_ok_and(|config| config.monitor_identity.is_empty()));
+    }
+
+    #[test]
+    fn clamps_out_of_range_values_on_load() {
+        let too_small = test_path("too-small");
+        assert!(fs::write(&too_small, "interval_ms = 5\nrepeat_count = 0\n").is_ok());
+        let config = load_from(&too_small).ok();
+        assert_eq!(
+            config.as_ref().map(|config| config.interval_ms),
+            Some(MIN_INTERVAL_MS)
+        );
+        assert_eq!(config.map(|config| config.repeat_count), Some(1));
+        let _ = fs::remove_file(too_small);
+
+        let too_large = test_path("too-large");
+        let contents = format!(
+            "interval_ms = {}\nrepeat_count = {}\n",
+            MAX_INTERVAL_MS + 1,
+            MAX_REPEAT_COUNT + 1
+        );
+        assert!(fs::write(&too_large, contents).is_ok());
+        let config = load_from(&too_large).ok();
+        assert_eq!(
+            config.as_ref().map(|config| config.interval_ms),
+            Some(MAX_INTERVAL_MS)
+        );
+        assert_eq!(
+            config.map(|config| config.repeat_count),
+            Some(MAX_REPEAT_COUNT)
+        );
+        let _ = fs::remove_file(too_large);
     }
 
     #[test]
