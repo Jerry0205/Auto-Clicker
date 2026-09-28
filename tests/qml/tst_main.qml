@@ -133,4 +133,15 @@ TestCase {
         monitorInput.activated(0)
         compare(controller.fixed_position_confirmed, true)
     }
+
+    function test_coordinate_inputs_have_distinct_accessible_names() {
+        const x = findChild(main, "xInput")
+        const y = findChild(main, "yInput")
+        verify(x !== null)
+        verify(y !== null)
+        compare(x.Accessible.name, "X-Koordinate auf dem gewählten Monitor")
+        compare(y.Accessible.name, "Y-Koordinate auf dem gewählten Monitor")
+        compare(x.contentItem.Accessible.name, x.Accessible.name)
+        compare(y.contentItem.Accessible.name, y.Accessible.name)
+    }
 }

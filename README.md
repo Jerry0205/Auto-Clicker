@@ -90,11 +90,12 @@ dbus-run-session -- cargo test --locked --all-targets -- --ignored
 cargo build --locked --release
 bash tests/qml-smoke.sh target/release/klickmeister
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QT_QUICK_CONTROLS_STYLE=org.kde.desktop /usr/lib/qt6/bin/qmltestrunner -import tests/qml/mocks -input tests/qml
+python tests/check_coordinate_accessibility.py # in einer grafischen Sitzung mit AT-SPI und PyGObject
 bash tests/qml-wayland.sh # isolierter KWin mit drei Monitoren (benötigt kscreen-doctor)
 KLICKMEISTER_TEST_SCALE=1.5 bash tests/qml-wayland.sh
 ```
 
-Die QML-Tests verwenden denselben KDE-Control-Stil wie die App und für das Hauptfenster einen Controller-Testersatz. Die separaten D-Bus-Tests prüfen den echten Rust-Worker gegen simulierte Portale, einschließlich Klickfolgen, Stop-Hotkey, Sitzungsende und Button-Release-Fehlern. Sie erzeugen keine tatsächlichen Mausklicks auf dem Desktop. Echte KDE-Freigabedialoge und die Zeigersteuerung auf physischen Monitoren müssen zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft werden.
+Die QML-Tests verwenden denselben KDE-Control-Stil wie die App und für das Hauptfenster einen Controller-Testersatz. Die AT-SPI-Prüfung startet dieses Hauptfenster ohne Worker und bestätigt die zugänglichen Namen der X-/Y-SpinBoxen sowie ihrer Texteingaben im Accessibility-Baum. Die separaten D-Bus-Tests prüfen den echten Rust-Worker gegen simulierte Portale, einschließlich Klickfolgen, Stop-Hotkey, Sitzungsende und Button-Release-Fehlern. Sie erzeugen keine tatsächlichen Mausklicks auf dem Desktop. Echte KDE-Freigabedialoge und die Zeigersteuerung auf physischen Monitoren müssen zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft werden.
 
 GitHub Actions führt bei Pull Requests und Änderungen an `main` Formatierung, Clippy, Rust-Tests, die ignorierten Portaltests auf einem privaten D-Bus, QML-Tests im KDE-Stil, Python-Wächtertests und die Desktop-/AppStream-Validierung aus. Anschließend wird das Release-Programm gebaut und mit `tests/qml-smoke.sh` geprüft. Ein eigener Job führt die QML-Tests unter einem isolierten virtuellen KWin mit drei Monitoren aus. Beide Jobs verwenden ein Arch-Linux-Containerimage und die Cargo-Lockdatei; native Tests mit echten KDE-Dialogen bleiben eine manuelle Prüfung.
 
