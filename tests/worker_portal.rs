@@ -389,7 +389,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         monitor: None,
     };
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -612,7 +612,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                     interval_ms: 100, button: MouseButton::Left, click_type: ClickType::Single,
                     repeat: Some(1), position: None, monitor: None,
                 };
-                let pending_worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+                let pending_worker = WorkerHandle::spawn("Pause".into(), move |event| {
                     let _ = tx.send(event);
                 });
                 if !hotkey_pending {
