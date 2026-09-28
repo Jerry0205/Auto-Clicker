@@ -4,10 +4,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
-target_dir="${CARGO_TARGET_DIR:-target}"
-if [[ "$target_dir" != /* ]]; then
-    target_dir="$repo_root/$target_dir"
-fi
+target_dir="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
 
 module_dir="$target_dir/cxxqt/qml_modules"
 if [[ ! -f "$module_dir/io/github/jerry0205/klickmeister/qmldir" ]]; then
