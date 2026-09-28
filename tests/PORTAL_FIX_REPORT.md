@@ -1,8 +1,9 @@
 # Screenshot-Portal: native Regression vom 22.09.2026
 
-Historischer Testbericht: Seit dem Fix für Issue #19 wird die Lupe im aktuellen
-Programm nicht angeboten. Die damalige erfolgreiche Vollbildaufnahme beweist
-nicht, dass andere interaktive Aufnahmen geometrisch zum Desktop passen.
+Historischer Testbericht: Seit dem Fix für Issue #19 enthält Klickmeister keine
+Lupe und keinen Screenshot-Portal-Aufruf mehr. Die damalige erfolgreiche
+Vollbildaufnahme beweist nicht, dass andere interaktive Aufnahmen geometrisch
+zum Desktop passen.
 
 Die Korrektur umgeht den blockierenden Erstfreigabe-Pfad über
 `Screenshot(interactive=true)`. Sie ist auf dem betroffenen Gerät mit
@@ -37,7 +38,7 @@ Skalierung 160 %. Eigenes Vollbild-Testziel, gesonderter freigegebener
 RemoteDesktop-Testtreiber. Keine erzwungenen PermissionStore-Einträge.
 Alle Button-Ereignisse wurden am Testziel aufgezeichnet.
 
-Reproduzierbarer Lauf:
+Reproduzierbarer Lauf mit dem damaligen Stand (Commit `18f0a59`):
 `python tests/native/run.py tests/native/portal_cases.py`.
 Vollständige lokale Artefakte: `/tmp/klickmeister-native-84jf_pzd/`.
 Die wichtigen Belege sind im Repository gesichert:

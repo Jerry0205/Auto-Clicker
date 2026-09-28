@@ -188,6 +188,8 @@ TestCase {
         compare(finished.count, 1)
         compare(picker.selecting, false)
         compare(picker.visible, false)
+        wait(50) // A late picker activation must not minimize the restored host.
         compare(host.visible, true)
+        verify(host.visibility !== Window.Minimized)
     }
 }

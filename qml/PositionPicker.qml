@@ -27,6 +27,8 @@ Window {
         else if (targetY > height - 110) hintAtBottom = false
     }
 
+    // No screenshot backdrop: the Screenshot portal returns an image URI
+    // without its capture rectangle, so it cannot map to coordinates (#19).
     function begin(targetScreen, x, y, preview) {
         if (selecting || !targetScreen) return
         // Set geometry as well as screen before creating the native surface:

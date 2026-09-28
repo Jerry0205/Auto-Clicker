@@ -1,6 +1,6 @@
 # Security Review
 
-Stand: 2026-09-28, Version 0.1.2 (Screenshot-Pfad deaktiviert; frühere native Geräteprüfung siehe Testbericht zu 0.1.1)
+Stand: 2026-09-28, nach Version 0.1.2 (Screenshot-Pfad entfernt; frühere native Geräteprüfung siehe Testbericht zu 0.1.1)
 
 ## 1. Benötigte Berechtigungen
 
@@ -8,7 +8,7 @@ Stand: 2026-09-28, Version 0.1.2 (Screenshot-Pfad deaktiviert; frühere native G
 - RemoteDesktop-Gerät `POINTER`: erforderlich, um linke, rechte oder mittlere Button-Ereignisse zu emulieren.
 - Ein Monitor als ScreenCast-Koordinatenreferenz: nur bei fester Position erforderlich.
 
-Nicht angefordert werden `KEYBOARD`, `TOUCHSCREEN`, Clipboard, Kamera, Mikrofon, Dateien, Standort, Benachrichtigungen, Hintergrundausführung oder Netzwerk.
+Nicht angefordert werden `KEYBOARD`, `TOUCHSCREEN`, Screenshots, Clipboard, Kamera, Mikrofon, Dateien, Standort, Benachrichtigungen, Hintergrundausführung oder Netzwerk.
 
 ## 2. Verwendete D-Bus-/Portal-Schnittstellen
 
@@ -48,7 +48,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 - Ein echtes globales Auslesen der Cursorposition ist unter Wayland absichtlich nicht möglich. Der Picker nutzt ein eigenes Vollbildfenster.
 - Für absolute Positionen muss der Benutzer im KWin-Dialog denselben Monitor wählen. Position und Größe werden vor Nutzung mit der Auswahl abgeglichen; fehlende Metadaten verhindern den Start. Displayänderungen können die Sitzung ungültig machen und führen dann zum Stop mit Fehlermeldung.
 - Portal-Dialoge sind derzeit nicht an einen exportierten Wayland-Fensterhandle gekoppelt und können daher als separates KWin-Dialogfenster erscheinen.
-- Der Positionswähler fragt keine Bildschirmaufnahme an. Das Screenshot-Portal liefert für interaktive Aufnahmen keine verlässliche Ausschnittgeometrie; der frühere Portal-Hänger ist im historischen [Gerätebericht](tests/DEVICE_TEST_REPORT.md) dokumentiert.
+- Der Positionswähler fragt keine Bildschirmaufnahme an. Das Screenshot-Portal liefert zu Aufnahmen keine verlässliche Ausschnittgeometrie; der frühere Portal-Hänger ist im historischen [Gerätebericht](tests/DEVICE_TEST_REPORT.md) dokumentiert.
 - `SIGKILL` verhindert anwendungsseitiges RAII-Cleanup; der D-Bus-Verbindungsabbruch beendet die compositorseitige Sitzung dennoch.
 - Die D-Bus-Notify-Methode ist bei 100 CPS bewusst konservativer als das empfohlene EIS-Protokoll. Sie vermeidet eine weitere native FFI-Abhängigkeit und ist für das gesetzte Limit ausreichend.
 

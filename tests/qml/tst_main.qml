@@ -67,5 +67,6 @@ TestCase {
         compare(main.positionPicker.visible, true)
         tryVerify(function() { return main.positionPicker && main.positionPicker.inputReady })
         main.finishPicker()
+        compare(main.positionPicker, null)
     }
 }

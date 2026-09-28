@@ -49,7 +49,7 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 
 Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. „Position anzeigen“ markiert das gespeicherte Ziel kurz, ohne zu klicken.
 
-Die 4×-Lupe ist vorerst deaktiviert. Das Screenshot-Portal teilt der App nicht mit, welchen Ausschnitt eine interaktive Aufnahme zeigt. Ein Bildausschnitt könnte sonst an der falschen Desktopposition angezeigt werden. Der Vollbild-Positionswähler funktioniert weiterhin ohne Screenshot; bestätige die Zielposition am sichtbaren Desktop.
+Eine Lupe gibt es derzeit nicht. Das Screenshot-Portal teilt der App nicht mit, welchen Ausschnitt eine Aufnahme zeigt. Ein vergrößertes Standbild könnte deshalb an der falschen Desktopposition erscheinen. Der Positionswähler arbeitet daher ohne Bildschirmaufnahme direkt über dem sichtbaren Desktop.
 
 Beim Start fragt KDE, auf welchem Bildschirm geklickt werden darf. Wähle dort denselben Bildschirm aus. Position und Größe des freigegebenen Monitors werden vor dem ersten Klick geprüft. Ein anderer Monitor oder fehlende Zuordnungsdaten führen zu einer Fehlermeldung. Nach einem Monitorwechsel wird eine passende Freigabe erneut angefragt. Monitoridentität, Größe und Skalierung werden mit den Koordinaten gespeichert. Nach einem Neustart wird nur eine eindeutige Übereinstimmung wiederhergestellt; andernfalls müssen Monitor und Koordinaten bestätigt oder neu gewählt werden.
 
@@ -63,7 +63,7 @@ Klickmeister benötigt die Erlaubnis:
 - Mausklicks auszuführen
 - bei einer festen Position den ausgewählten Bildschirm zuzuordnen
 
-Das Programm liest keine Tastatureingaben, Passwörter oder Zwischenablagen mit. Der Positionswähler fordert derzeit keine Bildschirmaufnahme an. Es wird kein Bildschirmvideo aufgenommen. Alle Freigaben enden, sobald du Klickmeister schließt.
+Das Programm liest keine Tastatureingaben, Passwörter oder Zwischenablagen mit. Klickmeister fordert keine Screenshots an. Die Bildschirmfreigabe bei fester Position dient nur der Koordinatenzuordnung; dabei wird weder ein Bild noch ein Video gelesen. Alle Freigaben enden, sobald du Klickmeister schließt.
 
 Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So kannst du ihn immer sicher anhalten.
 
