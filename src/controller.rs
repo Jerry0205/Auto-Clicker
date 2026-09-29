@@ -159,19 +159,9 @@ impl qobject::AppController {
         if let Some(error) = self.as_mut().rust_mut().get_mut().startup_error.take() {
             self.as_mut().set_error_message(QString::from(&error));
         }
-        // The worker must remain available even when restored fixed coordinates
-        // need confirmation. Every actual start still validates the current UI.
-        let settings = ClickSettings {
-            interval_ms: 100,
-            button: MouseButton::Left,
-            click_type: ClickType::Single,
-            repeat: None,
-            position: None,
-            monitor: None,
-        };
         let preferred_hotkey = self.hotkey().to_string();
         let qt_thread = self.qt_thread();
-        let worker = WorkerHandle::spawn(settings, preferred_hotkey, move |event| {
+        let worker = WorkerHandle::spawn(preferred_hotkey, move |event| {
             let _ = qt_thread.queue(move |mut controller| {
                 controller.as_mut().handle_worker_event(event);
             });
@@ -192,7 +182,7 @@ impl qobject::AppController {
                 return;
             }
         };
-        if let Err(error) = self.as_ref().save_config() {
+        if let Err(error) = self.as_ref().save_config(&settings) {
             self.as_mut().set_error_message(QString::from(&error));
         }
         self.as_mut().send_command(Command::Start(settings));
@@ -309,8 +299,7 @@ impl qobject::AppController {
     }
 
     /// Persist monitor identity together with monitor-relative coordinates.
-    fn save_config(self: Pin<&Self>) -> Result<(), String> {
-        let settings = self.settings()?;
+    fn save_config(self: Pin<&Self>, settings: &ClickSettings) -> Result<(), String> {
         let config = AppConfig {
             interval_ms: settings.interval_ms,
             mouse_button: settings.button,

@@ -102,12 +102,10 @@ impl ClickSettings {
         {
             return Err(ValidationError::InvalidRepeat);
         }
-        if let Some((x, y)) = self.position
-            && (x > 100_000 || y > 100_000)
-        {
-            return Err(ValidationError::InvalidCoordinates);
-        }
         if let Some((x, y)) = self.position {
+            if x > 100_000 || y > 100_000 {
+                return Err(ValidationError::InvalidCoordinates);
+            }
             let monitor = self
                 .monitor
                 .ok_or(ValidationError::InvalidMonitorPosition)?;
