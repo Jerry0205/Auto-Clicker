@@ -277,6 +277,32 @@ impl AppControllerRust {
         .then(|| (saved.fixed_x.into(), saved.fixed_y.into()))
     }
 
+    /// Begin a new worker generation so that events of the previous one are dropped.
+    fn next_worker_epoch(&mut self) -> u64 {
+        self.worker_epoch = self.worker_epoch.wrapping_add(1);
+        self.worker_epoch
+    }
+
+    /// Pass on only events of the current worker. Late events of a shut-down
+    /// worker, including its final State(Closing), are dropped. A changed
+    /// hotkey description is a setting that must be saved on close.
+    fn accept_worker_event(
+        &mut self,
+        worker_epoch: u64,
+        event: WorkerEvent,
+    ) -> Option<WorkerEvent> {
+        if worker_epoch != self.worker_epoch {
+            return None;
+        }
+        if let WorkerEvent::Hotkey(hotkey) = &event {
+            if self.hotkey.to_string() == *hotkey {
+                return None;
+            }
+            self.config_dirty = true;
+        }
+        Some(event)
+    }
+
     fn persist_config(&mut self, force: bool) -> Result<(), String> {
         if !force && !self.config_dirty {
             return Ok(());
@@ -332,8 +358,7 @@ impl qobject::AppController {
             monitor: None,
         };
         let preferred_hotkey = self.hotkey().to_string();
-        let worker_epoch = self.rust().worker_epoch.wrapping_add(1);
-        self.as_mut().rust_mut().get_mut().worker_epoch = worker_epoch;
+        let worker_epoch = self.as_mut().rust_mut().get_mut().next_worker_epoch();
         let qt_thread = self.qt_thread();
         let worker = WorkerHandle::spawn(settings, preferred_hotkey, move |event| {
             let _ = qt_thread.queue(move |mut controller| {
@@ -429,7 +454,7 @@ impl qobject::AppController {
     pub fn shutdown(mut self: Pin<&mut Self>) {
         let worker = {
             let rust = self.as_mut().rust_mut().get_mut();
-            rust.worker_epoch = rust.worker_epoch.wrapping_add(1);
+            rust.next_worker_epoch();
             rust.worker.take()
         };
         if let Some(worker) = worker {
@@ -523,9 +548,14 @@ impl qobject::AppController {
 
     /// Apply results only from the current worker on the Qt thread.
     fn handle_worker_event(mut self: Pin<&mut Self>, worker_epoch: u64, event: WorkerEvent) {
-        if worker_epoch != self.rust().worker_epoch {
+        let Some(event) = self
+            .as_mut()
+            .rust_mut()
+            .get_mut()
+            .accept_worker_event(worker_epoch, event)
+        else {
             return;
-        }
+        };
         match event {
             WorkerEvent::Status(status) => {
                 self.as_mut().set_status(QString::from(&status));
@@ -535,12 +565,7 @@ impl qobject::AppController {
                 self.as_mut().set_running(running);
                 self.as_mut().set_busy(busy);
             }
-            WorkerEvent::Hotkey(hotkey) => {
-                if self.hotkey().to_string() != hotkey {
-                    self.as_mut().set_hotkey(QString::from(&hotkey));
-                    self.as_mut().mark_settings_changed();
-                }
-            }
+            WorkerEvent::Hotkey(hotkey) => self.as_mut().set_hotkey(QString::from(&hotkey)),
             WorkerEvent::HotkeyPhase(phase) => {
                 self.as_mut().set_hotkey_ready(matches!(
                     phase,
@@ -697,6 +722,99 @@ mod tests {
             Some(250)
         );
         assert!(!controller.config_dirty);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn each_unchanged_guard_keeps_another_instances_write() {
+        let directory = test_directory();
+        let path = directory.join("config.toml");
+        let other = AppConfig {
+            interval_ms: 300,
+            ..AppConfig::default()
+        };
+        assert!(config::save_to(&path, &other).is_ok());
+
+        // Without a user edit, even a differing displayed value is not written.
+        let mut untouched = AppControllerRust::from_config(AppConfig::default(), None);
+        untouched.interval_ms = 250;
+        assert!(untouched.persist_config_to(&path, false).is_ok());
+        assert_eq!(
+            config::load_from(&path).ok().map(|c| c.interval_ms),
+            Some(300)
+        );
+
+        // An edit that leaves the loaded values unchanged is not written either.
+        let mut reverted = AppControllerRust::from_config(AppConfig::default(), None);
+        reverted.config_dirty = true;
+        assert!(reverted.persist_config_to(&path, false).is_ok());
+        assert_eq!(
+            config::load_from(&path).ok().map(|c| c.interval_ms),
+            Some(300)
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn late_events_of_a_shut_down_worker_are_dropped() {
+        let mut controller = AppControllerRust::from_config(AppConfig::default(), None);
+        let first = controller.next_worker_epoch(); // initialize()
+        assert!(matches!(
+            controller.accept_worker_event(first, WorkerEvent::State(RunState::Clicking)),
+            Some(WorkerEvent::State(RunState::Clicking))
+        ));
+
+        // shutdown() starts a new epoch, so it clears the run indicators itself.
+        controller.next_worker_epoch();
+        for event in [
+            WorkerEvent::State(RunState::Closing),
+            WorkerEvent::Hotkey("F8".into()),
+            WorkerEvent::StartRequested,
+        ] {
+            assert!(controller.accept_worker_event(first, event).is_none());
+        }
+        assert!(!controller.config_dirty);
+
+        // "Weiter bearbeiten" starts a worker whose events apply again.
+        let second = controller.next_worker_epoch();
+        assert!(matches!(
+            controller.accept_worker_event(second, WorkerEvent::State(RunState::Ready)),
+            Some(WorkerEvent::State(RunState::Ready))
+        ));
+        assert!(
+            controller
+                .accept_worker_event(first, WorkerEvent::State(RunState::Closing))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn changed_worker_hotkey_is_saved_on_close() {
+        let directory = test_directory();
+        let path = directory.join("config.toml");
+        let mut controller = AppControllerRust::from_config(AppConfig::default(), None);
+        let epoch = controller.next_worker_epoch();
+        // KWin confirming the saved trigger is no change.
+        assert!(
+            controller
+                .accept_worker_event(epoch, WorkerEvent::Hotkey("Pause".into()))
+                .is_none()
+        );
+        assert!(!controller.config_dirty);
+
+        let Some(WorkerEvent::Hotkey(hotkey)) =
+            controller.accept_worker_event(epoch, WorkerEvent::Hotkey("F8".into()))
+        else {
+            panic!("a changed hotkey must reach the UI");
+        };
+        assert!(controller.config_dirty);
+        // As set_hotkey() in handle_worker_event.
+        controller.hotkey = QString::from(&hotkey);
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        assert_eq!(
+            config::load_from(&path).ok().map(|c| c.hotkey).as_deref(),
+            Some("F8")
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 

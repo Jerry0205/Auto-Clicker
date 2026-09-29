@@ -258,7 +258,7 @@ Kirigami.ApplicationWindow {
             }
             Controls.Label {
                 Layout.fillWidth: true
-                text: qsTr("„Weiter bearbeiten“ startet den Hintergrunddienst neu. KDE kann deshalb beim nächsten Start erneut nach der Wayland-Freigabe fragen.")
+                text: qsTr("„Weiter bearbeiten“ startet den Hintergrunddienst neu. Der Stop-Hotkey wird dabei sofort neu eingerichtet, sodass KDE erneut nach der Hotkey-Freigabe fragen kann. Die Wayland-Freigabe zum Klicken wird beim nächsten Klickstart neu angefragt.")
                 wrapMode: Text.WordWrap
                 color: Kirigami.Theme.disabledTextColor
             }
@@ -395,6 +395,7 @@ Kirigami.ApplicationWindow {
                 ColumnLayout {
                     anchors.fill: parent
                     Controls.RadioButton {
+                        objectName: "repeatUntilStoppedInput"
                         text: qsTr("Bis zum Stoppen")
                         checked: controller.repeat_until_stopped
                         enabled: !controller.running && !controller.busy
@@ -432,6 +433,7 @@ Kirigami.ApplicationWindow {
                 ColumnLayout {
                     anchors.fill: parent
                     Controls.RadioButton {
+                        objectName: "currentPositionInput"
                         text: qsTr("Aktuelle Cursorposition")
                         checked: controller.current_position
                         enabled: !controller.running && !controller.busy

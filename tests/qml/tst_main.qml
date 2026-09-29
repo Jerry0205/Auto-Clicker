@@ -290,10 +290,14 @@ TestCase {
             { tag: "mouse button", input: "mouseButtonInput", key: Qt.Key_Down, property: "mouse_button", value: 1 },
             { tag: "click type", input: "clickTypeInput", key: Qt.Key_Down, property: "click_type", value: 1 },
             { tag: "repeat mode", input: "repeatCountLabel", key: Qt.Key_Space, property: "repeat_until_stopped", value: false },
-            { tag: "position mode", input: "fixedPositionInput", key: Qt.Key_Space, property: "current_position", value: false }
+            { tag: "position mode", input: "fixedPositionInput", key: Qt.Key_Space, property: "current_position", value: false },
+            // Start from the opposite state; clicking a checked radio changes nothing.
+            { tag: "repeat until stopped", input: "repeatUntilStoppedInput", key: Qt.Key_Space, property: "repeat_until_stopped", initial: false, value: true },
+            { tag: "cursor position", input: "currentPositionInput", key: Qt.Key_Space, property: "current_position", initial: false, value: true }
         ]
     }
     function test_edits_are_saved_on_close_without_click_start(data) {
+        if (data.initial !== undefined) controller[data.property] = data.initial
         compare(controller.configDirty, false)
         const input = findChild(main, data.input)
         verify(input !== null)
