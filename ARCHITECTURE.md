@@ -5,7 +5,9 @@ Klickmeister ist ein einzelner Prozess mit zwei Ausführungskontexten:
 1. Der Qt-Thread besitzt das Kirigami-Fenster und alle GUI-Objekte.
 2. Ein Rust-Worker besitzt die Portal-Sitzungen, den Zustandsautomaten und den Scheduler.
 
-Zwischen beiden Richtungen laufen begrenzte Nachrichtenkanäle beziehungsweise in den Qt-Event-Loop eingereihte Zustandsupdates. Stop und Shutdown erreichen den Worker über ein priorisiertes Ein-Wert-Signal auch bei vollem Befehlskanal; vor einem Stop eingereihte Startbefehle werden danach verworfen. Eine eigene asynchrone Aufgabe empfängt Hotkey-Signale auch während eines Klicks und versieht sie beim Eintreffen mit der aktuellen Stop-Generation. Sie wartet dabei nie auf den Worker; läuft ihre Warteschlange über, gilt das als Stop, und eine Änderung der Kurzbefehlsliste wird nachgereicht. Für 300 ms nach einem Stop startet der Hotkey keinen neuen Lauf. Das deckt Signale ab, die beim Stop noch auf dem Bus unterwegs waren. Alle Startquellen gehen durch denselben Zustandsautomaten; deshalb kann höchstens ein Scheduler aktiv sein.
+Zwischen beiden Richtungen laufen begrenzte Nachrichtenkanäle beziehungsweise in den Qt-Event-Loop eingereihte Zustandsupdates. Stop und Shutdown umgehen den begrenzten Befehlskanal über ein Ein-Wert-Signal, das der Worker vor allen anderen Ereignissen prüft; sie kommen deshalb auch bei vollem Kanal an. Startbefehle, die vor einem Stop eingereiht wurden, verwirft der Worker danach. Ein fehlgeschlagener Versand ändert den angezeigten Laufstatus nur, wenn der Worker beendet ist. Alle Startquellen gehen durch denselben Zustandsautomaten; deshalb kann höchstens ein Scheduler aktiv sein.
+
+Jeder Startbefehl liefert die aktuellen, validierten Einstellungen. Eine ausstehende Portal-Aufgabe besitzt diese Einstellungen bis zur Freigabe; weitere Startbefehle können sie nicht überschreiben. Der Worker hält keinen Einstellungs-Cache für spätere Starts.
 
 ## Wayland-Backend
 
@@ -21,7 +23,7 @@ RemoteDesktop und GlobalShortcuts verwenden `ashpd` und jeweils eine eigene D-Bu
 
 ## Lebensdauer
 
-Das Schließen des Fensters sendet `Shutdown`, wartet auf den Worker und schließt RemoteDesktop- und GlobalShortcuts-Sitzungen mit begrenzter Wartezeit. Es werden keine Kindprozesse gestartet. Ein Prozessabbruch trennt die D-Bus-Verbindung, wodurch der Portal-Backendbesitzer die Sitzungen ebenfalls verwirft.
+Das Schließen des Fensters sendet `Shutdown`, wartet höchstens 5 Sekunden auf den Worker und schließt RemoteDesktop- und GlobalShortcuts-Sitzungen mit begrenzter Wartezeit. Endet der Worker nicht rechtzeitig, blockiert der Qt-Thread nicht weiter; das anschließende Prozessende trennt die D-Bus-Verbindungen. Es werden keine Kindprozesse gestartet. Ein Prozessabbruch trennt die D-Bus-Verbindung, wodurch der Portal-Backendbesitzer die Sitzungen ebenfalls verwirft.
 
 ## Positionsauswahl
 

@@ -57,8 +57,6 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 4. Starte den Klicker mit dem Hotkey.
 5. Drücke den Hotkey erneut, um ihn zu stoppen.
 
-Hotkey-Betätigungen, die vor einem Stop ankamen, werden danach verworfen. In den ersten 0,3 Sekunden nach einem Stop startet der Hotkey den Klicker nicht erneut; danach reicht wieder ein einzelner Druck.
-
 Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. „Position anzeigen“ markiert das gespeicherte Ziel kurz, ohne zu klicken.
 
 Eine Lupe gibt es derzeit nicht. Das Screenshot-Portal teilt der App nicht mit, welchen Ausschnitt eine Aufnahme zeigt. Ein vergrößertes Standbild könnte deshalb an der falschen Desktopposition erscheinen. Der Positionswähler arbeitet daher ohne Bildschirmaufnahme direkt über dem sichtbaren Desktop.
@@ -88,6 +86,8 @@ Wenn du die Hotkey-Freigabe ablehnst, die Stop-Taste entfernst oder KDE die Hotk
 - Der Positionswähler öffnet sich auf dem Bildschirm, den du zuvor in Klickmeister ausgewählt hast.
 - Klickmeister ist nur für Wayland gedacht. Ein X11- oder `xdotool`-Ersatz ist nicht eingebaut.
 - Gespeichert werden nur deine Einstellungen. Es gibt keine Statistiken, keine Nutzungsdaten und keine Telemetrie.
+- Änderungen an den Einstellungen werden beim Schließen gespeichert, auch wenn du keinen Klicklauf gestartet hast. Falls das Speichern fehlschlägt, kannst du weiterarbeiten oder ausdrücklich ohne Speichern schließen.
+- Fehlt der Monitor einer gespeicherten festen Position beim Start, bleibt diese Position samt Monitor-Zuordnung gespeichert, bis du selbst eine neue Position wählst oder einen Monitor bestätigst. Wählst du ihren Monitor später wieder aus, erscheint die gespeicherte Position erneut.
 
 ## Für Entwickler
 

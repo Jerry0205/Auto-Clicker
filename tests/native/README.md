@@ -9,12 +9,13 @@ Instanz starten. Globale Tastenkürzel dürfen nicht parallel umkonfiguriert wer
 
 ```bash
 cargo build --locked --release
-python -m unittest discover -s tests/native -p test_guard.py
-python -m unittest discover -s tests/native -p test_run.py
+python -m unittest discover -s tests/native -p 'test_*.py'
 python tests/native/run.py tests/native/portal_cases.py
 ```
 
 `run.py` erstellt ein privates Artefaktverzeichnis samt eigener App-Konfiguration.
+Die Monitoridentität darin entspricht byte-genau `JSON.stringify` aus
+`qml/MonitorSelection.qml`, auch bei gebrochener Skalierung; `test_run.py` prüft das.
 Der Pfad wird ausgegeben; Ergebnisse, Mausereignisse und Prozess-IDs bleiben
 dort erhalten. Es wird keine Screenshot-Freigabe angefragt. `portal_cases.py`
 bedient den RemoteDesktop-Dialog über AT-SPI. KDE 6.7 meldet auf diesem Gerät
@@ -27,8 +28,6 @@ nach der Positionswahl sowie reguläres App-Schließen.
 Zusätzlich laufen alle drei Maustasten mit Einzel-/Doppelklick; Menüwerte werden
 über sichtbare Einträge gewählt und anschließend gelesen. Jeder neue Picker wird
 bei (80, 400) fixiert und vor dem Start bestätigt.
-`test_run.py` prüft die Monitoridentität bei ganzzahliger und gebrochener
-Skalierung einschließlich der TOML-Einbettung.
 
 Die aus den temporären Hilfsskripten übernommenen Korrekturen sind fest enthalten:
 
