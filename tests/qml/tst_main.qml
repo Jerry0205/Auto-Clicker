@@ -255,6 +255,7 @@ TestCase {
         verify(footer !== null)
         verify(button !== null)
         verify(status !== null)
+        tryCompare(findChild(main, "errorBanner"), "visible", true)
         tryCompare(main, "height", main.minimumHeight)
         wait(50)
 
@@ -271,6 +272,9 @@ TestCase {
         const expectedStatus = "Status: " + controller.status
             + (data.running ? " · " + main.rateDescription : "")
         compare(status.text, expectedStatus)
+        // A click at the button's position must reach it, not the settings.
+        mouseClick(button)
+        compare(controller.toggle_count, button.enabled ? 1 : 0)
 
         const flickable = main.pageStack.currentItem.flickable
         tryVerify(function() { return flickable.contentHeight > flickable.height },
@@ -279,6 +283,8 @@ TestCase {
         wait(50)
         verify(button.visible && inWindow(button), "Scrolling settings must not move the run control")
         verify(status.visible && inWindow(status), "Scrolling settings must not move the run status")
+        mouseClick(button)
+        compare(controller.toggle_count, button.enabled ? 2 : 0)
     }
 
     function test_run_control_can_be_used_with_keyboard() {
@@ -288,5 +294,27 @@ TestCase {
         verify(button.activeFocus)
         keyClick(Qt.Key_Space)
         compare(controller.toggle_count, 1)
+    }
+
+    function test_run_control_follows_settings_in_focus_and_reading_order() {
+        const lastSetting = findChild(main, "hotkeyConfigureButton")
+        const button = findChild(main, "startStopButton")
+        const footer = findChild(main, "runFooter")
+        verify(lastSetting.enabled)
+        lastSetting.forceActiveFocus(Qt.TabFocusReason)
+        verify(lastSetting.activeFocus)
+        keyClick(Qt.Key_Tab)
+        verify(button.activeFocus, "Tab must move from the last setting to the run control")
+        keyClick(Qt.Key_Backtab, Qt.ShiftModifier)
+        verify(lastSetting.activeFocus, "Shift+Tab must return from the run control to the settings")
+
+        // Screen readers list siblings in item order and stacking order.
+        // Both must put the footer after the settings page.
+        let page = main.pageStack
+        while (page && page.parent !== footer.parent) page = page.parent
+        verify(page, "Footer and settings must share a parent item")
+        const siblings = footer.parent.children
+        verify(siblings.indexOf(page) < siblings.indexOf(footer))
+        verify(footer.z >= page.z)
     }
 }

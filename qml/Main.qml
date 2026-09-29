@@ -246,7 +246,6 @@ Kirigami.ApplicationWindow {
                         ? qsTr("Status: %1 · %2").arg(controller.status).arg(root.rateDescription)
                         : qsTr("Status: %1").arg(controller.status)
                     wrapMode: Text.WordWrap
-                    Accessible.name: text
                 }
                 Controls.BusyIndicator {
                     visible: controller.busy

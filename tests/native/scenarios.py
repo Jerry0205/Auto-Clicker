@@ -113,7 +113,7 @@ def run_counted(
     if hotkey:
         key(0xFF13)
     else:
-        action("▶  Starten", role="button")
+        action("Starten", role="button")
     if allow_permission:
         wait_for(
             lambda: any(

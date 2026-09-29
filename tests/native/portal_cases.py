@@ -118,7 +118,7 @@ def main():
     # Exercise actual clicks and Stop after position selection.
     before = len(mouse_events())
     focus_target()
-    action("▶  Starten", role="button")
+    action("Starten", role="button")
     grant_remote()
     wait_for(lambda: "Gestoppt" in status())
     new = mouse_events()[before:]
@@ -128,10 +128,10 @@ def main():
     mark("clicks_after_position_selection", passed=True, mouse_events=len(new))
     action("Bis zum Stoppen", role="radio button")
     focus_target()
-    action("▶  Starten", role="button")
+    action("Starten", role="button")
     wait_for(lambda: "Klickt" in status())
     wait_for(lambda: len(mouse_events()) >= before + 10)
-    action("■  Stoppen", role="button")
+    action("Stoppen", role="button")
     wait_for(lambda: "Gestoppt" in status())
     count = len(mouse_events())
     time.sleep(0.3)
