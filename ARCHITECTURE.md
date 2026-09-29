@@ -7,6 +7,8 @@ Klickmeister ist ein einzelner Prozess mit zwei Ausführungskontexten:
 
 Zwischen beiden Richtungen laufen begrenzte Nachrichtenkanäle beziehungsweise in den Qt-Event-Loop eingereihte Zustandsupdates. Alle Startquellen gehen durch denselben Zustandsautomaten; deshalb kann höchstens ein Scheduler aktiv sein.
 
+Jeder Startbefehl liefert die aktuellen, validierten Einstellungen. Eine ausstehende Portal-Aufgabe besitzt diese Einstellungen bis zur Freigabe; weitere Startbefehle können sie nicht überschreiben. Der Worker hält keinen Einstellungs-Cache für spätere Starts.
+
 ## Wayland-Backend
 
 - `org.freedesktop.portal.RemoteDesktop`: Fordert ausschließlich `POINTER` an und sendet Linux-evdev-Buttoncodes. Der Modus „aktuelle Cursorposition“ bewegt oder liest den Cursor nicht.

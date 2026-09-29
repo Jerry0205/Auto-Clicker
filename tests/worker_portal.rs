@@ -33,7 +33,7 @@ struct Observed {
     remote_session: Option<OwnedObjectPath>,
     revoked_session: Option<OwnedObjectPath>,
     buttons: Vec<(i32, u32)>,
-    release_failures: usize,
+    button_failures: [usize; 2],
     closed: usize,
     stall_close: bool,
     close_releases: Vec<Arc<Notify>>,
@@ -368,9 +368,9 @@ impl FakeRemote {
             return Err(failed("session revoked"));
         }
         observed.buttons.push((button, state));
-        if state == 0 && observed.release_failures > 0 {
-            observed.release_failures -= 1;
-            return Err(failed("simulated release failure"));
+        if observed.button_failures[state as usize] > 0 {
+            observed.button_failures[state as usize] -= 1;
+            return Err(failed("simulated button failure"));
         }
         Ok(())
     }
@@ -536,7 +536,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         monitor: None,
     };
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -688,7 +688,7 @@ async fn revocation_ends_start_while_response_is_pending() -> TestResult {
         monitor: None,
     };
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
         let _ = tx.send(event);
     });
     let (seen, release) = {
@@ -741,7 +741,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         monitor: None,
     };
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {
@@ -918,28 +918,43 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         sleep(Duration::from_millis(80)).await;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len(), before);
         assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).motions.is_empty());
-        observed.lock().unwrap_or_else(|e| e.into_inner()).delay_start = false;
 
-        // A cancelled request must not prevent a later valid start.
-        worker.send(Command::Start(fixed))?;
+        // A new permission request owns its settings even if a duplicate arrives.
+        worker.send(Command::Start(fixed.clone()))?;
+        timeout(Duration::from_secs(3), seen.notified()).await?;
+        worker.send(Command::Start(ClickSettings {
+            position: Some((100, 150)),
+            button: MouseButton::Right,
+            click_type: ClickType::Double,
+            repeat: Some(1),
+            ..fixed
+        }))?;
+        release.notify_one();
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).motions,
             vec![(42, 1919.0, 1079.0); 3]);
+        assert_eq!(&observed.lock().unwrap_or_else(|e| e.into_inner()).buttons[before..],
+            [(MouseButton::Left.evdev_code(), 1), (MouseButton::Left.evdev_code(), 0)].repeat(3));
+        observed.lock().unwrap_or_else(|e| e.into_inner()).delay_start = false;
 
-        {
-            let mut observed = observed.lock().unwrap_or_else(|e| e.into_inner());
-            observed.buttons.clear();
-            observed.release_failures = 1;
+        for failed_state in [1, 0] {
+            {
+                let mut observed = observed.lock().unwrap_or_else(|e| e.into_inner());
+                observed.buttons.clear();
+                observed.button_failures[failed_state] = 1;
+            }
+            worker.send(Command::Start(settings.clone()))?;
+            event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+            event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
+            event(&mut events, |e| matches!(e, WorkerEvent::Error(_))).await?;
+            let expected = if failed_state == 1 {
+                vec![(0x110, 1), (0x110, 0)]
+            } else {
+                vec![(0x110, 1), (0x110, 0), (0x110, 0)]
+            };
+            assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons, expected);
         }
-        worker.send(Command::Start(settings.clone()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(_))).await?;
-        assert_eq!(
-            observed.lock().unwrap_or_else(|e| e.into_inner()).buttons,
-            vec![(0x110, 1), (0x110, 0), (0x110, 0)]
-        );
 
         worker.send(Command::Start(ClickSettings {
             repeat: None,
@@ -1078,7 +1093,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
                     interval_ms: 100, button: MouseButton::Left, click_type: ClickType::Single,
                     repeat: Some(1), position: None, monitor: None,
                 };
-                let pending_worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+                let pending_worker = WorkerHandle::spawn("Pause".into(), move |event| {
                     let _ = tx.send(event);
                 });
                 if !hotkey_pending {
@@ -1192,7 +1207,7 @@ async fn button_countdown_delays_first_click_and_stop_cancels_it() -> TestResult
         monitor: None,
     };
     let (tx, mut events) = mpsc::unbounded_channel();
-    let worker = WorkerHandle::spawn(settings.clone(), "Pause".into(), move |event| {
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
         let _ = tx.send(event);
     });
     let result: TestResult = async {

@@ -15,7 +15,7 @@ use tokio::{
     time::{Duration, timeout},
 };
 
-use crate::model::{ClickSettings, ClickType, MonitorGeometry};
+use crate::model::{ClickSettings, MonitorGeometry};
 
 const EVENT_TIMEOUT: Duration = Duration::from_millis(250);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -296,69 +296,28 @@ impl PortalClickSession {
         }
 
         let button = settings.button.evdev_code();
-        let count = match settings.click_type {
-            ClickType::Single => 1,
-            ClickType::Double => 2,
-        };
-        for _ in 0..count {
-            let press = timeout(
-                EVENT_TIMEOUT,
-                self.portal.notify_pointer_button(
-                    &self.session,
-                    button,
-                    KeyState::Pressed,
-                    Default::default(),
-                ),
-            )
-            .await;
-            match press {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    self.best_effort_release(button).await;
-                    return Err(PortalError::Send(error));
-                }
-                Err(_) => {
-                    self.best_effort_release(button).await;
-                    return Err(PortalError::EventTimeout);
-                }
-            }
-            let release = timeout(
-                EVENT_TIMEOUT,
-                self.portal.notify_pointer_button(
-                    &self.session,
-                    button,
-                    KeyState::Released,
-                    Default::default(),
-                ),
-            )
-            .await;
-            match release {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    self.best_effort_release(button).await;
-                    return Err(PortalError::Send(error));
-                }
-                Err(_) => {
-                    self.best_effort_release(button).await;
-                    return Err(PortalError::EventTimeout);
+        for _ in 0..settings.click_type.clicks_per_tick() {
+            for state in [KeyState::Pressed, KeyState::Released] {
+                if let Err(error) = self.send_button(button, state).await {
+                    // A failed or timed-out press may still have reached KWin.
+                    let _ = self.send_button(button, KeyState::Released).await;
+                    return Err(error);
                 }
             }
         }
         Ok(())
     }
 
-    /// Retry releasing a button when the first release failed.
-    async fn best_effort_release(&self, button: i32) {
-        let _ = timeout(
+    /// Send each button transition with the same timeout and error handling.
+    async fn send_button(&self, button: i32, state: KeyState) -> Result<(), PortalError> {
+        timeout(
             EVENT_TIMEOUT,
-            self.portal.notify_pointer_button(
-                &self.session,
-                button,
-                KeyState::Released,
-                Default::default(),
-            ),
+            self.portal
+                .notify_pointer_button(&self.session, button, state, Default::default()),
         )
-        .await;
+        .await
+        .map_err(|_| PortalError::EventTimeout)?
+        .map_err(PortalError::Send)
     }
 
     /// Close the portal session after clicking stops or permissions change.
