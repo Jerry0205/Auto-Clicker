@@ -3,6 +3,7 @@ use std::pin::Pin;
 use crate::{
     config::{self, AppConfig},
     model::{ClickSettings, ClickType, MonitorGeometry, MouseButton, PositionMode, RepeatMode},
+    state::RunState,
     worker::{Command, HotkeyPhase, WorkerEvent, WorkerHandle},
 };
 use cxx_qt::{CxxQtType, Threading};
@@ -240,13 +241,16 @@ impl qobject::AppController {
 
     /// Send through the bounded worker channel and surface delivery failures.
     fn send_command(mut self: Pin<&mut Self>, command: Command) {
-        let result = self
-            .rust()
-            .worker
-            .as_ref()
+        let worker = self.rust().worker.as_ref();
+        let result = worker
             .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")
             .and_then(|worker| worker.send(command));
         if let Err(error) = result {
+            // A stopped worker sends no further state, so clear its last one.
+            if worker.is_none_or(WorkerHandle::is_stopped) {
+                self.as_mut().set_running(false);
+                self.as_mut().set_busy(false);
+            }
             self.as_mut().show_error(error);
         }
     }
@@ -334,11 +338,11 @@ impl qobject::AppController {
         config::save(&config).map_err(|error| error.to_string())
     }
 
-    /// Display an error and reset the running and busy indicators.
+    /// Display an error without replacing an active worker status.
     fn show_error(mut self: Pin<&mut Self>, message: &str) {
-        self.as_mut().set_running(false);
-        self.as_mut().set_busy(false);
-        self.as_mut().set_status(QString::from("Fehler"));
+        if should_mark_status_as_error(*self.running(), *self.busy()) {
+            self.as_mut().set_status(QString::from("Fehler"));
+        }
         self.as_mut().set_error_message(QString::from(message));
     }
 
@@ -346,13 +350,12 @@ impl qobject::AppController {
     fn handle_worker_event(mut self: Pin<&mut Self>, event: WorkerEvent) {
         match event {
             WorkerEvent::Status(status) => {
-                let busy = status.contains("Warte auf Wayland");
-                self.as_mut().set_busy(busy);
                 self.as_mut().set_status(QString::from(&status));
             }
-            WorkerEvent::Running(running) => {
+            WorkerEvent::State(state) => {
+                let (running, busy) = run_indicators(state);
                 self.as_mut().set_running(running);
-                self.as_mut().set_busy(false);
+                self.as_mut().set_busy(busy);
             }
             WorkerEvent::Hotkey(hotkey) => self.as_mut().set_hotkey(QString::from(&hotkey)),
             WorkerEvent::HotkeyPhase(phase) => {
@@ -374,5 +377,39 @@ impl qobject::AppController {
             }
             WorkerEvent::Error(error) => self.as_mut().show_error(&error),
         }
+    }
+}
+
+fn run_indicators(state: RunState) -> (bool, bool) {
+    match state {
+        RunState::Starting => (false, true),
+        RunState::Clicking => (true, false),
+        RunState::Ready | RunState::Stopped | RunState::Error | RunState::Closing => (false, false),
+    }
+}
+
+fn should_mark_status_as_error(running: bool, busy: bool) -> bool {
+    !running && !busy
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn controls_follow_worker_state() {
+        assert_eq!(run_indicators(RunState::Ready), (false, false));
+        assert_eq!(run_indicators(RunState::Starting), (false, true));
+        assert_eq!(run_indicators(RunState::Clicking), (true, false));
+        for state in [RunState::Stopped, RunState::Error, RunState::Closing] {
+            assert_eq!(run_indicators(state), (false, false));
+        }
+    }
+
+    #[test]
+    fn local_errors_preserve_active_and_pending_run_status() {
+        assert!(should_mark_status_as_error(false, false));
+        assert!(!should_mark_status_as_error(true, false));
+        assert!(!should_mark_status_as_error(false, true));
     }
 }
