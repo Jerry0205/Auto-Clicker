@@ -87,7 +87,7 @@ def run_counted(
     if hotkey:
         key(0xFF13)
     else:
-        action("▶  Starten", role="button")
+        action("Starten", role="button")
     expected = 2 * count * (2 if double else 1)
     wait_for(
         lambda: len(mouse_events()) >= before + expected,

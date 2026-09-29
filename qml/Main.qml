@@ -217,6 +217,57 @@ Kirigami.ApplicationWindow {
         close.accepted = true
     }
 
+    footer: Controls.Pane {
+        objectName: "runFooter"
+        padding: Kirigami.Units.smallSpacing
+        background: Rectangle {
+            color: Kirigami.Theme.backgroundColor
+            Kirigami.Separator { width: parent.width }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.smallSpacing
+
+            Controls.Button {
+                readonly property bool stopMode: controller.running || controller.busy
+
+                objectName: "startStopButton"
+                Layout.fillWidth: true
+                Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
+                highlighted: true
+                text: stopMode ? qsTr("■  Stoppen") : qsTr("▶  Starten")
+                enabled: stopMode || (controller.hotkey_ready && !controller.hotkey_pending)
+                Accessible.name: stopMode ? qsTr("Stoppen") : qsTr("Starten")
+                onClicked: controller.toggle()
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.smallSpacing
+                Rectangle {
+                    implicitWidth: Kirigami.Units.smallSpacing
+                    implicitHeight: implicitWidth
+                    radius: implicitWidth / 2
+                    color: controller.running ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
+                }
+                Controls.Label {
+                    objectName: "statusLabel"
+                    Layout.fillWidth: true
+                    text: controller.running
+                        ? qsTr("Status: %1 · %2").arg(controller.status).arg(root.rateDescription)
+                        : qsTr("Status: %1").arg(controller.status)
+                    wrapMode: Text.WordWrap
+                }
+                Controls.BusyIndicator {
+                    visible: controller.busy
+                    running: visible
+                    implicitWidth: Kirigami.Units.gridUnit
+                    implicitHeight: implicitWidth
+                }
+            }
+        }
+    }
+
     pageStack.initialPage: Kirigami.ScrollablePage {
         title: qsTr("Auto Clicker")
 
@@ -478,42 +529,6 @@ Kirigami.ApplicationWindow {
                         enabled: root.controlsEnabled && !controller.hotkey_pending
                         onClicked: controller.configure_hotkey()
                     }
-                }
-            }
-
-            Controls.Button {
-                objectName: "startStopButton"
-                Layout.fillWidth: true
-                Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
-                highlighted: true
-                text: controller.running || controller.busy ? qsTr("■  Stoppen") : qsTr("▶  Starten")
-                enabled: controller.running || controller.busy || (controller.hotkey_ready && !controller.hotkey_pending)
-                onClicked: controller.toggle()
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: Kirigami.Units.smallSpacing
-                Rectangle {
-                    implicitWidth: Kirigami.Units.smallSpacing
-                    implicitHeight: implicitWidth
-                    radius: implicitWidth / 2
-                    color: controller.running ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
-                }
-                Controls.Label {
-                    objectName: "statusLabel"
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    text: controller.running
-                        ? qsTr("Status: %1 · %2").arg(controller.status).arg(root.rateDescription)
-                        : qsTr("Status: %1").arg(controller.status)
-                }
-                Item { Layout.fillWidth: true }
-                Controls.BusyIndicator {
-                    visible: controller.busy
-                    running: visible
-                    implicitWidth: Kirigami.Units.gridUnit
-                    implicitHeight: implicitWidth
                 }
             }
 
