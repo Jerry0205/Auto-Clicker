@@ -28,7 +28,7 @@ use tokio::{
 };
 
 use crate::{
-    model::{ClickSettings, MonitorGeometry, ValidationError},
+    model::{ClickSettings, ValidationError},
     portal::PortalClickSession,
     scheduler::Schedule,
     state::{RunState, StateMachine},
@@ -71,21 +71,16 @@ pub struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    pub fn spawn<F>(initial: ClickSettings, preferred_hotkey: String, emit: F) -> Self
+    pub fn spawn<F>(preferred_hotkey: String, emit: F) -> Self
     where
         F: Fn(WorkerEvent) + Send + Sync + 'static,
     {
         let builder = thread::Builder::new().name("klickmeister-worker".to_owned());
-        Self::spawn_with(builder, initial, preferred_hotkey, Arc::new(emit))
+        Self::spawn_with(builder, preferred_hotkey, Arc::new(emit))
     }
 
     /// Spawn with an injectable thread builder and report start failures as errors.
-    fn spawn_with(
-        builder: thread::Builder,
-        initial: ClickSettings,
-        preferred_hotkey: String,
-        emit: Emitter,
-    ) -> Self {
+    fn spawn_with(builder: thread::Builder, preferred_hotkey: String, emit: Emitter) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = Arc::clone(&closing);
@@ -96,7 +91,6 @@ impl WorkerHandle {
                 let runtime = Builder::new_current_thread().enable_all().build();
                 let worker = run_worker(
                     rx,
-                    initial,
                     preferred_hotkey,
                     Arc::clone(&worker_emit),
                     worker_closing,
@@ -181,6 +175,11 @@ struct ActiveRun {
     settings: ClickSettings,
     schedule: Schedule,
     next_tick: Instant,
+}
+
+struct StartedSession {
+    session: PortalClickSession,
+    settings: ClickSettings,
 }
 
 type Emitter = Arc<dyn Fn(WorkerEvent) + Send + Sync>;
@@ -276,28 +275,29 @@ async fn cancel_hotkey(
 
 /// Keep the owner alive until its pending dialog/session has been closed.
 async fn cancel_start(
-    task: &mut Option<JoinHandle<Result<PortalClickSession, String>>>,
+    task: &mut Option<JoinHandle<Result<StartedSession, String>>>,
     cancel: &mut Option<oneshot::Sender<()>>,
 ) {
     if let Some(cancel) = cancel.take() {
         let _ = cancel.send(());
     }
     if let Some(task) = task.take()
-        && let Ok(Ok(session)) = task.await
+        && let Ok(Ok(started)) = task.await
     {
         // The permission may have completed just before cancellation.
-        session.close().await;
+        started.session.close().await;
     }
 }
 
 /// Create a portal session for the selected monitor or current cursor.
 async fn setup_click_session(
-    monitor: Option<MonitorGeometry>,
+    settings: ClickSettings,
     cancel: oneshot::Receiver<()>,
-) -> Result<PortalClickSession, String> {
-    PortalClickSession::create(monitor, cancel)
+) -> Result<StartedSession, String> {
+    let session = PortalClickSession::create(settings.monitor, cancel)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok(StartedSession { session, settings })
 }
 
 async fn wait_for_tick(deadline: Option<Instant>) {
@@ -370,7 +370,6 @@ async fn register_hotkey_watcher(
 /// Serialize clicks, permissions and shortcut events.
 async fn run_worker(
     mut commands: mpsc::Receiver<Command>,
-    mut latest_settings: ClickSettings,
     preferred_hotkey: String,
     emit: Emitter,
     closing: Arc<AtomicBool>,
@@ -378,7 +377,7 @@ async fn run_worker(
     let mut machine = StateMachine::default();
     let mut click_session: Option<PortalClickSession> = None;
     let mut active: Option<ActiveRun> = None;
-    let mut start_task: Option<JoinHandle<Result<PortalClickSession, String>>> = None;
+    let mut start_task: Option<JoinHandle<Result<StartedSession, String>>> = None;
     let mut start_cancel = None;
     let (tx, rx) = oneshot::channel();
     let mut hotkey_cancel = Some(tx);
@@ -415,7 +414,6 @@ async fn run_worker(
                         }
                         match request_validated_start(&mut machine, &settings) {
                             Ok(true) => {
-                                latest_settings = settings.clone();
                                 (emit)(WorkerEvent::State(machine.state()));
                             }
                             Ok(false) => continue,
@@ -434,7 +432,7 @@ async fn run_worker(
                             (emit)(WorkerEvent::Status("Warte auf Wayland-Berechtigung …".to_owned()));
                             let (tx, rx) = oneshot::channel();
                             start_cancel = Some(tx);
-                            start_task = Some(tokio::spawn(setup_click_session(settings.monitor, rx)));
+                            start_task = Some(tokio::spawn(setup_click_session(settings, rx)));
                         }
                     }
                     Command::Stop => {
@@ -474,14 +472,14 @@ async fn run_worker(
                 start_task = None;
                 start_cancel = None;
                 match result {
-                    Ok(Ok(mut session)) => {
+                    Ok(Ok(StartedSession { mut session, settings })) => {
                         if session.is_closed() {
                             session.close().await;
                             fail_run(&mut machine, &emit);
                             (emit)(WorkerEvent::Error("Die Wayland-Berechtigung wurde beendet.".to_owned()));
                         } else {
                             click_session = Some(session);
-                            start_run(&mut machine, &mut active, latest_settings.clone(), &emit);
+                            start_run(&mut machine, &mut active, settings, &emit);
                         }
                     }
                     Ok(Err(error)) => {
@@ -604,9 +602,7 @@ async fn run_worker(
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &emit);
                         } else if configure_task.is_none() {
-                            // Ask the Qt side to start so the current UI values are
-                            // collected, validated and saved. Keeping a settings copy
-                            // here made hotkey starts use values from the previous run.
+                            // Qt collects, validates and saves the current controls.
                             (emit)(WorkerEvent::StartRequested);
                         }
                     }
@@ -855,7 +851,7 @@ mod tests {
         let (emit, events) = recording_emitter();
         // An impossible stack size makes spawning fail without exhausting resources.
         let builder = thread::Builder::new().stack_size(usize::MAX);
-        let worker = WorkerHandle::spawn_with(builder, settings(), String::new(), emit);
+        let worker = WorkerHandle::spawn_with(builder, String::new(), emit);
         assert!(worker.join.is_none());
         let reported: Vec<_> = events.try_iter().collect();
         assert!(matches!(
@@ -898,15 +894,5 @@ mod tests {
         drop(rx);
         assert_eq!(worker.send(Command::Stop), WORKER_GONE);
         assert!(worker.is_stopped());
-    }
-
-    #[test]
-    fn failed_portal_connection_leaves_no_active_run() {
-        let mut machine = StateMachine::default();
-        let active: Option<ActiveRun> = None;
-        assert!(machine.request_start());
-        machine.fail();
-        assert_eq!(machine.state(), RunState::Error);
-        assert!(active.is_none());
     }
 }

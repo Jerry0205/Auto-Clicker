@@ -347,20 +347,10 @@ impl qobject::AppController {
         if let Some(error) = self.as_mut().rust_mut().get_mut().startup_error.take() {
             self.as_mut().set_error_message(QString::from(&error));
         }
-        // The worker must remain available even when restored fixed coordinates
-        // need confirmation. Every actual start still validates the current UI.
-        let settings = ClickSettings {
-            interval_ms: 100,
-            button: MouseButton::Left,
-            click_type: ClickType::Single,
-            repeat: None,
-            position: None,
-            monitor: None,
-        };
         let preferred_hotkey = self.hotkey().to_string();
         let worker_epoch = self.as_mut().rust_mut().get_mut().next_worker_epoch();
         let qt_thread = self.qt_thread();
-        let worker = WorkerHandle::spawn(settings, preferred_hotkey, move |event| {
+        let worker = WorkerHandle::spawn(preferred_hotkey, move |event| {
             let _ = qt_thread.queue(move |mut controller| {
                 controller.as_mut().handle_worker_event(worker_epoch, event);
             });

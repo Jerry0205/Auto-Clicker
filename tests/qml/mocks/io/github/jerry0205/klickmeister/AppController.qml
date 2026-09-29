@@ -10,6 +10,7 @@ QtObject {
     property bool hotkey_configuring: false
     property bool running: false
     property bool busy: false
+    property int toggle_count: 0
     property double interval_ms: 100
     property int mouse_button: 0
     property int click_type: 0
@@ -71,7 +72,7 @@ QtObject {
     }
     function start() {}
     function stop() { running = false; busy = false }
-    function toggle() {}
+    function toggle() { toggle_count += 1 }
     function configure_hotkey() {}
     function clear_error() { error_message = "" }
 }

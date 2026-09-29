@@ -7,7 +7,6 @@ fn main() {
             .qml_file("qml/PositionPicker.qml")
             .qml_file("qml/MonitorSelection.qml"),
     )
-    .qt_module("Network")
     .files(["src/controller.rs", "src/qml_runtime.rs"])
     .cpp_file("src/qml_runtime.cpp")
     .build();
