@@ -33,6 +33,7 @@ QtObject {
     function shutdown() {}
     function start() {}
     function start_from_button() { button_starts += 1 }
+    // Mirrors the worker's later State(Stopped), which also ends a countdown.
     function stop() { stops += 1; running = false; busy = false; countdown_remaining = 0 }
     function toggle() {}
     function configure_hotkey() {}

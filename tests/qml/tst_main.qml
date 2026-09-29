@@ -228,15 +228,33 @@ TestCase {
         verify(button !== null)
         controller.hotkey_ready = true
         controller.hotkey_pending = false
+        compare(button.text, "▶  Starten")
         button.clicked()
         compare(controller.button_starts, 1)
 
+        // Waiting for the Wayland permission: pending, but no countdown yet.
         controller.busy = true
+        compare(button.text, "■  Stoppen")
+
+        // The countdown stays cancellable even if the hotkey becomes unavailable.
         controller.countdown_remaining = 3
-        verify(button.text.includes("Start abbrechen (3)"))
+        compare(button.text, "■  Start abbrechen (3)")
+        controller.countdown_remaining = 1
+        compare(button.text, "■  Start abbrechen (1)")
+        controller.hotkey_ready = false
+        compare(button.enabled, true)
         button.clicked()
         compare(controller.stops, 1)
         compare(controller.countdown_remaining, 0)
+        compare(controller.button_starts, 1)
+        controller.hotkey_ready = true
+        compare(button.text, "▶  Starten")
+
+        // A running click loop is stopped, never restarted with a countdown.
+        controller.running = true
+        compare(button.text, "■  Stoppen")
+        button.clicked()
+        compare(controller.stops, 2)
         compare(controller.button_starts, 1)
     }
 }

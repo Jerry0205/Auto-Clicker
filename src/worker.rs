@@ -37,7 +37,7 @@ use crate::{
 const COMMAND_CAPACITY: usize = 16;
 const PORTAL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const HOTKEY_ID: &str = "toggle-clicking";
-const BUTTON_START_DELAY: Duration = Duration::from_secs(3);
+const BUTTON_START_DELAY_SECS: u8 = 3;
 
 #[derive(Debug)]
 pub enum Command {
@@ -51,8 +51,9 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub enum WorkerEvent {
     Status(String),
+    State(RunState),
+    /// Seconds left before a button-started run clicks; the state stays `Starting`.
     Countdown(u8),
-    Running(bool),
     Hotkey(String),
     HotkeyPhase(HotkeyPhase),
     StartRequested,
@@ -119,6 +120,11 @@ impl WorkerHandle {
             TrySendError::Full(_) => "Der interne Befehlskanal ist ausgelastet.",
             TrySendError::Closed(_) => "Der Hintergrund-Worker läuft nicht mehr.",
         })
+    }
+
+    /// Whether the worker loop has ended and can no longer report state changes.
+    pub fn is_stopped(&self) -> bool {
+        self.tx.is_closed()
     }
 
     pub fn shutdown(mut self) {
@@ -325,20 +331,20 @@ async fn wait_click_session_closed(session: &mut Option<PortalClickSession>) {
     }
 }
 
+/// Report whether an active or pending run ended with the closed session.
 async fn discard_closed_click_session(
     session: &mut Option<PortalClickSession>,
     machine: &mut StateMachine,
     active: &mut Option<ActiveRun>,
     countdown: &mut Option<PendingCountdown>,
     emit: &Emitter,
-) {
-    let was_running = matches!(machine.state(), RunState::Starting | RunState::Clicking);
-    stop_run(machine, active, countdown, emit);
+) -> bool {
+    let was_running = stop_run(machine, active, countdown, emit);
     if let Some(session) = session.take() {
         session.close().await;
     }
     if was_running {
-        machine.fail();
+        fail_run(machine, emit);
         (emit)(WorkerEvent::Error(
             "Die Wayland-Berechtigung wurde beendet.".to_owned(),
         ));
@@ -347,6 +353,7 @@ async fn discard_closed_click_session(
             "Wayland-Berechtigung beendet – wird beim nächsten Start neu angefragt".to_owned(),
         ));
     }
+    was_running
 }
 
 async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task::JoinError> {
@@ -393,6 +400,7 @@ async fn run_worker(
     let mut hotkey: Option<HotkeyState> = None;
     let mut hotkey_bound = false;
 
+    (emit)(WorkerEvent::State(machine.state()));
     (emit)(WorkerEvent::Status(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
     ));
@@ -416,20 +424,20 @@ async fn run_worker(
                             (emit)(WorkerEvent::Error("Vor dem Start muss der globale Stop-Hotkey von KWin bestätigt sein.".to_owned()));
                             continue;
                         }
-                        if click_session.as_mut().is_some_and(PortalClickSession::is_closed) {
-                            let was_running = matches!(machine.state(), RunState::Starting | RunState::Clicking);
-                            discard_closed_click_session(&mut click_session, &mut machine, &mut active, &mut countdown, &emit).await;
-                            if was_running {
-                                continue;
-                            }
+                        if click_session.as_mut().is_some_and(PortalClickSession::is_closed)
+                            && discard_closed_click_session(&mut click_session, &mut machine, &mut active, &mut countdown, &emit).await
+                        {
+                            continue;
                         }
                         match request_validated_start(&mut machine, &settings) {
                             Ok(true) => {
                                 latest_settings = settings.clone();
                                 delayed_start = delay;
+                                (emit)(WorkerEvent::State(machine.state()));
                             }
                             Ok(false) => continue,
                             Err(error) => {
+                                (emit)(WorkerEvent::State(machine.state()));
                                 (emit)(WorkerEvent::Error(error.to_string()));
                                 continue;
                             }
@@ -486,8 +494,7 @@ async fn run_worker(
                     Ok(Ok(mut session)) => {
                         if session.is_closed() {
                             session.close().await;
-                            machine.fail();
-                            (emit)(WorkerEvent::Running(false));
+                            fail_run(&mut machine, &emit);
                             (emit)(WorkerEvent::Error("Die Wayland-Berechtigung wurde beendet.".to_owned()));
                         } else {
                             click_session = Some(session);
@@ -495,15 +502,14 @@ async fn run_worker(
                         }
                     }
                     Ok(Err(error)) => {
-                        machine.fail();
-                        (emit)(WorkerEvent::Running(false));
+                        fail_run(&mut machine, &emit);
                         (emit)(WorkerEvent::Error(error));
                     }
                     Err(error) if error.is_cancelled() => {
                         stop_run(&mut machine, &mut active, &mut countdown, &emit);
                     }
                     Err(error) => {
-                        machine.fail();
+                        fail_run(&mut machine, &emit);
                         (emit)(WorkerEvent::Error(format!("Portal-Aufgabe ist fehlgeschlagen: {error}")));
                     }
                 }
@@ -596,13 +602,13 @@ async fn run_worker(
                     }
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
-                        stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                        machine.fail();
+                        cancel_start(&mut start_task, &mut start_cancel).await;
+                        abort_run(&mut machine, &mut active, &mut countdown, &emit);
                         (emit)(WorkerEvent::Error(error));
                     }
                     Err(error) if !error.is_cancelled() => {
-                        stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                        machine.fail();
+                        cancel_start(&mut start_task, &mut start_cancel).await;
+                        abort_run(&mut machine, &mut active, &mut countdown, &emit);
                         (emit)(WorkerEvent::Error(format!("Hotkey-Dialog ist fehlgeschlagen: {error}")));
                     }
                     Err(_) => {}
@@ -631,8 +637,7 @@ async fn run_worker(
                             }
                         } else {
                             cancel_start(&mut start_task, &mut start_cancel).await;
-                            stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                            machine.fail();
+                            abort_run(&mut machine, &mut active, &mut countdown, &emit);
                             hotkey_bound = false;
                             (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(false) } else { HotkeyPhase::Unavailable }));
                             (emit)(WorkerEvent::Error("Der globale Stop-Hotkey wurde entfernt.".to_owned()));
@@ -641,8 +646,7 @@ async fn run_worker(
                     Some(HotkeySignal::Activated(_)) => {}
                     Some(HotkeySignal::Closed) | None => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
-                        stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                        machine.fail();
+                        abort_run(&mut machine, &mut active, &mut countdown, &emit);
                         if let Some(task) = configure_task.take() { task.abort(); }
                         hotkey_bound = false;
                         (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
@@ -669,7 +673,7 @@ async fn run_worker(
             () = wait_for_tick(tick_deadline), if active.is_some() => {
                 let Some(run) = active.as_mut() else { continue; };
                 let Some(session) = click_session.as_ref() else {
-                    machine.fail();
+                    fail_run(&mut machine, &emit);
                     active = None;
                     (emit)(WorkerEvent::Error("Die Wayland-Sitzung wurde unerwartet beendet.".to_owned()));
                     continue;
@@ -679,9 +683,8 @@ async fn run_worker(
                     continue;
                 }
                 if let Err(error) = session.click(&run.settings).await {
-                    machine.fail();
+                    fail_run(&mut machine, &emit);
                     active = None;
-                    (emit)(WorkerEvent::Running(false));
                     (emit)(WorkerEvent::Error(error.to_string()));
                     // A revoked or failed session cannot safely be reused on retry.
                     if let Some(failed_session) = click_session.take() {
@@ -701,6 +704,7 @@ async fn run_worker(
     }
 
     machine.close();
+    (emit)(WorkerEvent::State(machine.state()));
     closing.store(true, Ordering::Release);
     cancel_start(&mut start_task, &mut start_cancel).await;
     cancel_hotkey(&mut hotkey_task, &mut hotkey_cancel).await;
@@ -714,7 +718,11 @@ async fn run_worker(
         let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
         let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
     }
-    (emit)(WorkerEvent::Running(false));
+}
+
+fn fail_run(machine: &mut StateMachine, emit: &Emitter) {
+    machine.fail();
+    (emit)(WorkerEvent::State(machine.state()));
 }
 
 /// Ignore duplicate starts before they can change a run or its pending settings.
@@ -747,10 +755,11 @@ fn start_run(
         schedule,
         next_tick: Instant::now(),
     });
-    (emit)(WorkerEvent::Running(true));
+    (emit)(WorkerEvent::State(machine.state()));
     (emit)(WorkerEvent::Status("Klickt".to_owned()));
 }
 
+/// Start clicking now, or first give the user a cancellable countdown.
 fn begin_run(
     machine: &mut StateMachine,
     active: &mut Option<ActiveRun>,
@@ -762,26 +771,41 @@ fn begin_run(
     if delay {
         *countdown = Some(PendingCountdown {
             settings,
-            remaining: BUTTON_START_DELAY.as_secs() as u8,
+            remaining: BUTTON_START_DELAY_SECS,
             next_tick: Instant::now() + Duration::from_secs(1),
         });
-        (emit)(WorkerEvent::Countdown(BUTTON_START_DELAY.as_secs() as u8));
+        (emit)(WorkerEvent::Countdown(BUTTON_START_DELAY_SECS));
     } else {
         start_run(machine, active, settings, emit);
     }
 }
 
+/// Report whether an active or pending run, including its countdown, was stopped.
 fn stop_run(
     machine: &mut StateMachine,
     active: &mut Option<ActiveRun>,
     countdown: &mut Option<PendingCountdown>,
     emit: &Emitter,
+) -> bool {
+    if !machine.stop() {
+        return false;
+    }
+    *active = None;
+    *countdown = None;
+    (emit)(WorkerEvent::State(machine.state()));
+    (emit)(WorkerEvent::Status("Gestoppt".to_owned()));
+    true
+}
+
+/// Fail only an active or pending run; hotkey problems use `HotkeyPhase` instead.
+fn abort_run(
+    machine: &mut StateMachine,
+    active: &mut Option<ActiveRun>,
+    countdown: &mut Option<PendingCountdown>,
+    emit: &Emitter,
 ) {
-    if machine.stop() {
-        *active = None;
-        *countdown = None;
-        (emit)(WorkerEvent::Running(false));
-        (emit)(WorkerEvent::Status("Gestoppt".to_owned()));
+    if stop_run(machine, active, countdown, emit) {
+        fail_run(machine, emit);
     }
 }
 
@@ -932,8 +956,10 @@ mod tests {
             worker.send(Command::Stop),
             Err("Der interne Befehlskanal ist ausgelastet.")
         );
+        assert!(!worker.is_stopped());
         drop(rx);
         assert_eq!(worker.send(Command::Stop), WORKER_GONE);
+        assert!(worker.is_stopped());
     }
 
     #[test]

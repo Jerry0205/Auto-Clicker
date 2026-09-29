@@ -57,7 +57,7 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 4. Starte den Klicker mit dem Hotkey.
 5. Drücke den Hotkey erneut, um ihn zu stoppen.
 
-Wenn du mit der Schaltfläche **Starten** an der aktuellen Cursorposition beginnst, startet nach der Wayland-Freigabe ein sichtbarer Countdown von drei Sekunden. Bewege den Mauszeiger in dieser Zeit zum Ziel. **Start abbrechen** oder der globale Hotkey beendet den Countdown ohne Klick. Beim Start per Hotkey und bei einer festen Position beginnt der Klicker nach der Freigabe sofort.
+Wenn du mit der Schaltfläche **Starten** an der aktuellen Cursorposition beginnst, startet nach der Wayland-Freigabe ein sichtbarer Countdown von drei Sekunden. Bewege den Mauszeiger in dieser Zeit zum Ziel. **Start abbrechen** oder der globale Hotkey beendet den Countdown ohne Klick. Beim Start per Hotkey und bei einer festen Position beginnt der Klicker nach der Freigabe sofort: Beim Hotkey steht der Zeiger bereits am gewünschten Ort, bei einer festen Position setzt der Klicker ihn selbst auf das Ziel.
 
 Wenn du eine feste Position verwenden möchtest, wählst du zuerst den Bildschirm aus und klickst danach im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. „Position anzeigen“ markiert das gespeicherte Ziel kurz, ohne zu klicken.
 
@@ -117,7 +117,7 @@ Beim Start setzt die App den Qt-Desktop-Dateinamen auf `io.github.jerry0205.klic
 
 GitHub Actions führt bei Pull Requests und Änderungen an `main` Formatierung, Clippy, Rust-Tests, die ignorierten Portaltests auf einem privaten D-Bus, QML-Tests im KDE-Stil, Python-Wächtertests und die Desktop-/AppStream-Validierung aus. Anschließend wird das Release-Programm gebaut und mit `tests/qml-smoke.sh` geprüft. Ein eigener Job führt die QML-Tests unter einem isolierten virtuellen KWin mit drei Monitoren aus. Beide Jobs verwenden ein Arch-Linux-Containerimage und die Cargo-Lockdatei; native Tests mit echten KDE-Dialogen bleiben eine manuelle Prüfung.
 
-Für die manuelle Prüfung des Start-Countdowns: Wähle „Aktuelle Cursorposition“, starte über die Schaltfläche und bewege den Zeiger auf ein unkritisches eigenes Testziel. Prüfe, dass vor Ablauf der drei Sekunden kein Klick erfolgt und sowohl **Start abbrechen** als auch der globale Hotkey den Countdown ohne Klick beenden. Wiederhole den Start bei bereits erteilter Wayland-Freigabe.
+Für die manuelle Prüfung des Start-Countdowns: Wähle „Aktuelle Cursorposition“, starte über die Schaltfläche und bewege den Zeiger auf ein unkritisches eigenes Testziel. Prüfe, dass vor Ablauf der drei Sekunden kein Klick erfolgt und sowohl **Start abbrechen** als auch der globale Hotkey den Countdown ohne Klick beenden. Wiederhole den Start bei bereits erteilter Wayland-Freigabe. Ein Start per Hotkey und ein Start mit fester Position beginnen dagegen ohne Countdown.
 
 Die abgesicherten nativen Testwerkzeuge und ihre Voraussetzungen sind unter [tests/native](tests/native/README.md) dokumentiert.
 
