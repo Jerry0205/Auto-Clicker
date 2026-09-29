@@ -24,10 +24,14 @@ def walk(node, depth=0):
         pass
 
 
-def nodes(app="klickmeister"):
+def pump():
     context = GLib.MainContext.default()
     while context.pending():
         context.iteration(False)
+
+
+def nodes(app="klickmeister"):
+    pump()
     for root in apps():
         if app.lower() in (root.get_name() or "").lower():
             yield from walk(root)

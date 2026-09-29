@@ -5,19 +5,11 @@ import time
 from pathlib import Path
 
 import tomllib
-from access import Atspi, action, find, nodes, walk
+from access import Atspi, action, find, nodes, pump, walk
 from control import BASE, events, mark, rpc, wait_for
-from gi.repository import GLib
-
-
-def pump():
-    context = GLib.MainContext.default()
-    while context.pending():
-        context.iteration(False)
 
 
 def status():
-    pump()
     return next(
         (n.get_name() for n, d in nodes() if n.get_name().startswith("Status:")), ""
     )
@@ -46,23 +38,6 @@ def focus_target():
 
 def key(k):
     rpc("driver", cmd="key", keysym=k)
-
-
-def type_value(name, value):
-    focus_app()
-    n = find(name, role="text")
-    assert Atspi.Component.grab_focus(n)
-    time.sleep(0.1)
-    rpc("driver", cmd="key_state", keysym=0xFFE3, state=1)
-    try:
-        key(ord("a"))
-    finally:
-        rpc("driver", cmd="key_state", keysym=0xFFE3, state=0)
-    for ch in str(value):
-        key(ord(ch))
-    pump()
-    actual = Atspi.Text.get_text(n, 0, -1)
-    assert actual.replace(".", "").replace(",", "") == str(value), (name, actual, value)
 
 
 def combo(name, index):
@@ -103,7 +78,6 @@ def run_counted(
     count=3,
     interval=100,
     hotkey=True,
-    allow_permission=False,
 ):
     assert any("X: 80 · Y: 400" in n.get_name() for n, d in nodes()), (
         "Restore the test coordinates before starting"
@@ -114,14 +88,6 @@ def run_counted(
         key(0xFF13)
     else:
         action("▶  Starten", role="button")
-    if allow_permission:
-        wait_for(
-            lambda: any(
-                n.get_name() == "Akzeptieren"
-                for n, d in nodes("xdg-desktop-portal-kde")
-            )
-        )
-        action("Akzeptieren", app="xdg-desktop-portal-kde", role="button")
     expected = 2 * count * (2 if double else 1)
     wait_for(
         lambda: len(mouse_events()) >= before + expected,

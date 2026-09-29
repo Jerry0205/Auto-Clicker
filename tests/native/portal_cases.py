@@ -139,7 +139,7 @@ def main():
     mark("stop_after_position_selection", passed=True, quiet_ms=300)
 
     # Saved helpers exercise real visible menu choices and verify their values.
-    action("Anzahl", role="radio button")
+    action("Klickzyklen", role="radio button")
     for index, button in enumerate([1, 2, 4]):
         combo("Maustaste", index)
         for click_type in [0, 1]:

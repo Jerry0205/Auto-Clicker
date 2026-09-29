@@ -115,16 +115,12 @@ Window {
         focusSelection()
     }
     onScreenChanged: updateInputReady()
+    onHeightChanged: updateInputReady()
+    onVisibilityChanged: updateInputReady()
+    onWidthChanged: updateInputReady()
     onClosing: function(close) { close.accepted = false; finish() }
 
     Timer { id: previewTimer; interval: 1800; onTriggered: picker.finish() }
-
-    Connections {
-        target: picker
-        function onHeightChanged() { picker.updateInputReady() }
-        function onVisibilityChanged() { picker.updateInputReady() }
-        function onWidthChanged() { picker.updateInputReady() }
-    }
 
     Rectangle { anchors.fill: parent; color: picker.previewOnly ? "transparent" : "#18151a20" }
 

@@ -12,6 +12,7 @@ Kirigami.ApplicationWindow {
     property var selectedMonitor: null
     property var positionPicker: null
     property bool monitorRestored: false
+    readonly property bool controlsEnabled: !controller.running && !controller.busy
     readonly property var monitorOptions: {
         const screens = Qt.application.screens
         const options = []
@@ -193,17 +194,22 @@ Kirigami.ApplicationWindow {
         ensureMonitorSelection()
         syncMonitor()
     }
+    function handleMonitorGeometryChanged(invalidatePosition) {
+        if (invalidatePosition) controller.fixed_position_confirmed = false
+        finishPicker()
+        syncMonitor()
+    }
     Connections {
         target: Qt.application
         function onScreensChanged() { root.handleScreensChanged() }
     }
     Connections {
         target: root.selectedMonitor
-        function onWidthChanged() { controller.fixed_position_confirmed = false; root.finishPicker(); root.syncMonitor() }
-        function onHeightChanged() { controller.fixed_position_confirmed = false; root.finishPicker(); root.syncMonitor() }
-        function onDevicePixelRatioChanged() { controller.fixed_position_confirmed = false; root.finishPicker(); root.syncMonitor() }
-        function onVirtualXChanged() { root.finishPicker(); root.syncMonitor() }
-        function onVirtualYChanged() { root.finishPicker(); root.syncMonitor() }
+        function onWidthChanged() { root.handleMonitorGeometryChanged(true) }
+        function onHeightChanged() { root.handleMonitorGeometryChanged(true) }
+        function onDevicePixelRatioChanged() { root.handleMonitorGeometryChanged(true) }
+        function onVirtualXChanged() { root.handleMonitorGeometryChanged(false) }
+        function onVirtualYChanged() { root.handleMonitorGeometryChanged(false) }
     }
     onClosing: function(close) {
         root.finishPicker(false)
@@ -252,6 +258,7 @@ Kirigami.ApplicationWindow {
             Controls.GroupBox {
                 Layout.fillWidth: true
                 title: qsTr("Intervall")
+                enabled: root.controlsEnabled
 
                 RowLayout {
                     anchors.fill: parent
@@ -264,7 +271,6 @@ Kirigami.ApplicationWindow {
                         stepSize: 10
                         editable: true
                         value: controller.interval_ms
-                        enabled: !controller.running && !controller.busy
                         onValueModified: controller.interval_ms = value
                         textFromValue: function(value) { return value.toLocaleString(Qt.locale(), 'f', 0) }
                         valueFromText: function(text) {
@@ -288,6 +294,7 @@ Kirigami.ApplicationWindow {
             Controls.GroupBox {
                 Layout.fillWidth: true
                 title: qsTr("Klick")
+                enabled: root.controlsEnabled
 
                 RowLayout {
                     anchors.fill: parent
@@ -295,7 +302,6 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                         model: [qsTr("Links"), qsTr("Rechts"), qsTr("Mitte")]
                         currentIndex: controller.mouse_button
-                        enabled: !controller.running && !controller.busy
                         onActivated: controller.mouse_button = currentIndex
                         Accessible.name: qsTr("Maustaste")
                     }
@@ -303,7 +309,6 @@ Kirigami.ApplicationWindow {
                         Layout.fillWidth: true
                         model: [qsTr("Einfach"), qsTr("Doppelt")]
                         currentIndex: controller.click_type
-                        enabled: !controller.running && !controller.busy
                         onActivated: controller.click_type = currentIndex
                         Accessible.name: qsTr("Klicktyp")
                     }
@@ -313,13 +318,13 @@ Kirigami.ApplicationWindow {
             Controls.GroupBox {
                 Layout.fillWidth: true
                 title: qsTr("Wiederholen")
+                enabled: root.controlsEnabled
 
                 ColumnLayout {
                     anchors.fill: parent
                     Controls.RadioButton {
                         text: qsTr("Bis zum Stoppen")
                         checked: controller.repeat_until_stopped
-                        enabled: !controller.running && !controller.busy
                         onToggled: if (checked) controller.repeat_until_stopped = true
                     }
                     RowLayout {
@@ -327,7 +332,6 @@ Kirigami.ApplicationWindow {
                             objectName: "repeatCountLabel"
                             text: qsTr("Klickzyklen")
                             checked: !controller.repeat_until_stopped
-                            enabled: !controller.running && !controller.busy
                             onToggled: if (checked) controller.repeat_until_stopped = false
                         }
                         Controls.SpinBox {
@@ -337,7 +341,7 @@ Kirigami.ApplicationWindow {
                             to: 10000000
                             editable: true
                             value: controller.repeat_count
-                            enabled: !controller.repeat_until_stopped && !controller.running && !controller.busy
+                            enabled: !controller.repeat_until_stopped
                             onValueModified: controller.repeat_count = value
                             Accessible.name: qsTr("Anzahl der Klickzyklen")
                         }
@@ -348,23 +352,22 @@ Kirigami.ApplicationWindow {
             Controls.GroupBox {
                 Layout.fillWidth: true
                 title: qsTr("Position")
+                enabled: root.controlsEnabled
 
                 ColumnLayout {
                     anchors.fill: parent
                     Controls.RadioButton {
                         text: qsTr("Aktuelle Cursorposition")
                         checked: controller.current_position
-                        enabled: !controller.running && !controller.busy
                         onToggled: if (checked) controller.current_position = true
                     }
                     Controls.RadioButton {
                         text: qsTr("Feste Position")
                         checked: !controller.current_position
-                        enabled: !controller.running && !controller.busy
                         onToggled: if (checked) controller.current_position = false
                     }
                     RowLayout {
-                        enabled: !controller.current_position && !controller.running && !controller.busy
+                        enabled: !controller.current_position
                         Controls.Label { text: qsTr("X") }
                         Controls.SpinBox {
                             id: xInput
@@ -391,7 +394,7 @@ Kirigami.ApplicationWindow {
                         }
                     }
                     RowLayout {
-                        enabled: !controller.current_position && !controller.running && !controller.busy
+                        enabled: !controller.current_position
                         Controls.Label { text: qsTr("Monitor") }
                         Controls.ComboBox {
                             id: monitorInput
@@ -410,7 +413,7 @@ Kirigami.ApplicationWindow {
                     }
                     Controls.Button {
                         Layout.fillWidth: true
-                        enabled: !controller.current_position && !controller.running && !controller.busy
+                        enabled: !controller.current_position
                         text: qsTr("Position wählen / Neu wählen …")
                         icon.name: "crosshairs"
                         onClicked: root.beginPicker(false)
@@ -423,7 +426,7 @@ Kirigami.ApplicationWindow {
                     }
                     Controls.Button {
                         visible: !controller.current_position && !controller.fixed_position_confirmed
-                        enabled: !!root.selectedMonitor && !controller.running && !controller.busy
+                        enabled: !!root.selectedMonitor
                         text: qsTr("Monitor und Koordinaten bestätigen")
                         onClicked: root.confirmMonitor()
                     }
@@ -437,7 +440,7 @@ Kirigami.ApplicationWindow {
                     }
                     Controls.Button {
                         visible: !controller.current_position
-                        enabled: !!root.selectedMonitor && controller.fixed_position_confirmed && !controller.running && !controller.busy
+                        enabled: !!root.selectedMonitor && controller.fixed_position_confirmed
                         text: qsTr("Position anzeigen")
                         icon.name: "view-preview"
                         onClicked: root.beginPicker(true)
@@ -447,7 +450,7 @@ Kirigami.ApplicationWindow {
                         visible: !controller.current_position
                         wrapMode: Text.WordWrap
                         color: Kirigami.Theme.disabledTextColor
-                        text: qsTr("Koordinaten gelten innerhalb dieses monitors. Wähle beim Start im KWin-Dialog denselben Monitor; die Freigabe wird vor dem Klicken geprüft.")
+                        text: qsTr("Koordinaten gelten innerhalb dieses Monitors. Wähle beim Start im KWin-Dialog denselben Monitor; die Freigabe wird vor dem Klicken geprüft.")
                     }
                 }
             }
@@ -472,7 +475,7 @@ Kirigami.ApplicationWindow {
                     Controls.Button {
                         objectName: "hotkeyConfigureButton"
                         text: controller.hotkey_ready ? qsTr("Ändern …") : qsTr("Erneut versuchen")
-                        enabled: !controller.busy && !controller.running && !controller.hotkey_pending
+                        enabled: root.controlsEnabled && !controller.hotkey_pending
                         onClicked: controller.configure_hotkey()
                     }
                 }
