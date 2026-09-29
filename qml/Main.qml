@@ -214,19 +214,24 @@ Kirigami.ApplicationWindow {
     footer: Controls.Pane {
         objectName: "runFooter"
         padding: Kirigami.Units.smallSpacing
+        background: Rectangle {
+            color: Kirigami.Theme.backgroundColor
+            Kirigami.Separator { width: parent.width }
+        }
 
         contentItem: ColumnLayout {
             spacing: Kirigami.Units.smallSpacing
 
             Controls.Button {
+                readonly property bool stopMode: controller.running || controller.busy
+
                 objectName: "startStopButton"
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
                 highlighted: true
-                activeFocusOnTab: true
-                text: controller.running || controller.busy ? qsTr("■  Stoppen") : qsTr("▶  Starten")
-                enabled: controller.running || controller.busy || (controller.hotkey_ready && !controller.hotkey_pending)
-                Accessible.name: controller.running || controller.busy ? qsTr("Stoppen") : qsTr("Starten")
+                text: stopMode ? qsTr("■  Stoppen") : qsTr("▶  Starten")
+                enabled: stopMode || (controller.hotkey_ready && !controller.hotkey_pending)
+                Accessible.name: stopMode ? qsTr("Stoppen") : qsTr("Starten")
                 onClicked: controller.toggle()
             }
 

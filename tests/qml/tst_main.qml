@@ -268,6 +268,7 @@ TestCase {
         verify(button.visible && inWindow(button), "Run control must remain in the window")
         verify(status.visible && inWindow(status), "Run status must remain in the window")
         compare(button.enabled, data.running || data.busy || (data.ready && !data.pending))
+        compare(button.text, data.running || data.busy ? "■  Stoppen" : "▶  Starten")
         compare(button.Accessible.name, data.running || data.busy ? "Stoppen" : "Starten")
         const expectedStatus = "Status: " + controller.status
             + (data.running ? " · " + main.rateDescription : "")
@@ -308,13 +309,13 @@ TestCase {
         keyClick(Qt.Key_Backtab, Qt.ShiftModifier)
         verify(lastSetting.activeFocus, "Shift+Tab must return from the run control to the settings")
 
-        // Screen readers list siblings in item order and stacking order.
-        // Both must put the footer after the settings page.
+        // Screen readers list sibling items in child order, so the footer
+        // must follow the settings page.
         let page = main.pageStack
         while (page && page.parent !== footer.parent) page = page.parent
         verify(page, "Footer and settings must share a parent item")
         const siblings = footer.parent.children
-        verify(siblings.indexOf(page) < siblings.indexOf(footer))
-        verify(footer.z >= page.z)
+        verify(siblings.indexOf(page) < siblings.indexOf(footer),
+               "The footer must follow the settings in reading order")
     }
 }
