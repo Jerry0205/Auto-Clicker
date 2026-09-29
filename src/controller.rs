@@ -435,6 +435,7 @@ impl qobject::AppController {
         if let Some(worker) = worker {
             worker.shutdown();
         }
+        // The new epoch drops the old worker's final State(Closing) as well.
         self.as_mut().set_running(false);
         self.as_mut().set_busy(false);
         self.as_mut().set_hotkey_ready(false);
@@ -660,6 +661,42 @@ mod tests {
             std::fs::read_to_string(&path).ok().as_deref(),
             Some(malformed)
         );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn failed_write_keeps_previous_file_and_unsaved_draft() {
+        let directory = test_directory();
+        let path = directory.join("config.toml");
+        let initial = AppConfig::default();
+        assert!(config::save_to(&path, &initial).is_ok());
+        let previous = std::fs::read_to_string(&path).ok();
+        let mut controller = AppControllerRust::from_config(initial, None);
+        controller.interval_ms = 250;
+        controller.config_dirty = true;
+        // Occupy the temporary file that config::save_to renames over the
+        // config, so the write fails before the old file could be replaced.
+        let blocker = directory.join(format!(".config.toml.tmp-{}", std::process::id()));
+        assert!(std::fs::create_dir(&blocker).is_ok());
+        let error = controller
+            .persist_config_to(&path, false)
+            .err()
+            .unwrap_or_default();
+        assert!(
+            error.starts_with("Konfiguration konnte nicht gespeichert werden"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).ok(), previous);
+        assert!(controller.config_dirty);
+
+        // Closing again after the cause is fixed saves the same draft.
+        assert!(std::fs::remove_dir(&blocker).is_ok());
+        assert!(controller.persist_config_to(&path, false).is_ok());
+        assert_eq!(
+            config::load_from(&path).ok().map(|c| c.interval_ms),
+            Some(250)
+        );
+        assert!(!controller.config_dirty);
         let _ = std::fs::remove_dir_all(directory);
     }
 

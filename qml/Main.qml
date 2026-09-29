@@ -368,6 +368,7 @@ Kirigami.ApplicationWindow {
                 RowLayout {
                     anchors.fill: parent
                     Controls.ComboBox {
+                        objectName: "mouseButtonInput"
                         Layout.fillWidth: true
                         model: [qsTr("Links"), qsTr("Rechts"), qsTr("Mitte")]
                         currentIndex: controller.mouse_button
@@ -376,6 +377,7 @@ Kirigami.ApplicationWindow {
                         Accessible.name: qsTr("Maustaste")
                     }
                     Controls.ComboBox {
+                        objectName: "clickTypeInput"
                         Layout.fillWidth: true
                         model: [qsTr("Einfach"), qsTr("Doppelt")]
                         currentIndex: controller.click_type
@@ -437,6 +439,7 @@ Kirigami.ApplicationWindow {
                         onClicked: controller.mark_settings_changed()
                     }
                     Controls.RadioButton {
+                        objectName: "fixedPositionInput"
                         text: qsTr("Feste Position")
                         checked: !controller.current_position
                         enabled: !controller.running && !controller.busy

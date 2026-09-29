@@ -285,6 +285,29 @@ TestCase {
         compare(controller.shutdownCount, 1)
     }
 
+    function test_edits_are_saved_on_close_without_click_start_data() {
+        return [
+            { tag: "mouse button", input: "mouseButtonInput", key: Qt.Key_Down, property: "mouse_button", value: 1 },
+            { tag: "click type", input: "clickTypeInput", key: Qt.Key_Down, property: "click_type", value: 1 },
+            { tag: "repeat mode", input: "repeatCountLabel", key: Qt.Key_Space, property: "repeat_until_stopped", value: false },
+            { tag: "position mode", input: "fixedPositionInput", key: Qt.Key_Space, property: "current_position", value: false }
+        ]
+    }
+    function test_edits_are_saved_on_close_without_click_start(data) {
+        compare(controller.configDirty, false)
+        const input = findChild(main, data.input)
+        verify(input !== null)
+        input.forceActiveFocus()
+        keyClick(data.key)
+        compare(controller[data.property], data.value)
+        compare(controller.configDirty, true)
+        main.close()
+        compare(controller.saveCount, 1)
+        compare(controller.configDirty, false)
+        compare(controller.running, false)
+        compare(controller.busy, false)
+    }
+
     function test_save_error_restores_minimized_window() {
         controller.mark_settings_changed()
         controller.saveConfigSucceeds = false
