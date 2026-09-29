@@ -57,10 +57,10 @@ TestCase {
 
     function test_typed_values_reach_hotkey_without_focus_loss_data() {
         return [
-            { tag: "interval", input: "intervalInput", property: "interval_ms", value: 250 },
-            { tag: "repeat", input: "repeatInput", property: "repeat_count", value: 42 },
-            { tag: "x", input: "xInput", property: "fixed_x", value: 123 },
-            { tag: "y", input: "yInput", property: "fixed_y", value: 234 }
+            { tag: "interval", input: "intervalInput", property: "interval_ms", value: 250, position: false },
+            { tag: "repeat", input: "repeatInput", property: "repeat_count", value: 42, position: false },
+            { tag: "x", input: "xInput", property: "fixed_x", value: 123, position: true },
+            { tag: "y", input: "yInput", property: "fixed_y", value: 234, position: true }
         ]
     }
     function test_typed_values_reach_hotkey_without_focus_loss(data) {
@@ -75,6 +75,157 @@ TestCase {
         compare(input.contentItem.text, String(data.value))
         compare(input.value, data.value)
         compare(controller[data.property], data.value)
+        compare(controller.configDirty, true)
+        compare(controller.positionDirty, data.position)
+    }
+
+    function test_monitor_initialization_does_not_replace_saved_position() {
+        // Restoring the monitor at startup clamps and rewrites the displayed
+        // position, but only user actions may replace the saved one.
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.configDirty, false)
+        compare(controller.positionDirty, false)
+    }
+
+    function test_confirming_monitor_replaces_saved_position() {
+        controller.current_position = false
+        const confirm = findChild(main, "confirmMonitorButton")
+        verify(confirm !== null)
+        tryCompare(confirm, "visible", true)
+        compare(confirm.enabled, true)
+        // The button can lie below the scrollable page's visible area.
+        confirm.clicked()
+        compare(controller.fixed_position_confirmed, true)
+        compare(controller.positionDirty, true)
+    }
+
+    function test_reselecting_saved_monitor_restores_saved_position() {
+        controller.current_position = false
+        // Simulate coordinates clamped to a substitute for the saved monitor.
+        controller.savedMonitorIdentity = controller.monitor_identity
+        controller.savedFixedX = 300
+        controller.savedFixedY = 200
+        controller.fixed_x = 10
+        controller.fixed_y = 20
+        const monitorInput = findChild(main, "monitorInput")
+        monitorInput.activated(monitorInput.currentIndex)
+        compare(controller.fixed_x, 300)
+        compare(controller.fixed_y, 200)
+        compare(findChild(main, "xInput").value, 300)
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.positionDirty, false)
+        main.confirmMonitor()
+        compare(controller.fixed_position_confirmed, true)
+        compare(controller.positionDirty, true)
+
+        // Restored coordinates are still clamped to the selected monitor.
+        controller.fixed_position_confirmed = false
+        controller.savedFixedX = 100000
+        monitorInput.activated(monitorInput.currentIndex)
+        compare(controller.fixed_x, findChild(main, "xInput").to)
+        compare(controller.fixed_y, 200)
+    }
+
+    function test_explicit_monitor_selection_replaces_missing_saved_monitor() {
+        controller.current_position = false
+        controller.savedMonitorIdentity = "missing-monitor"
+        controller.savedFixedX = 2400
+        controller.savedFixedY = 1300
+        controller.configDirty = false
+        controller.positionDirty = false
+
+        const screen = main.monitorOptions[0].screen
+        main.selectMonitor(screen)
+
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.positionDirty, false)
+        main.confirmMonitor()
+        compare(controller.fixed_position_confirmed, true)
+        compare(controller.configDirty, true)
+        compare(controller.positionDirty, true)
+        compare(controller.savedMonitorIdentity, controller.monitor_identity)
+        compare(controller.savedFixedX, controller.fixed_x)
+        compare(controller.savedFixedY, controller.fixed_y)
+    }
+
+    function test_selecting_smaller_monitor_requires_confirmation_after_clamping() {
+        const smaller = Qt.createQmlObject('import QtQuick; QtObject {'
+            + 'property string name: "smaller"; property string manufacturer: "";'
+            + 'property string model: ""; property string serialNumber: "";'
+            + 'property int width: 100; property int height: 100;'
+            + 'property int virtualX: 0; property int virtualY: 0;'
+            + 'property real devicePixelRatio: 1}', main)
+        verify(smaller !== null)
+        controller.current_position = false
+        controller.fixed_x = 300
+        controller.fixed_y = 200
+        controller.fixed_position_confirmed = true
+
+        main.selectMonitor(smaller)
+
+        compare(controller.fixed_x, 99)
+        compare(controller.fixed_y, 99)
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.positionDirty, false)
+        compare(controller.savedMonitorIdentity, "")
+    }
+
+    function test_reselecting_saved_monitor_at_smaller_resolution_keeps_saved_coordinates() {
+        const smaller = Qt.createQmlObject('import QtQuick; QtObject {'
+            + 'property string name: "saved-monitor"; property string manufacturer: "";'
+            + 'property string model: ""; property string serialNumber: "";'
+            + 'property int width: 400; property int height: 300;'
+            + 'property int virtualX: 0; property int virtualY: 0;'
+            + 'property real devicePixelRatio: 1}', main)
+        verify(smaller !== null)
+        controller.current_position = false
+        main.selectedMonitor = smaller
+        controller.savedMonitorIdentity = controller.monitor_identity
+        controller.savedFixedX = 300
+        controller.savedFixedY = 200
+        controller.fixed_x = 300
+        controller.fixed_y = 200
+        controller.fixed_position_confirmed = true
+        smaller.width = 100
+        smaller.height = 100
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.fixed_x, 99)
+        compare(controller.fixed_y, 99)
+        const savedIdentity = controller.savedMonitorIdentity
+        main.selectMonitor(smaller)
+
+        compare(controller.fixed_x, 99)
+        compare(controller.fixed_y, 99)
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.positionDirty, false)
+        compare(controller.savedFixedX, 300)
+        compare(controller.savedFixedY, 200)
+        compare(controller.savedMonitorIdentity, savedIdentity)
+    }
+
+    function test_mouse_wheel_cannot_replace_saved_position() {
+        for (const name of ["xInput", "yInput", "monitorInput"])
+            compare(findChild(main, name).wheelEnabled, false)
+    }
+
+    function test_save_error_dialog_keeps_choices_reachable() {
+        controller.mark_settings_changed()
+        controller.saveConfigSucceeds = false
+        main.close()
+        const dialog = findChild(main, "saveFailureDialog")
+        tryCompare(dialog, "opened", true)
+        for (const name of ["continueEditingButton", "discardSettingsButton"]) {
+            const button = findChild(main, name)
+            const right = button.mapToItem(dialog.contentItem, button.width, 0).x
+            verify(right <= dialog.availableWidth, name + " ends at " + right)
+        }
+        const continueButton = findChild(main, "continueEditingButton")
+        const discardButton = findChild(main, "discardSettingsButton")
+        verify(discardButton.y >= continueButton.y + continueButton.height)
+        // The header close button rejects the dialog.
+        dialog.reject()
+        tryCompare(dialog, "opened", false)
+        compare(controller.initializeCount, 1)
     }
 
     function test_running_and_pending_runs_disable_settings() {
@@ -84,6 +235,94 @@ TestCase {
                 compare(findChild(main, name).enabled, false)
             controller[state] = false
         }
+    }
+
+    function test_close_saves_draft_and_keeps_window_open_on_write_error() {
+        controller.interval_ms = 250
+        controller.mark_settings_changed()
+        controller.saveConfigSucceeds = false
+        controller.running = true
+        main.close()
+        compare(controller.saveCount, 1)
+        compare(controller.shutdownCount, 1)
+        compare(controller.running, false)
+        compare(main.visible, true)
+        const dialog = findChild(main, "saveFailureDialog")
+        verify(dialog !== null)
+        tryCompare(dialog, "opened", true)
+        keyClick(Qt.Key_Escape)
+        compare(dialog.opened, true)
+
+        controller.saveConfigSucceeds = true
+        const continueEditing = findChild(main, "continueEditingButton")
+        verify(continueEditing !== null)
+        mouseClick(continueEditing)
+        compare(controller.initializeCount, 1)
+        compare(controller.hotkey_ready, false)
+        compare(controller.hotkey_pending, true)
+        compare(findChild(main, "startStopButton").enabled, false)
+        main.close()
+        compare(controller.saveCount, 2)
+        compare(controller.shutdownCount, 2)
+    }
+
+    function test_discard_after_save_error_closes_without_retrying() {
+        controller.mark_settings_changed()
+        controller.saveConfigSucceeds = false
+        main.close()
+        const dialog = findChild(main, "saveFailureDialog")
+        tryCompare(dialog, "opened", true)
+        const discard = findChild(main, "discardSettingsButton")
+        verify(discard !== null)
+        mouseClick(discard)
+        compare(controller.saveCount, 1)
+        compare(controller.shutdownCount, 2)
+    }
+
+    function test_unchanged_window_does_not_rewrite_config() {
+        main.close()
+        compare(controller.saveCount, 0)
+        compare(controller.shutdownCount, 1)
+    }
+
+    function test_edits_are_saved_on_close_without_click_start_data() {
+        return [
+            { tag: "mouse button", input: "mouseButtonInput", key: Qt.Key_Down, property: "mouse_button", value: 1 },
+            { tag: "click type", input: "clickTypeInput", key: Qt.Key_Down, property: "click_type", value: 1 },
+            { tag: "repeat mode", input: "repeatCountLabel", key: Qt.Key_Space, property: "repeat_until_stopped", value: false },
+            { tag: "position mode", input: "fixedPositionInput", key: Qt.Key_Space, property: "current_position", value: false },
+            // Start from the opposite state; clicking a checked radio changes nothing.
+            { tag: "repeat until stopped", input: "repeatUntilStoppedInput", key: Qt.Key_Space, property: "repeat_until_stopped", initial: false, value: true },
+            { tag: "cursor position", input: "currentPositionInput", key: Qt.Key_Space, property: "current_position", initial: false, value: true }
+        ]
+    }
+    function test_edits_are_saved_on_close_without_click_start(data) {
+        if (data.initial !== undefined) controller[data.property] = data.initial
+        compare(controller.configDirty, false)
+        const input = findChild(main, data.input)
+        verify(input !== null)
+        input.forceActiveFocus()
+        keyClick(data.key)
+        compare(controller[data.property], data.value)
+        compare(controller.configDirty, true)
+        main.close()
+        compare(controller.saveCount, 1)
+        compare(controller.configDirty, false)
+        compare(controller.running, false)
+        compare(controller.busy, false)
+    }
+
+    function test_save_error_restores_minimized_window() {
+        controller.mark_settings_changed()
+        controller.saveConfigSucceeds = false
+        main.showMinimized()
+        tryCompare(main, "visibility", Window.Minimized)
+        main.close()
+        tryCompare(main, "visibility", Window.Windowed)
+        const dialog = findChild(main, "saveFailureDialog")
+        tryCompare(dialog, "opened", true)
+        const discard = findChild(main, "discardSettingsButton")
+        mouseClick(discard)
     }
 
     function test_screen_changes_keep_cursor_position_runs() {
@@ -131,6 +370,8 @@ TestCase {
         compare(controller.fixed_position_confirmed, false)
 
         monitorInput.activated(0)
+        compare(controller.fixed_position_confirmed, false)
+        main.confirmMonitor()
         compare(controller.fixed_position_confirmed, true)
     }
 

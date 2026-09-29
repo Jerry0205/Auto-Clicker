@@ -86,6 +86,8 @@ Wenn du die Hotkey-Freigabe ablehnst, die Stop-Taste entfernst oder KDE die Hotk
 - Der Positionswähler öffnet sich auf dem Bildschirm, den du zuvor in Klickmeister ausgewählt hast.
 - Klickmeister ist nur für Wayland gedacht. Ein X11- oder `xdotool`-Ersatz ist nicht eingebaut.
 - Gespeichert werden nur deine Einstellungen. Es gibt keine Statistiken, keine Nutzungsdaten und keine Telemetrie.
+- Änderungen an den Einstellungen werden beim Schließen gespeichert, auch wenn du keinen Klicklauf gestartet hast. Falls das Speichern fehlschlägt, kannst du weiterarbeiten oder ausdrücklich ohne Speichern schließen.
+- Fehlt der Monitor einer gespeicherten festen Position beim Start, bleibt diese Position samt Monitor-Zuordnung gespeichert, bis du selbst eine neue Position wählst oder einen Monitor bestätigst. Wählst du ihren Monitor später wieder aus, erscheint die gespeicherte Position erneut.
 
 ## Für Entwickler
 

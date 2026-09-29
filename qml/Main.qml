@@ -12,6 +12,8 @@ Kirigami.ApplicationWindow {
     property var selectedMonitor: null
     property var positionPicker: null
     property bool monitorRestored: false
+    property bool monitorSelectionInProgress: false
+    property bool discardSettingsOnClose: false
     readonly property bool controlsEnabled: !controller.running && !controller.busy
     readonly property var monitorOptions: {
         const screens = Qt.application.screens
@@ -63,14 +65,24 @@ Kirigami.ApplicationWindow {
     function confirmMonitor() {
         syncMonitor()
         controller.fixed_position_confirmed = !!selectedMonitor
+        controller.mark_position_changed()
     }
 
     // Coordinates clamped to a smaller monitor were never chosen by the user.
     function selectMonitor(screen) {
-        const fits = !!screen && controller.fixed_x < screen.width && controller.fixed_y < screen.height
+        const sameSelection = screen === selectedMonitor
+        const wasConfirmed = controller.fixed_position_confirmed
+        monitorSelectionInProgress = true
         selectedMonitor = screen
-        syncMonitor()
-        controller.fixed_position_confirmed = fits
+        monitorSelectionInProgress = false
+        const fits = syncMonitor()
+        // Reselecting an unconfirmed screen must not accept coordinates that
+        // an earlier geometry change already clamped on that same screen.
+        const confirmed = fits && (!sameSelection || wasConfirmed)
+        controller.fixed_position_confirmed = confirmed
+        // Clamping to a smaller monitor is not a chosen position. Keep the
+        // saved coordinates until the user confirms or edits the displayed ones.
+        if (confirmed && !sameSelection) controller.mark_position_changed()
     }
 
     function syncMonitor() {
@@ -94,15 +106,19 @@ Kirigami.ApplicationWindow {
         controller.monitor_y = y
         controller.monitor_width = width
         controller.monitor_height = height
+        // Reselecting the saved monitor shows its saved position before clamping.
+        controller.restore_saved_position()
+        const fits = !!screen && controller.fixed_x < width && controller.fixed_y < height
         controller.fixed_x = Math.max(0, Math.min(controller.fixed_x, xInput.to))
         controller.fixed_y = Math.max(0, Math.min(controller.fixed_y, yInput.to))
         // SpinBox initially clamps saved coordinates to its zero-sized monitor.
         // Restore the display even when the controller's coordinate is unchanged.
         xInput.value = controller.fixed_x
         yInput.value = controller.fixed_y
+        return fits
     }
 
-    onSelectedMonitorChanged: syncMonitor()
+    onSelectedMonitorChanged: if (!monitorSelectionInProgress) syncMonitor()
 
     function ensureMonitorSelection() {
         if (!monitorSelectionReady) {
@@ -167,6 +183,7 @@ Kirigami.ApplicationWindow {
                 controller.fixed_y = y
                 controller.current_position = false
                 controller.fixed_position_confirmed = true
+                controller.mark_position_changed()
             }
             onFinished: {
                 if (root.positionPicker === picker) root.positionPicker = null
@@ -214,7 +231,66 @@ Kirigami.ApplicationWindow {
     onClosing: function(close) {
         root.finishPicker(false)
         controller.shutdown()
+        if (!root.discardSettingsOnClose && !controller.save_config()) {
+            close.accepted = false
+            if (root.visibility === Window.Minimized || root.visibility === Window.Hidden)
+                root.showNormal()
+            root.raise()
+            root.requestActivate()
+            saveFailureDialog.open()
+            return
+        }
         close.accepted = true
+    }
+
+    Controls.Dialog {
+        id: saveFailureDialog
+        objectName: "saveFailureDialog"
+        modal: true
+        closePolicy: Controls.Popup.NoAutoClose
+        title: qsTr("Einstellungen konnten nicht gespeichert werden")
+        width: Math.min(root.width - 32, 440)
+        x: (root.width - width) / 2
+        y: (root.height - height) / 2
+        // The header's close button rejects the dialog; treat it as continuing.
+        onRejected: controller.initialize()
+
+        ColumnLayout {
+            width: saveFailureDialog.availableWidth
+            Controls.Label {
+                Layout.fillWidth: true
+                text: controller.error_message
+                wrapMode: Text.WordWrap
+            }
+            Controls.Label {
+                Layout.fillWidth: true
+                text: qsTr("„Weiter bearbeiten“ startet den Hintergrunddienst neu. Der Stop-Hotkey wird dabei sofort neu eingerichtet, sodass KDE erneut nach der Hotkey-Freigabe fragen kann. Die Wayland-Freigabe zum Klicken wird beim nächsten Klickstart neu angefragt.")
+                wrapMode: Text.WordWrap
+                color: Kirigami.Theme.disabledTextColor
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                Controls.Button {
+                    objectName: "continueEditingButton"
+                    Layout.fillWidth: true
+                    text: qsTr("Weiter bearbeiten")
+                    onClicked: {
+                        saveFailureDialog.close()
+                        controller.initialize()
+                    }
+                }
+                Controls.Button {
+                    objectName: "discardSettingsButton"
+                    Layout.fillWidth: true
+                    text: qsTr("Ohne Speichern schließen")
+                    onClicked: {
+                        saveFailureDialog.close()
+                        root.discardSettingsOnClose = true
+                        root.close()
+                    }
+                }
+            }
+        }
     }
 
     footer: Controls.Pane {
@@ -322,7 +398,7 @@ Kirigami.ApplicationWindow {
                         stepSize: 10
                         editable: true
                         value: controller.interval_ms
-                        onValueModified: controller.interval_ms = value
+                        onValueModified: { controller.interval_ms = value; controller.mark_settings_changed() }
                         textFromValue: function(value) { return value.toLocaleString(Qt.locale(), 'f', 0) }
                         valueFromText: function(text) {
                             return Number.fromLocaleString(Qt.locale(), text)
@@ -350,17 +426,19 @@ Kirigami.ApplicationWindow {
                 RowLayout {
                     anchors.fill: parent
                     Controls.ComboBox {
+                        objectName: "mouseButtonInput"
                         Layout.fillWidth: true
                         model: [qsTr("Links"), qsTr("Rechts"), qsTr("Mitte")]
                         currentIndex: controller.mouse_button
-                        onActivated: controller.mouse_button = currentIndex
+                        onActivated: { controller.mouse_button = currentIndex; controller.mark_settings_changed() }
                         Accessible.name: qsTr("Maustaste")
                     }
                     Controls.ComboBox {
+                        objectName: "clickTypeInput"
                         Layout.fillWidth: true
                         model: [qsTr("Einfach"), qsTr("Doppelt")]
                         currentIndex: controller.click_type
-                        onActivated: controller.click_type = currentIndex
+                        onActivated: { controller.click_type = currentIndex; controller.mark_settings_changed() }
                         Accessible.name: qsTr("Klicktyp")
                     }
                 }
@@ -374,9 +452,11 @@ Kirigami.ApplicationWindow {
                 ColumnLayout {
                     anchors.fill: parent
                     Controls.RadioButton {
+                        objectName: "repeatUntilStoppedInput"
                         text: qsTr("Bis zum Stoppen")
                         checked: controller.repeat_until_stopped
                         onToggled: if (checked) controller.repeat_until_stopped = true
+                        onClicked: controller.mark_settings_changed()
                     }
                     RowLayout {
                         Controls.RadioButton {
@@ -384,6 +464,7 @@ Kirigami.ApplicationWindow {
                             text: qsTr("Klickzyklen")
                             checked: !controller.repeat_until_stopped
                             onToggled: if (checked) controller.repeat_until_stopped = false
+                            onClicked: controller.mark_settings_changed()
                         }
                         Controls.SpinBox {
                             objectName: "repeatInput"
@@ -393,7 +474,7 @@ Kirigami.ApplicationWindow {
                             editable: true
                             value: controller.repeat_count
                             enabled: !controller.repeat_until_stopped
-                            onValueModified: controller.repeat_count = value
+                            onValueModified: { controller.repeat_count = value; controller.mark_settings_changed() }
                             Accessible.name: qsTr("Anzahl der Klickzyklen")
                         }
                     }
@@ -408,14 +489,18 @@ Kirigami.ApplicationWindow {
                 ColumnLayout {
                     anchors.fill: parent
                     Controls.RadioButton {
+                        objectName: "currentPositionInput"
                         text: qsTr("Aktuelle Cursorposition")
                         checked: controller.current_position
                         onToggled: if (checked) controller.current_position = true
+                        onClicked: controller.mark_settings_changed()
                     }
                     Controls.RadioButton {
+                        objectName: "fixedPositionInput"
                         text: qsTr("Feste Position")
                         checked: !controller.current_position
                         onToggled: if (checked) controller.current_position = false
+                        onClicked: controller.mark_settings_changed()
                     }
                     RowLayout {
                         enabled: !controller.current_position
@@ -428,8 +513,9 @@ Kirigami.ApplicationWindow {
                             from: 0
                             to: Math.max(0, controller.monitor_width - 1)
                             editable: true
+                            wheelEnabled: false
                             value: controller.fixed_x
-                            onValueModified: controller.fixed_x = value
+                            onValueModified: { controller.fixed_x = value; controller.mark_position_changed() }
                         }
                         Controls.Label { text: qsTr("Y") }
                         Controls.SpinBox {
@@ -440,8 +526,9 @@ Kirigami.ApplicationWindow {
                             from: 0
                             to: Math.max(0, controller.monitor_height - 1)
                             editable: true
+                            wheelEnabled: false
                             value: controller.fixed_y
-                            onValueModified: controller.fixed_y = value
+                            onValueModified: { controller.fixed_y = value; controller.mark_position_changed() }
                         }
                     }
                     RowLayout {
@@ -453,6 +540,8 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             model: root.monitorOptions
                             textRole: "label"
+                            // Scrolling the page must not replace the saved position.
+                            wheelEnabled: false
                             onModelChanged: Qt.callLater(root.ensureMonitorSelection)
                             Component.onCompleted: {
                                 root.monitorSelectionReady = true
@@ -476,6 +565,7 @@ Kirigami.ApplicationWindow {
                         wrapMode: Text.WordWrap
                     }
                     Controls.Button {
+                        objectName: "confirmMonitorButton"
                         visible: !controller.current_position && !controller.fixed_position_confirmed
                         enabled: !!root.selectedMonitor
                         text: qsTr("Monitor und Koordinaten bestätigen")
