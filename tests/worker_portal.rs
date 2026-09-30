@@ -1145,3 +1145,195 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
     service.close().await?;
     Ok(())
 }
+
+/// Count button presses the fake RemoteDesktop portal has received.
+fn presses(observed: &Shared) -> usize {
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .buttons
+        .iter()
+        .filter(|(_, state)| *state == 1)
+        .count()
+}
+
+fn countdowns(events: &[WorkerEvent]) -> Vec<u8> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            WorkerEvent::Countdown(remaining) => Some(*remaining),
+            _ => None,
+        })
+        .collect()
+}
+
+fn waits_for_permission(events: &[WorkerEvent]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, WorkerEvent::Status(status) if status.contains("Warte auf Wayland")))
+}
+
+/// Drain queued events and fail if a cancelled countdown still ticked or started.
+fn assert_no_late_start(events: &mut mpsc::UnboundedReceiver<WorkerEvent>) {
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(
+                event,
+                WorkerEvent::State(RunState::Clicking) | WorkerEvent::Countdown(_)
+            ),
+            "a cancelled countdown must not continue: {event:?}"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn button_countdown_delays_first_click_and_stop_cancels_it() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = zbus::connection::Builder::session()?
+        .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeHotkeys(observed.clone()))?
+        .serve_at(PATH, FakeRemote(observed.clone()))?
+        .serve_at(PATH, FakeScreencast(observed.clone()))?
+        .build()
+        .await?;
+    let settings = ClickSettings {
+        interval_ms: 10,
+        button: MouseButton::Left,
+        click_type: ClickType::Single,
+        repeat: Some(1),
+        position: None,
+        monitor: None,
+    };
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::Hotkey(_))).await?;
+        let hotkey_session = observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .hotkey_session
+            .clone();
+
+        // The permission request comes first; the countdown starts only afterwards.
+        worker.send(Command::StartFromButton(settings.clone()))?;
+        let requested = events_until(&mut events, |e| matches!(e, WorkerEvent::Countdown(3))).await?;
+        assert_eq!(run_states(&requested), [RunState::Starting]);
+        assert!(waits_for_permission(&requested), "{requested:?}");
+        assert_eq!(presses(&observed), 0);
+
+        // The Stop button cancels the countdown without a late start.
+        event(&mut events, |e| matches!(e, WorkerEvent::Countdown(2))).await?;
+        worker.send(Command::Stop)?;
+        let stopped = events_until(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        assert_eq!(run_states(&stopped), [RunState::Stopped]);
+        sleep(Duration::from_millis(2200)).await;
+        assert_eq!(presses(&observed), 0);
+        assert_no_late_start(&mut events);
+
+        // The global shortcut also cancels a pending countdown. The retained
+        // permission is reused, so the countdown follows the start directly.
+        worker.send(Command::StartFromButton(settings.clone()))?;
+        let reused = events_until(&mut events, |e| matches!(e, WorkerEvent::Countdown(3))).await?;
+        assert_eq!(run_states(&reused), [RunState::Starting]);
+        assert!(!waits_for_permission(&reused), "{reused:?}");
+        let activation = (
+            OwnedObjectPath::try_from(hotkey_session.as_str())?,
+            "toggle-clicking",
+            1_u64,
+            Options::new(),
+        );
+        service
+            .emit_signal(
+                None::<&str>,
+                PATH,
+                "org.freedesktop.portal.GlobalShortcuts",
+                "Activated",
+                &activation,
+            )
+            .await?;
+        let stopped = events_until(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        assert_eq!(run_states(&stopped), [RunState::Stopped]);
+        sleep(Duration::from_millis(3100)).await;
+        assert_eq!(presses(&observed), 0);
+        assert_no_late_start(&mut events);
+
+        // The retained permission must not bypass the countdown: the first
+        // click follows three seconds after the countdown began.
+        worker.send(Command::StartFromButton(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Countdown(3))).await?;
+        let began = std::time::Instant::now();
+        sleep(Duration::from_millis(2700)).await;
+        assert_eq!(presses(&observed), 0);
+        timeout(Duration::from_secs(2), async {
+            while presses(&observed) == 0 {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let first_click = began.elapsed();
+        assert!(
+            (Duration::from_millis(2900)..Duration::from_millis(4000)).contains(&first_click),
+            "first click after {first_click:?}"
+        );
+        let run = events_until(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        assert_eq!(countdowns(&run), [2, 1]);
+        assert_eq!(run_states(&run), [RunState::Clicking, RunState::Stopped]);
+        assert_eq!(
+            observed.lock().unwrap_or_else(|e| e.into_inner()).buttons,
+            vec![(0x110, 1), (0x110, 0)]
+        );
+
+        // Hotkey-origin starts remain immediate when the permission is reused.
+        worker.send(Command::Start(settings.clone()))?;
+        let run = events_until(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        assert!(countdowns(&run).is_empty(), "{run:?}");
+        assert_eq!(run_states(&run), [RunState::Starting, RunState::Clicking, RunState::Stopped]);
+        assert_eq!(presses(&observed), 2);
+
+        // A fixed position moves the pointer itself, so a button start is immediate.
+        let fixed = ClickSettings {
+            position: Some((1919, 1079)),
+            monitor: Some(MonitorGeometry { x: -1920, y: 0, width: 1920, height: 1080 }),
+            ..settings.clone()
+        };
+        worker.send(Command::StartFromButton(fixed))?;
+        let run = events_until(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        assert!(countdowns(&run).is_empty(), "{run:?}");
+        assert_eq!(run_states(&run), [RunState::Starting, RunState::Clicking, RunState::Stopped]);
+        assert_eq!(presses(&observed), 3);
+        assert_eq!(
+            observed.lock().unwrap_or_else(|e| e.into_inner()).motions,
+            vec![(42, 1919.0, 1079.0)]
+        );
+
+        // Revoking the permission during the countdown fails the start and clears its timer.
+        worker.send(Command::StartFromButton(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Countdown(3))).await?;
+        close_remote_session(&service, &observed).await?;
+        let revoked = events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+        assert_eq!(run_states(&revoked), [RunState::Stopped, RunState::Error]);
+        sleep(Duration::from_millis(3200)).await;
+        assert_eq!(presses(&observed), 3);
+        assert_no_late_start(&mut events);
+
+        // Losing the hotkey during the countdown also fails the start without a click.
+        worker.send(Command::StartFromButton(settings.clone()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Countdown(3))).await?;
+        shortcuts_changed(&service, &hotkey_session, "").await?;
+        let removed = events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?;
+        assert_eq!(run_states(&removed), [RunState::Stopped, RunState::Error]);
+        sleep(Duration::from_millis(3200)).await;
+        assert_eq!(presses(&observed), 3);
+        assert_no_late_start(&mut events);
+        Ok(())
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    result?;
+    service.close().await?;
+    Ok(())
+}

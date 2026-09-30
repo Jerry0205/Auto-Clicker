@@ -30,6 +30,7 @@ pub mod qobject {
         #[qproperty(bool, hotkey_configuring)]
         #[qproperty(bool, running)]
         #[qproperty(bool, busy)]
+        #[qproperty(i32, countdown_remaining)]
         #[qproperty(i64, interval_ms)]
         #[qproperty(i32, mouse_button)]
         #[qproperty(i32, click_type)]
@@ -52,6 +53,9 @@ pub mod qobject {
 
         #[qinvokable]
         fn start(self: Pin<&mut AppController>);
+
+        #[qinvokable]
+        fn start_from_button(self: Pin<&mut AppController>);
 
         #[qinvokable]
         fn stop(self: Pin<&mut AppController>);
@@ -93,6 +97,7 @@ pub struct AppControllerRust {
     hotkey_configuring: bool,
     running: bool,
     busy: bool,
+    countdown_remaining: i32,
     interval_ms: i64,
     mouse_button: i32,
     click_type: i32,
@@ -167,6 +172,7 @@ impl AppControllerRust {
             hotkey_configuring: false,
             running: false,
             busy: false,
+            countdown_remaining: 0,
             interval_ms: i64::try_from(config.interval_ms).unwrap_or(100),
             mouse_button: match config.mouse_button {
                 MouseButton::Left => 0,
@@ -360,6 +366,15 @@ impl qobject::AppController {
 
     /// Validate and save current controls before requesting a click run.
     pub fn start(mut self: Pin<&mut Self>) {
+        self.as_mut().start_with_origin(false);
+    }
+
+    /// Give the user time to move the pointer after using the Start button.
+    pub fn start_from_button(mut self: Pin<&mut Self>) {
+        self.as_mut().start_with_origin(true);
+    }
+
+    fn start_with_origin(mut self: Pin<&mut Self>, from_button: bool) {
         if *self.selecting_position() {
             return;
         }
@@ -372,7 +387,12 @@ impl qobject::AppController {
             }
         };
         self.as_mut().persist_config(true);
-        self.as_mut().send_command(Command::Start(settings));
+        let command = if from_button {
+            Command::StartFromButton(settings)
+        } else {
+            Command::Start(settings)
+        };
+        self.as_mut().send_command(command);
     }
 
     /// Stop a run or an outstanding start request.
@@ -380,12 +400,12 @@ impl qobject::AppController {
         self.as_mut().send_command(Command::Stop);
     }
 
-    /// Toggle clicking using the latest controls rather than cached settings.
+    /// Toggle clicking from the UI; like the Start button, a start gets the countdown.
     pub fn toggle(mut self: Pin<&mut Self>) {
         if *self.running() || *self.busy() {
             self.as_mut().stop();
         } else {
-            self.as_mut().start();
+            self.as_mut().start_from_button();
         }
     }
 
@@ -453,6 +473,7 @@ impl qobject::AppController {
         // The new epoch drops the old worker's final State(Closing) as well.
         self.as_mut().set_running(false);
         self.as_mut().set_busy(false);
+        self.as_mut().set_countdown_remaining(0);
         self.as_mut().set_hotkey_ready(false);
         self.as_mut().set_hotkey_pending(false);
         self.as_mut().set_hotkey_configuring(false);
@@ -470,6 +491,7 @@ impl qobject::AppController {
             if worker.is_none_or(WorkerHandle::is_stopped) {
                 self.as_mut().set_running(false);
                 self.as_mut().set_busy(false);
+                self.as_mut().set_countdown_remaining(0);
             }
             self.as_mut().show_error(error);
         }
@@ -547,6 +569,13 @@ impl qobject::AppController {
             return;
         };
         match event {
+            WorkerEvent::Countdown(remaining) => {
+                // The run is already `Starting`; the worker ends the countdown via `State`.
+                self.as_mut().set_countdown_remaining(i32::from(remaining));
+                self.as_mut().set_status(QString::from(&format!(
+                    "Start in {remaining} s – Cursor zum Ziel bewegen …"
+                )));
+            }
             WorkerEvent::Status(status) => {
                 self.as_mut().set_status(QString::from(&status));
             }
@@ -554,6 +583,9 @@ impl qobject::AppController {
                 let (running, busy) = run_indicators(state);
                 self.as_mut().set_running(running);
                 self.as_mut().set_busy(busy);
+                if !keeps_countdown(state) {
+                    self.as_mut().set_countdown_remaining(0);
+                }
             }
             WorkerEvent::Hotkey(hotkey) => self.as_mut().set_hotkey(QString::from(&hotkey)),
             WorkerEvent::HotkeyPhase(phase) => {
@@ -584,6 +616,11 @@ fn run_indicators(state: RunState) -> (bool, bool) {
         RunState::Clicking => (true, false),
         RunState::Ready | RunState::Stopped | RunState::Error | RunState::Closing => (false, false),
     }
+}
+
+/// A countdown belongs to a pending start; any other state has ended it.
+fn keeps_countdown(state: RunState) -> bool {
+    state == RunState::Starting
 }
 
 fn should_mark_status_as_error(running: bool, busy: bool) -> bool {
@@ -758,6 +795,7 @@ mod tests {
         controller.next_worker_epoch();
         for event in [
             WorkerEvent::State(RunState::Closing),
+            WorkerEvent::Countdown(2),
             WorkerEvent::Hotkey("F8".into()),
             WorkerEvent::StartRequested,
         ] {
@@ -949,6 +987,20 @@ mod tests {
         assert_eq!(run_indicators(RunState::Clicking), (true, false));
         for state in [RunState::Stopped, RunState::Error, RunState::Closing] {
             assert_eq!(run_indicators(state), (false, false));
+        }
+    }
+
+    #[test]
+    fn only_a_pending_start_keeps_its_countdown() {
+        assert!(keeps_countdown(RunState::Starting));
+        for state in [
+            RunState::Ready,
+            RunState::Clicking,
+            RunState::Stopped,
+            RunState::Error,
+            RunState::Closing,
+        ] {
+            assert!(!keeps_countdown(state));
         }
     }
 
