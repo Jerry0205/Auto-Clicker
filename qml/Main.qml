@@ -306,15 +306,20 @@ Kirigami.ApplicationWindow {
 
             Controls.Button {
                 readonly property bool stopMode: controller.running || controller.busy
+                // A button start at the cursor counts down after the permission.
+                readonly property int countdown: stopMode ? controller.countdown_remaining : 0
 
                 objectName: "startStopButton"
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
                 highlighted: true
-                text: stopMode ? qsTr("■  Stoppen") : qsTr("▶  Starten")
+                text: countdown > 0 ? qsTr("■  Start abbrechen (%1)").arg(countdown)
+                    : stopMode ? qsTr("■  Stoppen") : qsTr("▶  Starten")
                 enabled: stopMode || (controller.hotkey_ready && !controller.hotkey_pending)
-                Accessible.name: stopMode ? qsTr("Stoppen") : qsTr("Starten")
-                onClicked: controller.toggle()
+                Accessible.name: countdown > 1 ? qsTr("Start abbrechen, Klicken beginnt in %1 Sekunden").arg(countdown)
+                    : countdown === 1 ? qsTr("Start abbrechen, Klicken beginnt in 1 Sekunde")
+                    : stopMode ? qsTr("Stoppen") : qsTr("Starten")
+                onClicked: stopMode ? controller.stop() : controller.start_from_button()
             }
 
             RowLayout {

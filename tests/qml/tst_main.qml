@@ -517,8 +517,14 @@ TestCase {
             + (data.running ? " · " + main.rateDescription : "")
         compare(status.text, expectedStatus)
         // A click at the button's position must reach it, not the settings.
+        const enabled = button.enabled
+        const stopMode = data.running || data.busy
         mouseClick(button)
-        compare(controller.toggle_count, button.enabled ? 1 : 0)
+        compare(controller.stops, enabled && stopMode ? 1 : 0)
+        compare(controller.button_starts, enabled && !stopMode ? 1 : 0)
+        // The mock's stop() ends the run at once; restore it for the second click.
+        controller.busy = data.busy
+        controller.running = data.running
 
         const flickable = main.pageStack.currentItem.flickable
         tryVerify(function() { return flickable.contentHeight > flickable.height },
@@ -528,7 +534,8 @@ TestCase {
         verify(button.visible && inWindow(button), "Scrolling settings must not move the run control")
         verify(status.visible && inWindow(status), "Scrolling settings must not move the run status")
         mouseClick(button)
-        compare(controller.toggle_count, button.enabled ? 2 : 0)
+        compare(controller.stops, enabled && stopMode ? 2 : 0)
+        compare(controller.button_starts, enabled && !stopMode ? 2 : 0)
     }
 
     function test_run_control_can_be_used_with_keyboard() {
@@ -537,7 +544,7 @@ TestCase {
         button.forceActiveFocus()
         verify(button.activeFocus)
         keyClick(Qt.Key_Space)
-        compare(controller.toggle_count, 1)
+        compare(controller.button_starts, 1)
     }
 
     function test_run_control_follows_settings_in_focus_and_reading_order() {
@@ -560,5 +567,52 @@ TestCase {
         const siblings = footer.parent.children
         verify(siblings.indexOf(page) < siblings.indexOf(footer),
                "The footer must follow the settings in reading order")
+    }
+
+    function test_button_shows_and_cancels_countdown() {
+        const button = findChild(main, "startStopButton")
+        verify(button !== null)
+        controller.hotkey_ready = true
+        controller.hotkey_pending = false
+        compare(button.text, "▶  Starten")
+        compare(button.Accessible.name, "Starten")
+        mouseClick(button)
+        compare(controller.button_starts, 1)
+        compare(controller.stops, 0)
+
+        // Waiting for the Wayland permission: pending, but no countdown yet.
+        controller.busy = true
+        compare(button.text, "■  Stoppen")
+        compare(button.Accessible.name, "Stoppen")
+
+        // The countdown stays cancellable even if the hotkey becomes unavailable.
+        controller.countdown_remaining = 3
+        compare(button.text, "■  Start abbrechen (3)")
+        compare(button.Accessible.name, "Start abbrechen, Klicken beginnt in 3 Sekunden")
+        controller.countdown_remaining = 1
+        compare(button.text, "■  Start abbrechen (1)")
+        compare(button.Accessible.name, "Start abbrechen, Klicken beginnt in 1 Sekunde")
+        controller.hotkey_ready = false
+        compare(button.enabled, true)
+        mouseClick(button)
+        compare(controller.stops, 1)
+        compare(controller.countdown_remaining, 0)
+        compare(controller.button_starts, 1)
+        controller.hotkey_ready = true
+        compare(button.text, "▶  Starten")
+        compare(button.Accessible.name, "Starten")
+
+        // A countdown value without a pending start is never shown.
+        controller.countdown_remaining = 2
+        compare(button.text, "▶  Starten")
+        compare(button.Accessible.name, "Starten")
+        controller.countdown_remaining = 0
+
+        // A running click loop is stopped, never restarted with a countdown.
+        controller.running = true
+        compare(button.text, "■  Stoppen")
+        mouseClick(button)
+        compare(controller.stops, 2)
+        compare(controller.button_starts, 1)
     }
 }

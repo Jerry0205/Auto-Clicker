@@ -32,7 +32,7 @@ Keine Eingaben, Klickhistorien, Fenstertitel, Prozessinformationen, Clipboard-In
 
 Der Qt-Main-Thread besitzt die GUI. Genau ein Rust-Workerthread besitzt Zustandsautomat, Scheduler und Portalobjekte. Ein begrenzter Kanal (16 Befehle) verhindert unbeschränktes Anwachsen. Stop und Shutdown verwenden ein priorisiertes Ein-Wert-Signal und kommen auch bei vollem Kanal an; vor einem Stop eingereihte Startbefehle werden verworfen. Zustandsupdates gelangen über die threadsichere CXX-Qt-Queue in den Qt-Event-Loop.
 
-Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` weisen weitere Startbefehle ab. Es existiert höchstens ein `ActiveRun` und eine Start-Aufgabe. Abgebrochene Starts werden verworfen.
+Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` weisen weitere Startbefehle ab. Es existiert höchstens ein `ActiveRun` und eine Start-Aufgabe. Abgebrochene Starts werden verworfen. Der Countdown eines Button-Starts beginnt erst nach der Wayland-Freigabe und gehört noch zu `Starting`; erst danach folgt `Clicking`. Stop, Hotkey, Fehler und der Widerruf der Freigabe verwerfen ihn zusammen mit dem Start.
 
 ## 6. Failsafe-Verhalten
 

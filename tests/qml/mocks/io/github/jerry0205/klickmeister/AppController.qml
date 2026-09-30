@@ -10,7 +10,9 @@ QtObject {
     property bool hotkey_configuring: false
     property bool running: false
     property bool busy: false
-    property int toggle_count: 0
+    property int countdown_remaining: 0
+    property int button_starts: 0
+    property int stops: 0
     property double interval_ms: 100
     property int mouse_button: 0
     property int click_type: 0
@@ -46,6 +48,7 @@ QtObject {
         shutdownCount++
         running = false
         busy = false
+        countdown_remaining = 0
         hotkey_ready = false
         hotkey_pending = false
         hotkey_configuring = false
@@ -71,8 +74,10 @@ QtObject {
         return saveConfigSucceeds
     }
     function start() {}
-    function stop() { running = false; busy = false }
-    function toggle() { toggle_count += 1 }
+    function start_from_button() { button_starts += 1 }
+    // Mirrors the worker's later State(Stopped), which also ends a countdown.
+    function stop() { stops += 1; running = false; busy = false; countdown_remaining = 0 }
+    function toggle() { if (running || busy) stop(); else start_from_button() }
     function configure_hotkey() {}
     function clear_error() { error_message = "" }
 }
