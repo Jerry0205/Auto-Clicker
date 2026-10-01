@@ -460,7 +460,7 @@ impl qobject::AppController {
         }
     }
 
-    /// Join the worker and clear running indicators during window closure.
+    /// End the worker with a bounded wait and clear running indicators during window closure.
     pub fn shutdown(mut self: Pin<&mut Self>) {
         let worker = {
             let rust = self.as_mut().rust_mut().get_mut();
@@ -480,15 +480,17 @@ impl qobject::AppController {
         self.as_mut().set_status(QString::from("Bereit"));
     }
 
-    /// Send through the bounded worker channel and surface delivery failures.
+    /// Hand a command to the worker and surface delivery failures.
+    ///
+    /// Stop and Shutdown bypass the bounded queue. A failed send leaves the
+    /// shown run state alone unless the worker has ended.
     fn send_command(mut self: Pin<&mut Self>, command: Command) {
         let worker = self.rust().worker.as_ref();
         let result = worker
             .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")
             .and_then(|worker| worker.send(command));
         if let Err(error) = result {
-            // A stopped worker sends no further state, so clear its last one.
-            if worker.is_none_or(WorkerHandle::is_stopped) {
+            if send_failure_ends_run(worker) {
                 self.as_mut().set_running(false);
                 self.as_mut().set_busy(false);
                 self.as_mut().set_countdown_remaining(0);
@@ -621,6 +623,12 @@ fn run_indicators(state: RunState) -> (bool, bool) {
 /// A countdown belongs to a pending start; any other state has ended it.
 fn keeps_countdown(state: RunState) -> bool {
     state == RunState::Starting
+}
+
+/// A failed send ends the shown run only if no worker can report its state
+/// anymore. A full queue during a run keeps it shown; Stop stays possible.
+fn send_failure_ends_run(worker: Option<&WorkerHandle>) -> bool {
+    worker.is_none_or(WorkerHandle::is_stopped)
 }
 
 fn should_mark_status_as_error(running: bool, busy: bool) -> bool {
@@ -1002,6 +1010,28 @@ mod tests {
         ] {
             assert!(!keeps_countdown(state));
         }
+    }
+
+    #[test]
+    fn send_failures_keep_the_run_state_unless_the_worker_has_ended() {
+        let settings = ClickSettings {
+            interval_ms: 100,
+            button: MouseButton::Left,
+            click_type: ClickType::Single,
+            repeat: None,
+            position: None,
+            monitor: None,
+        };
+        let (worker, side) = WorkerHandle::stalled(1);
+        assert!(worker.send(Command::Start(settings.clone())).is_ok());
+        // A full queue while running: the worker still reports its state.
+        assert!(worker.send(Command::StartFromButton(settings)).is_err());
+        assert!(!send_failure_ends_run(Some(&worker)));
+        // A stopped worker sends no further state, so its last one is cleared.
+        drop(side);
+        assert!(worker.send(Command::Stop).is_err());
+        assert!(send_failure_ends_run(Some(&worker)));
+        assert!(send_failure_ends_run(None));
     }
 
     #[test]

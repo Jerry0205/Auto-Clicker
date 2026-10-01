@@ -50,6 +50,9 @@ struct Observed {
     delay_start: bool,
     start_seen: Arc<Notify>,
     start_release: Arc<Notify>,
+    delay_button: bool,
+    button_seen: Arc<Notify>,
+    button_release: Arc<Notify>,
 }
 type Shared = Arc<Mutex<Observed>>;
 
@@ -363,14 +366,27 @@ impl FakeRemote {
         button: i32,
         state: u32,
     ) -> zbus::fdo::Result<()> {
-        let mut observed = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if observed.revoked_session.as_ref() == Some(&session) {
-            return Err(failed("session revoked"));
-        }
-        observed.buttons.push((button, state));
-        if observed.button_failures[state as usize] > 0 {
-            observed.button_failures[state as usize] -= 1;
-            return Err(failed("simulated button failure"));
+        let delay = {
+            let mut observed = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            if observed.revoked_session.as_ref() == Some(&session) {
+                return Err(failed("session revoked"));
+            }
+            observed.buttons.push((button, state));
+            if observed.button_failures[state as usize] > 0 {
+                observed.button_failures[state as usize] -= 1;
+                return Err(failed("simulated button failure"));
+            }
+            (state == 1 && observed.delay_button).then(|| {
+                (
+                    observed.button_seen.clone(),
+                    observed.button_release.clone(),
+                )
+            })
+        };
+        // Hold the press reply, so the worker stays inside this click.
+        if let Some((seen, release)) = delay {
+            seen.notify_one();
+            release.notified().await;
         }
         Ok(())
     }
@@ -909,7 +925,9 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         timeout(Duration::from_secs(3), seen.notified()).await?;
         worker.send(Command::Start(ClickSettings { position: Some((100, 150)), ..fixed.clone() }))?;
         let closed_before_stop = observed.lock().unwrap_or_else(|e| e.into_inner()).closed;
-        // This subsequent worker roundtrip proves the duplicate was processed.
+        // Stop overtakes and outdates this queued duplicate. The next block
+        // checks deterministically that a duplicate during Starting keeps the
+        // pending settings: it is queued before the portal can answer.
         worker.send(Command::Stop)?;
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
         assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).closed > closed_before_stop,
@@ -1142,6 +1160,235 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         saw_closing |= matches!(event, WorkerEvent::State(RunState::Closing));
     }
     assert!(saw_closing, "shutdown must report the closing state");
+    service.close().await?;
+    Ok(())
+}
+
+/// Part of the worker's error when a held click is not answered in 250 ms.
+const CLICK_TIMEOUT: &str = "nicht innerhalb von 250 ms bestätigt";
+
+/// Retry a scenario only when its held click outlived the worker's 250 ms
+/// event timeout, which a heavily loaded machine can cause. Every other
+/// failure, including a real regression, fails in each attempt.
+async fn retry_if_click_window_missed<F, Fut>(scenario: F) -> TestResult
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = TestResult>,
+{
+    let mut result = scenario().await;
+    for _ in 1..3 {
+        match &result {
+            Err(error) if error.to_string().contains(CLICK_TIMEOUT) => {
+                eprintln!("Held click timed out under load, retrying: {error}");
+                result = scenario().await;
+            }
+            _ => break,
+        }
+    }
+    result
+}
+
+/// Fail without panicking, so the test still shuts its worker down.
+///
+/// A panic skips that cleanup. The private bus would then start the real
+/// desktop portal for the dropped worker's calls.
+fn ensure(condition: bool, message: &str) -> TestResult {
+    if condition {
+        Ok(())
+    } else {
+        Err(message.into())
+    }
+}
+
+async fn fake_portal(observed: &Shared) -> zbus::Result<zbus::Connection> {
+    zbus::connection::Builder::session()?
+        .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeHotkeys(observed.clone()))?
+        .serve_at(PATH, FakeRemote(observed.clone()))?
+        .serve_at(PATH, FakeScreencast(observed.clone()))?
+        .build()
+        .await
+}
+
+fn continuous() -> ClickSettings {
+    ClickSettings {
+        interval_ms: 10,
+        button: MouseButton::Left,
+        click_type: ClickType::Single,
+        repeat: None,
+        position: None,
+        monitor: None,
+    }
+}
+
+/// Start a run, hold its first press and fill all 16 command slots meanwhile.
+async fn fill_queue_during_held_click(
+    worker: &WorkerHandle,
+    observed: &Shared,
+    events: &mut mpsc::UnboundedReceiver<WorkerEvent>,
+) -> Result<Arc<Notify>, Box<dyn std::error::Error>> {
+    let (seen, release) = {
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        state.delay_button = true;
+        (state.button_seen.clone(), state.button_release.clone())
+    };
+    worker.send(Command::Start(continuous()))?;
+    event(events, |e| {
+        matches!(e, WorkerEvent::State(RunState::Clicking))
+    })
+    .await?;
+    timeout(Duration::from_secs(3), seen.notified()).await?;
+    // The Start button sends StartFromButton; such starts must be outdated
+    // by a later Stop just like hotkey starts.
+    for _ in 0..16 {
+        worker.send(Command::StartFromButton(continuous()))?;
+    }
+    ensure(
+        worker.send(Command::StartFromButton(continuous()))
+            == Err("Der interne Befehlskanal ist ausgelastet."),
+        "the command queue must be full while the click is held",
+    )?;
+    // The controller keeps the shown run state unless the worker has ended.
+    ensure(
+        !worker.is_stopped(),
+        "a full queue must not count as a stopped worker",
+    )?;
+    Ok(release)
+}
+
+fn release_held_click(observed: &Shared, release: &Notify) {
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .delay_button = false;
+    release.notify_one();
+}
+
+/// Issue #16: Stop reaches a worker whose command queue is full, and the
+/// starts queued before it cannot restart the run.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn stop_overtakes_a_full_command_queue() -> TestResult {
+    retry_if_click_window_missed(stop_overtakes_a_full_command_queue_once).await
+}
+
+async fn stop_overtakes_a_full_command_queue_once() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let release = fill_queue_during_held_click(&worker, &observed, &mut events).await?;
+        worker.send(Command::Stop)?;
+        release_held_click(&observed, &release);
+        let stopped = events_until(&mut events, |e| {
+            matches!(
+                e,
+                WorkerEvent::State(RunState::Stopped) | WorkerEvent::Error(_)
+            )
+        })
+        .await?;
+        if let Some(WorkerEvent::Error(error)) = stopped.last() {
+            return Err(error.clone().into());
+        }
+        ensure(
+            run_states(&stopped) == [RunState::Stopped],
+            &format!("Stop must end the held run directly: {stopped:?}"),
+        )?;
+
+        let clicks = observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .buttons
+            .len();
+        sleep(Duration::from_millis(150)).await;
+        ensure(
+            observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .buttons
+                .len()
+                == clicks,
+            "no click may follow a confirmed Stop",
+        )?;
+        let later: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        ensure(
+            run_states(&later).is_empty()
+                && !later.iter().any(|e| matches!(e, WorkerEvent::Error(_))),
+            &format!("starts queued before Stop must not restart the run: {later:?}"),
+        )?;
+
+        // The drained queue accepts new commands, and a later start runs.
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        worker.send(Command::Stop)?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        Ok(())
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+/// Issue #16: Shutdown ends a run whose command queue is full, without
+/// handling the queued starts first.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn shutdown_overtakes_a_full_command_queue() -> TestResult {
+    retry_if_click_window_missed(shutdown_overtakes_a_full_command_queue_once).await
+}
+
+async fn shutdown_overtakes_a_full_command_queue_once() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let prepared = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        fill_queue_during_held_click(&worker, &observed, &mut events).await
+    }
+    .await;
+    let closed_before = observed.lock().unwrap_or_else(|e| e.into_inner()).closed;
+    let shutdown = tokio::task::spawn_blocking(move || worker.shutdown());
+    if let Ok(release) = &prepared {
+        release_held_click(&observed, release);
+    }
+    timeout(Duration::from_secs(4), shutdown).await??;
+    prepared?;
+    let rest: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    if let Some(WorkerEvent::Error(error)) =
+        rest.iter().find(|e| matches!(e, WorkerEvent::Error(_)))
+    {
+        return Err(error.clone().into());
+    }
+    ensure(
+        run_states(&rest) == [RunState::Closing],
+        &format!("Shutdown must end the run before any queued start: {rest:?}"),
+    )?;
+    ensure(
+        observed.lock().unwrap_or_else(|e| e.into_inner()).closed > closed_before,
+        "Shutdown must close the RemoteDesktop session",
+    )?;
     service.close().await?;
     Ok(())
 }

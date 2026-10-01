@@ -472,6 +472,8 @@ TestCase {
             { tag: "fixed-running", fixed: true, running: true, busy: false, ready: true, pending: false },
             { tag: "cursor-starting", fixed: false, running: false, busy: true, ready: false, pending: true },
             { tag: "fixed-starting", fixed: true, running: false, busy: true, ready: false, pending: true },
+            // A shown send error must not take away Stop, even without a hotkey.
+            { tag: "running-hotkey-unavailable", fixed: false, running: true, busy: false, ready: false, pending: false },
             { tag: "hotkey-unavailable", fixed: false, running: false, busy: false, ready: false, pending: false },
             { tag: "hotkey-pending", fixed: false, running: false, busy: false, ready: false, pending: true }
         ]
