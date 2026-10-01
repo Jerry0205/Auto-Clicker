@@ -925,9 +925,9 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         timeout(Duration::from_secs(3), seen.notified()).await?;
         worker.send(Command::Start(ClickSettings { position: Some((100, 150)), ..fixed.clone() }))?;
         let closed_before_stop = observed.lock().unwrap_or_else(|e| e.into_inner()).closed;
-        // Stop overtakes queued commands. Give the worker time to see the
-        // duplicate while Starting; otherwise Stop merely outdates it.
-        sleep(Duration::from_millis(50)).await;
+        // Stop overtakes and outdates this queued duplicate. The next block
+        // checks deterministically that a duplicate during Starting keeps the
+        // pending settings: it is queued before the portal can answer.
         worker.send(Command::Stop)?;
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
         assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).closed > closed_before_stop,
