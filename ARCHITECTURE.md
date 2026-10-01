@@ -23,7 +23,7 @@ RemoteDesktop und GlobalShortcuts verwenden `ashpd` und jeweils eine eigene D-Bu
 
 ## Lebensdauer
 
-Das Schließen des Fensters sendet `Shutdown`, wartet höchstens 5 Sekunden auf den Worker und schließt RemoteDesktop- und GlobalShortcuts-Sitzungen mit begrenzter Wartezeit. Endet der Worker nicht rechtzeitig, blockiert der Qt-Thread nicht weiter; das anschließende Prozessende trennt die D-Bus-Verbindungen. Es werden keine Kindprozesse gestartet. Ein Prozessabbruch trennt die D-Bus-Verbindung, wodurch der Portal-Backendbesitzer die Sitzungen ebenfalls verwirft.
+Das Schließen des Fensters fordert über das priorisierte Signal das Ende des Workers an und wartet höchstens 5 Sekunden, bis sein Thread endet. Der Worker verlässt seine Schleife und klickt danach nicht mehr; ein bereits laufender Klick wird noch abgeschlossen. Anschließend bricht er ausstehende Anfragen ab und schließt RemoteDesktop- und GlobalShortcuts-Sitzungen selbst mit begrenzter Wartezeit. Endet er nicht innerhalb der 5 Sekunden, arbeitet der Qt-Thread ohne ihn weiter, und der Worker räumt im Hintergrund zu Ende auf. Seine späten Ereignisse verwirft der Controller über die Worker-Epoche. Das gilt auch, wenn nach einem Speicherfehler „Weiter bearbeiten“ einen neuen Worker startet, während der alte noch aufräumt. Schließt sich das Fenster, beendet das Prozessende auch diesen Thread. Es werden keine Kindprozesse gestartet. Ein Prozessabbruch trennt die D-Bus-Verbindung, wodurch der Portal-Backendbesitzer die Sitzungen ebenfalls verwirft.
 
 ## Positionsauswahl
 

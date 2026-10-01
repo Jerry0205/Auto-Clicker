@@ -30,7 +30,7 @@ Keine Eingaben, Klickhistorien, Fenstertitel, Prozessinformationen, Clipboard-In
 
 ## 5. Threading-Modell
 
-Der Qt-Main-Thread besitzt die GUI. Genau ein Rust-Workerthread besitzt Zustandsautomat, Scheduler und Portalobjekte. Ein begrenzter Kanal (16 Befehle) verhindert unbeschränktes Anwachsen. Stop und Shutdown verwenden ein priorisiertes Ein-Wert-Signal und kommen auch bei vollem Kanal an; vor einem Stop eingereihte Startbefehle werden verworfen. Zustandsupdates gelangen über die threadsichere CXX-Qt-Queue in den Qt-Event-Loop.
+Der Qt-Main-Thread besitzt die GUI. Genau ein aktiver Rust-Workerthread besitzt Zustandsautomat, Scheduler und Portalobjekte. Ein beim Schließen nicht rechtzeitig beendeter Worker hat seine Schleife bereits verlassen; er klickt nicht mehr und schließt nur noch seine eigenen Sitzungen. Ein begrenzter Kanal (16 Befehle) verhindert unbeschränktes Anwachsen. Stop und Shutdown verwenden ein priorisiertes Ein-Wert-Signal und kommen auch bei vollem Kanal an; vor einem Stop eingereihte Startbefehle werden verworfen. Zustandsupdates gelangen über die threadsichere CXX-Qt-Queue in den Qt-Event-Loop.
 
 Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` weisen weitere Startbefehle ab. Es existiert höchstens ein `ActiveRun` und eine Start-Aufgabe. Abgebrochene Starts werden verworfen. Der Countdown eines Button-Starts beginnt erst nach der Wayland-Freigabe und gehört noch zu `Starting`; erst danach folgt `Clicking`. Stop, Hotkey, Fehler und der Widerruf der Freigabe verwerfen ihn zusammen mit dem Start.
 
@@ -38,7 +38,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 
 - Ohne bestätigten globalen Hotkey wird Start abgewiesen.
 - Hotkey und Stop-Button setzen den einzigen aktiven Run auf `Stopped` und entfernen seinen Termin.
-- Fenster-Schließen ruft synchron `shutdown` auf, beendet den Worker und schließt beide Portal-Sitzungen. Ausstehende RemoteDesktop- und Hotkey-Anfragen werden kooperativ abgebrochen. Jede Anfrage besitzt ihre D-Bus-Verbindung, die nach begrenztem `Session.Close` ebenfalls getrennt wird; die Bereinigung wird vor der Stop-/Shutdown-Bestätigung abgewartet. Das Fenster wartet darauf höchstens 5 Sekunden; danach beendet das Prozessende die D-Bus-Verbindungen.
+- Fenster-Schließen ruft synchron `shutdown` auf. Es fordert das Ende des Workers an und wartet höchstens 5 Sekunden darauf. Der Worker klickt danach nicht mehr, bricht ausstehende RemoteDesktop- und Hotkey-Anfragen kooperativ ab und schließt beide Portal-Sitzungen selbst. Jede Anfrage besitzt ihre D-Bus-Verbindung, die nach begrenztem `Session.Close` ebenfalls getrennt wird. Einen Stop bestätigt der Worker erst nach dieser Bereinigung. Endet der Worker nicht innerhalb der 5 Sekunden, räumt er im Hintergrund zu Ende auf, und der Controller verwirft seine späten Ereignisse über die Worker-Epoche. Das gilt auch, wenn nach einem Speicherfehler „Weiter bearbeiten“ bereits einen neuen Worker startet.
 - Ein Prozessende trennt zusätzlich automatisch den D-Bus-Client; es gibt keinen separaten Clickerprozess.
 - Nach erfolgreichem Button-Press wird immer ein Release versucht. Schlägt Release fehl, folgt ein zweiter Best-Effort-Release und der Scheduler geht in Fehlerzustand.
 - Verpasste Timings werden nicht nachgeholt; dadurch entsteht kein Event-Burst.
