@@ -54,6 +54,9 @@ struct Observed {
     button_seen: Arc<Notify>,
     button_release: Arc<Notify>,
     version_reads: usize,
+    hold_version: bool,
+    version_seen: Arc<Notify>,
+    version_release: Arc<Notify>,
 }
 type Shared = Arc<Mutex<Observed>>;
 
@@ -171,13 +174,21 @@ async fn create(
 struct FakeHotkeys(Shared);
 #[zbus::interface(name = "org.freedesktop.portal.GlobalShortcuts", crate = "ashpd::zbus")]
 impl FakeHotkeys {
-    /// Count reads, so a test can tell when the worker has asked for it.
+    /// Count reads, so a test can tell when the worker has asked for it,
+    /// and optionally hold the reply until the test releases it.
     #[zbus(property, name = "version")]
-    fn version(&self) -> u32 {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .version_reads += 1;
+    async fn version(&self) -> u32 {
+        let hold = {
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.version_reads += 1;
+            state
+                .hold_version
+                .then(|| (state.version_seen.clone(), state.version_release.clone()))
+        };
+        if let Some((seen, release)) = hold {
+            seen.notify_one();
+            release.notified().await;
+        }
         2
     }
 
@@ -1234,12 +1245,22 @@ async fn hold_first_click(
     observed: &Shared,
     events: &mut mpsc::UnboundedReceiver<WorkerEvent>,
 ) -> Result<Arc<Notify>, Box<dyn std::error::Error>> {
+    hold_first_click_of(worker, observed, events, continuous()).await
+}
+
+/// Like `hold_first_click`, for a run with the given settings.
+async fn hold_first_click_of(
+    worker: &WorkerHandle,
+    observed: &Shared,
+    events: &mut mpsc::UnboundedReceiver<WorkerEvent>,
+    settings: ClickSettings,
+) -> Result<Arc<Notify>, Box<dyn std::error::Error>> {
     let (seen, release) = {
         let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
         state.delay_button = true;
         (state.button_seen.clone(), state.button_release.clone())
     };
-    worker.send(Command::Start(continuous()))?;
+    worker.send(Command::Start(settings))?;
     event(events, |e| {
         matches!(e, WorkerEvent::State(RunState::Clicking))
     })
@@ -1952,6 +1973,199 @@ async fn changes_behind_key_presses_once() -> TestResult {
                 && run_states(&later).is_empty()
                 && start_requests(&closed) + start_requests(&later) == 0,
             &format!("the session end must stop without a restart: {closed:?} {later:?}"),
+        )
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+/// The barrier depends on D-Bus order on the hotkey connection itself:
+/// presses that the portal sends before its reply stay old even when the
+/// worker reads them only after that reply. Here the worker is held in
+/// closing a revoked click session while the portal sends presses and only
+/// then answers. A reply read on another connection has an unrelated
+/// position and would let these presses start a run.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn presses_sent_before_the_portal_reply_stay_old_when_read_later() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let session = hotkey_session(&observed)?;
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        let (version_seen, version_release) = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.hold_version = true;
+            (state.version_seen.clone(), state.version_release.clone())
+        };
+        worker.send(Command::Stop)?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        // The portal holds the worker's read after the Stop.
+        timeout(Duration::from_secs(3), version_seen.notified()).await?;
+        // Keep the worker busy closing the revoked click session.
+        observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stall_close = true;
+        close_remote_session(&service, &observed).await?;
+        timeout(Duration::from_secs(3), async {
+            while observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .close_releases
+                .is_empty()
+            {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        // Presses first, then the reply, all while the worker is busy.
+        key_presses(&service, &session, 1, 5).await?;
+        observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .hold_version = false;
+        version_release.notify_one();
+        sleep(Duration::from_millis(50)).await;
+        let close_releases = {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.stall_close = false;
+            std::mem::take(&mut state.close_releases)
+        };
+        for close_release in close_releases {
+            close_release.notify_one();
+        }
+        let closed = events_until(&mut events, |e| {
+            matches!(e, WorkerEvent::Status(status) if status.contains("Wayland-Berechtigung beendet"))
+        })
+        .await?;
+        sleep(Duration::from_millis(200)).await;
+        let later: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        ensure(
+            start_requests(&closed) + start_requests(&later) == 0
+                && run_states(&closed).is_empty()
+                && run_states(&later).is_empty(),
+            &format!("presses sent before the portal reply must stay old: {closed:?} {later:?}"),
+        )?;
+        // The barrier has settled, so the next press starts.
+        shortcut_signal(&service, &session, "Activated", 6).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+/// A run that ends by itself, by its last click or by a click error, also
+/// sets the barrier: presses queued while that click was held stay old.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn old_key_presses_after_last_click_or_error_do_not_restart() -> TestResult {
+    let mut failures = Vec::new();
+    for by_error in [false, true] {
+        let mut result = presses_before_run_end_once(by_error).await;
+        // Retry only if the presses could not be sent before the run ended.
+        for _ in 1..3 {
+            match &result {
+                Err(error) if error.to_string().contains(RUN_ENDED_TOO_EARLY) => {
+                    eprintln!("Run ended before the presses were sent, retrying: {error}");
+                    result = presses_before_run_end_once(by_error).await;
+                }
+                _ => break,
+            }
+        }
+        if let Err(error) = result {
+            let end = if by_error {
+                "click error"
+            } else {
+                "last click"
+            };
+            failures.push(format!("Run end by {end}: {error}"));
+        }
+    }
+    ensure(failures.is_empty(), &failures.join("; "))
+}
+
+const RUN_ENDED_TOO_EARLY: &str = "the run ended before all presses were sent";
+
+async fn presses_before_run_end_once(by_error: bool) -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let session = hotkey_session(&observed)?;
+        // One click finishes the run; a continuous run fails once the held
+        // press outlives the worker's 250 ms event timeout.
+        let settings = ClickSettings {
+            repeat: (!by_error).then_some(1),
+            ..continuous()
+        };
+        let release = hold_first_click_of(&worker, &observed, &mut events, settings).await?;
+        key_presses(&service, &session, 1, 10).await?;
+        let sent: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        if !run_states(&sent).is_empty() {
+            release_held_click(&observed, &release);
+            return Err(format!("{RUN_ENDED_TOO_EARLY}: {sent:?}").into());
+        }
+        let end = if by_error {
+            RunState::Error
+        } else {
+            release_held_click(&observed, &release);
+            RunState::Stopped
+        };
+        let ended = timeout(
+            Duration::from_secs(3),
+            events_until(&mut events, |e| matches!(e, WorkerEvent::State(state) if *state == end)),
+        )
+        .await??;
+        if by_error {
+            release_held_click(&observed, &release);
+        }
+        sleep(Duration::from_millis(200)).await;
+        let later: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        let stale_starts = start_requests(&ended) + start_requests(&later);
+        if stale_starts > 0 {
+            // Answer a request exactly as the idle controller does.
+            worker.send(Command::Start(continuous()))?;
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::State(RunState::Clicking))
+            })
+            .await?;
+            return Err(format!(
+                "Restart confirmed after the run ended; {stale_starts} start requests from old key presses"
+            )
+            .into());
+        }
+        ensure(
+            run_states(&ended) == [end] && run_states(&later).is_empty(),
+            &format!("only the end of the run may follow: {ended:?} {later:?}"),
         )
     }
     .await;
