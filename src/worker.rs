@@ -18,7 +18,11 @@ use ashpd::{
             NewShortcut, ShortcutsChanged,
         },
     },
-    zbus::{self, message::Sequence},
+    zbus::{
+        self, Message,
+        message::Sequence,
+        names::{OwnedUniqueName, UniqueName},
+    },
 };
 use futures_util::{FutureExt, Stream, StreamExt, future};
 use tokio::{
@@ -261,6 +265,8 @@ struct HotkeyState {
     portal: Arc<GlobalShortcuts>,
     session: Arc<Session<GlobalShortcuts>>,
     events: Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>,
+    /// Unique bus name of the portal connection that sends the hotkey signals.
+    portal_owner: OwnedUniqueName,
     start_barrier: StartBarrier<Sequence>,
 }
 
@@ -330,28 +336,39 @@ impl<P: Copy + Ord> StartBarrier<P> {
 }
 
 /// Read a portal property over the hotkey connection and return where its
-/// reply arrived. Errors without a reply, such as a lost connection, are
-/// retried; the hotkey signals report the end of the session separately.
-async fn portal_reply_position(portal: zbus::Proxy<'static>) -> Sequence {
+/// reply arrived. The call goes to `owner`, the portal connection that sends
+/// the `Activated` signals, so the reply is ordered behind them. Anything
+/// else is retried; the hotkey signals report the end of the session.
+async fn portal_reply_position(portal: zbus::Proxy<'static>, owner: OwnedUniqueName) -> Sequence {
     loop {
         let reply = portal
             .connection()
             .call_method(
-                Some(portal.destination().clone()),
+                Some(owner.inner().clone()),
                 portal.path().clone(),
                 Some("org.freedesktop.DBus.Properties"),
                 "Get",
                 &(portal.interface().as_str(), "version"),
             )
             .await;
-        match reply {
-            // An error reply is ordered behind earlier signals as well.
-            Ok(reply) | Err(zbus::Error::MethodError(_, _, reply)) => {
-                return reply.recv_position();
-            }
-            Err(_) => sleep(PORTAL_CLOSE_TIMEOUT).await,
+        if let Some(position) = ordered_reply_position(reply, &owner) {
+            return position;
         }
+        sleep(PORTAL_CLOSE_TIMEOUT).await;
     }
+}
+
+/// The receive position of a reply, also an error reply, that `owner` sent
+/// itself. Errors from the bus daemon, such as an unknown or vanished
+/// portal, are not ordered behind the portal's signals and do not count.
+fn ordered_reply_position(
+    reply: zbus::Result<Message>,
+    owner: &UniqueName<'_>,
+) -> Option<Sequence> {
+    let (Ok(reply) | Err(zbus::Error::MethodError(_, _, reply))) = reply else {
+        return None;
+    };
+    (reply.header().sender() == Some(owner)).then(|| reply.recv_position())
 }
 
 struct ActiveRun {
@@ -661,9 +678,10 @@ async fn run_worker(
             ended_runs = machine.ended_runs();
             if let Some(state) = hotkey.as_mut() {
                 let portal = zbus::Proxy::clone(&state.portal);
+                let owner = state.portal_owner.clone();
                 state
                     .start_barrier
-                    .arm(Box::pin(portal_reply_position(portal)));
+                    .arm(Box::pin(portal_reply_position(portal, owner)));
             }
         }
         let wake = next_wake(WakeSources {
@@ -806,12 +824,19 @@ async fn run_worker(
                             // Raw messages keep their receive position for the start barrier.
                             let activations = portal.receive_signal("Activated").await.map_err(|error| error.to_string())?;
                             let changes = portal.receive_shortcuts_changed().await.map_err(|error| error.to_string())?;
-                            Ok::<_, String>((activations, changes))
+                            // The start barrier accepts only replies from this connection.
+                            let owner = zbus::fdo::DBusProxy::new(&connection)
+                                .await
+                                .map_err(|error| error.to_string())?
+                                .get_name_owner(portal.destination().clone())
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            Ok::<_, String>((activations, changes, owner))
                         })
                         .await
                         .unwrap_or_else(|_| Err("Zeitüberschreitung bei der Hotkey-Signalanmeldung".to_owned()));
                         match streams {
-                            Ok((activations, changes)) => {
+                            Ok((activations, changes, portal_owner)) => {
                                 let session = Arc::new(session);
                                 let watched_session = Arc::clone(&session);
                                 let (ready_tx, ready_rx) = oneshot::channel();
@@ -848,6 +873,7 @@ async fn run_worker(
                                     portal: Arc::new(portal),
                                     session,
                                     events: Box::pin(events),
+                                    portal_owner,
                                     start_barrier: StartBarrier::new(),
                                 });
                                 if let Some(actual) = actual {
@@ -1206,6 +1232,44 @@ mod tests {
         barrier.arm(Box::pin(future::ready(20)));
         assert!(barrier.is_old(15));
         assert!(!barrier.is_old(21));
+    }
+
+    #[test]
+    fn only_replies_from_the_signalling_portal_bound_old_presses() -> zbus::Result<()> {
+        const PORTAL: &str = ":1.7";
+        let portal = UniqueName::try_from(PORTAL)?;
+        let call = Message::method_call("/org/freedesktop/portal/desktop", "Get")?
+            .destination(PORTAL)?
+            .build(&())?;
+        let reply = |sender: &'static str| -> zbus::Result<Message> {
+            Message::method_return(&call.header())?
+                .sender(sender)?
+                .build(&())
+        };
+        let error = |sender: &'static str, name: &'static str| -> zbus::Result<zbus::Error> {
+            let message = Message::error(&call.header(), name)?
+                .sender(sender)?
+                .build(&("Testfehler",))?;
+            Ok(zbus::Error::from(message))
+        };
+        // The portal's own replies, also errors, are ordered behind its signals.
+        assert!(ordered_reply_position(Ok(reply(PORTAL)?), &portal).is_some());
+        let unknown = "org.freedesktop.DBus.Error.UnknownProperty";
+        assert!(ordered_reply_position(Err(error(PORTAL, unknown)?), &portal).is_some());
+        // Errors from the bus daemon or replies from another connection are not.
+        for name in [
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "org.freedesktop.DBus.Error.NoReply",
+        ] {
+            let daemon = error("org.freedesktop.DBus", name)?;
+            assert!(matches!(daemon, zbus::Error::MethodError(..)));
+            assert!(ordered_reply_position(Err(daemon), &portal).is_none());
+        }
+        assert!(ordered_reply_position(Ok(reply(":1.8")?), &portal).is_none());
+        assert!(ordered_reply_position(Err(error(":1.8", unknown)?), &portal).is_none());
+        let lost = zbus::Error::InputOutput(Arc::new(io::Error::other("Verbindung getrennt")));
+        assert!(ordered_reply_position(Err(lost), &portal).is_none());
+        Ok(())
     }
 
     #[tokio::test]
