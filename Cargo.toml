@@ -14,7 +14,6 @@ cxx = "1.0.194"
 cxx-qt = "0.10.0"
 cxx-qt-lib = { version = "0.10.0", features = ["qt_full"] }
 futures-util = "0.3.31"
-getrandom = "0.4.3"
 serde = { version = "1.0.219", features = ["derive"] }
 thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = ["macros", "rt", "sync", "time"] }
@@ -24,12 +23,7 @@ toml = "0.9.5"
 cxx-qt-build = { version = "0.10.0", features = ["link_qt_object_files"] }
 
 [profile.release]
-lto = false
-codegen-units = 16
 strip = true
-
-[lints.rust]
-unsafe_code = "allow"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -11,14 +11,11 @@ TestCase {
 
     Window { id: host; width: 400; height: 300; visible: true }
     PositionPicker { id: picker; hostWindow: host }
-    SignalSpy { id: cancelled; target: picker; signalName: "screenshotCancelled" }
-    SignalSpy { id: requested; target: picker; signalName: "screenshotRequested" }
     SignalSpy { id: finished; target: picker; signalName: "finished" }
     SignalSpy { id: picked; target: picker; signalName: "picked" }
 
     function init() {
-        picked.clear(); cancelled.clear(); requested.clear(); finished.clear()
-        picker.captureTimeoutMs = 20000
+        picked.clear(); finished.clear()
         host.show()
         host.requestActivate()
         tryCompare(host, "active", true)
@@ -27,7 +24,7 @@ TestCase {
     function begin() {
         host.requestActivate()
         tryVerify(function() { return host.active })
-        picker.begin(host.screen, 100, 150, false, false)
+        picker.begin(host.screen, 100, 150, false)
         tryCompare(picker, "inputReady", true)
         tryVerify(function() { return picker.active })
         wait(20)
@@ -159,7 +156,7 @@ TestCase {
             verify(fresh !== null)
             let result = null
             fresh.picked.connect(function(x, y) { result = { x: x, y: y } })
-            fresh.begin(screens[i], 40, 50, false, false)
+            fresh.begin(screens[i], 40, 50, false)
             tryCompare(fresh, "inputReady", true)
             tryVerify(function() { return fresh.active })
             compare(fresh.screen.name, screens[i].name)
@@ -176,7 +173,7 @@ TestCase {
     }
 
     function test_preview_does_not_modify_position() {
-        picker.begin(host.screen, 20, 30, true, false)
+        picker.begin(host.screen, 20, 30, true)
         tryCompare(picker, "inputReady", true)
         picker.confirm()
         compare(picked.count, 0)
@@ -184,104 +181,15 @@ TestCase {
         compare(host.visible, true)
     }
 
-    function test_capture_failure_falls_back() {
-        picker.begin(host.screen, 20, 30, false, true)
-        verify(picker.waitingForScreenshot)
-        picker.acceptScreenshot(picker.captureId, "", "denied")
-        tryCompare(picker, "inputReady", true)
-        verify(picker.captureError.length > 0)
-        verify(!picker.magnifierReady)
-        tryVerify(function() { return picker.active })
-        wait(20)
-        keyClick(Qt.Key_Return)
-        tryCompare(picked, "count", 1)
-        compare(host.visible, true)
-    }
-
-    function test_portal_cancel_continues_without_magnifier() {
-        picker.begin(host.screen, 20, 30, false, true)
-        const requestId = picker.captureId
-        tryCompare(requested, "count", 1)
-        picker.acceptScreenshot(requestId, "", "cancelled")
-        tryCompare(picker, "inputReady", true)
-        verify(picker.captureError.indexOf("ohne Lupe") >= 0)
-        compare(cancelled.count, 0)
-        tryVerify(function() { return picker.active })
-        wait(20)
-        keyClick(Qt.Key_Escape)
-        tryCompare(picker, "selecting", false)
-        compare(picked.count, 0)
-    }
-
-    function test_capture_timeout_restores_interactive_selection() {
-        compare(picker.captureTimeoutMs, 20000)
-        picker.captureTimeoutMs = 120
-        picker.begin(host.screen, 20, 30, false, true)
-        const requestId = picker.captureId
-        tryCompare(requested, "count", 1)
-        compare(requested.signalArguments[0][0], requestId)
-        tryCompare(picker, "inputReady", true, 1500)
-        compare(picker.waitingForScreenshot, false)
-        compare(cancelled.count, 1)
-        compare(cancelled.signalArguments[0][0], requestId)
-        picker.acceptScreenshot(requestId, "", "late response")
-        verify(picker.captureError.indexOf("zu lange") >= 0)
-        verify(picker.captureError.indexOf("Deny") >= 0)
-        verify(picker.captureError.indexOf("Verweigern") >= 0)
-        tryVerify(function() { return picker.active })
-        wait(20)
-        keyClick(Qt.Key_Escape)
-        tryCompare(picker, "selecting", false)
-        compare(host.visible, true)
-        compare(picked.count, 0)
-    }
-
-    function test_finish_is_idempotent_and_cancels_capture() {
-        picker.begin(host.screen, 20, 30, false, true)
+    function test_finish_is_idempotent() {
+        picker.begin(host.screen, 20, 30, false)
         picker.finish()
         picker.finish()
-        compare(cancelled.count, 1)
         compare(finished.count, 1)
-        compare(host.visible, true)
-    }
-
-    function test_capture_enables_magnifier_and_clears_on_finish() {
-        picker.begin(host.screen, 20, 30, false, true)
-        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'
-            + picker.desktopBounds.width + '" height="' + picker.desktopBounds.height
-            + '"><rect width="100%" height="100%" fill="blue"/></svg>'
-        picker.acceptScreenshot(picker.captureId, "data:image/svg+xml," + encodeURIComponent(svg), "")
-        tryCompare(picker, "magnifierReady", true)
-        tryCompare(picker, "inputReady", true)
-        picker.finish()
-        compare(picker.magnifierReady, false)
-    }
-
-    function test_wrong_capture_geometry_falls_back() {
-        picker.begin(host.screen, 20, 30, false, true)
-        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="1"/>'
-        picker.acceptScreenshot(picker.captureId, "data:image/svg+xml," + encodeURIComponent(svg), "")
-        tryVerify(function() { return picker.captureError.length > 0 })
-        compare(picker.magnifierReady, false)
-        verify(picker.inputReady)
-    }
-
-    function test_previous_capture_is_ignored() {
-        picker.begin(host.screen, 20, 30, false, true)
-        const previousId = picker.captureId
-        picker.finish()
-        picker.begin(host.screen, 20, 30, false, true)
-        picker.acceptScreenshot(previousId, "", "denied")
-        verify(picker.waitingForScreenshot)
-        compare(picker.visible, false)
-    }
-
-    function test_late_capture_does_not_reopen_picker() {
-        picker.begin(host.screen, 20, 30, false, true)
-        picker.finish()
-        picker.acceptScreenshot(picker.captureId, "", "denied")
         compare(picker.selecting, false)
         compare(picker.visible, false)
+        wait(50) // A late picker activation must not minimize the restored host.
         compare(host.visible, true)
+        verify(host.visibility !== Window.Minimized)
     }
 }
