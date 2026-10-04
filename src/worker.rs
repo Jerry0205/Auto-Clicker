@@ -10,14 +10,17 @@ use std::{
     time::Duration,
 };
 
-use ashpd::desktop::{
-    Session,
-    global_shortcuts::{
-        Activated, BindShortcutsOptions, ConfigureShortcutsOptions, GlobalShortcuts, NewShortcut,
-        ShortcutsChanged,
+use ashpd::{
+    desktop::{
+        Session,
+        global_shortcuts::{
+            Activated, BindShortcutsOptions, ConfigureShortcutsOptions, GlobalShortcuts,
+            NewShortcut, ShortcutsChanged,
+        },
     },
+    zbus::{self, message::Sequence},
 };
-use futures_util::{Stream, StreamExt, future};
+use futures_util::{FutureExt, Stream, StreamExt, future};
 use tokio::{
     runtime::{Builder, Runtime},
     sync::{
@@ -25,7 +28,7 @@ use tokio::{
         oneshot, watch,
     },
     task::JoinHandle,
-    time::{Instant, sleep_until, timeout},
+    time::{Instant, sleep, sleep_until, timeout},
 };
 
 use crate::{
@@ -258,12 +261,97 @@ struct HotkeyState {
     portal: Arc<GlobalShortcuts>,
     session: Arc<Session<GlobalShortcuts>>,
     events: Pin<Box<dyn Stream<Item = HotkeySignal> + Send>>,
+    start_barrier: StartBarrier<Sequence>,
 }
 
 enum HotkeySignal {
-    Activated(Activated),
+    /// A key press and where the hotkey connection received it.
+    Activated(Activated, Sequence),
     Changed(ShortcutsChanged),
     Closed,
+}
+
+/// A portal reply that resolves to the position at which it was received.
+type PortalReply<P> = Pin<Box<dyn std::future::Future<Output = P> + Send>>;
+
+/// Tells key presses from before the end of the latest run apart from new ones.
+///
+/// After a run ends, the worker reads a portal property over the hotkey
+/// connection. D-Bus delivers the messages of one sender in order, so every
+/// `Activated` signal the portal sent before its reply was received before
+/// it. Such an old press may still stop a run, but it never starts one.
+/// Key releases (`Deactivated`) are not subscribed and change nothing.
+struct StartBarrier<P> {
+    reply: Option<PortalReply<P>>,
+    /// Presses received before this position are older than the latest run end.
+    boundary: Option<P>,
+}
+
+impl<P: Copy + Ord> StartBarrier<P> {
+    const fn new() -> Self {
+        Self {
+            reply: None,
+            boundary: None,
+        }
+    }
+
+    /// Start over after a run ended. Until the reply arrives, every press is old.
+    fn arm(&mut self, reply: PortalReply<P>) {
+        self.reply = Some(reply);
+    }
+
+    /// Drive the outstanding request and record where its reply arrived.
+    async fn settle(&mut self) {
+        match self.reply.as_mut() {
+            Some(reply) => {
+                let boundary = reply.await;
+                self.reply = None;
+                self.boundary = Some(boundary);
+            }
+            None => future::pending().await,
+        }
+    }
+
+    /// Whether a press received at `position` is older than the latest run end.
+    fn is_old(&mut self, position: P) -> bool {
+        if let Some(reply) = self.reply.as_mut() {
+            // zbus completes a call before it queues anything received later.
+            // A reply that arrived before this press is therefore ready now.
+            match reply.now_or_never() {
+                Some(boundary) => {
+                    self.reply = None;
+                    self.boundary = Some(boundary);
+                }
+                None => return true,
+            }
+        }
+        self.boundary.is_some_and(|boundary| position < boundary)
+    }
+}
+
+/// Read a portal property over the hotkey connection and return where its
+/// reply arrived. Errors without a reply, such as a lost connection, are
+/// retried; the hotkey signals report the end of the session separately.
+async fn portal_reply_position(portal: zbus::Proxy<'static>) -> Sequence {
+    loop {
+        let reply = portal
+            .connection()
+            .call_method(
+                Some(portal.destination().clone()),
+                portal.path().clone(),
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(portal.interface().as_str(), "version"),
+            )
+            .await;
+        match reply {
+            // An error reply is ordered behind earlier signals as well.
+            Ok(reply) | Err(zbus::Error::MethodError(_, _, reply)) => {
+                return reply.recv_position();
+            }
+            Err(_) => sleep(PORTAL_CLOSE_TIMEOUT).await,
+        }
+    }
 }
 
 struct ActiveRun {
@@ -415,10 +503,17 @@ async fn wait_for_tick(deadline: Option<Instant>) {
     }
 }
 
+/// Wait for the next hotkey signal while driving the start barrier's request.
 async fn next_hotkey(stream: &mut Option<HotkeyState>) -> Option<HotkeySignal> {
-    match stream {
-        Some(state) => state.events.next().await,
-        None => future::pending().await,
+    let Some(state) = stream else {
+        return future::pending().await;
+    };
+    loop {
+        tokio::select! {
+            biased;
+            () = state.start_barrier.settle() => {}
+            signal = state.events.next() => return signal,
+        }
     }
 }
 
@@ -556,8 +651,21 @@ async fn run_worker(
         "Bereit – Hotkey wird eingerichtet …".to_owned(),
     ));
     (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
+    let mut ended_runs = machine.ended_runs();
 
     loop {
+        // A run ended, by Stop, key press, error or its last click. Key
+        // presses the portal has sent up to now may still be queued behind
+        // the busy worker. Ask for a new boundary before reading the next one.
+        if machine.ended_runs() != ended_runs {
+            ended_runs = machine.ended_runs();
+            if let Some(state) = hotkey.as_mut() {
+                let portal = zbus::Proxy::clone(&state.portal);
+                state
+                    .start_barrier
+                    .arm(Box::pin(portal_reply_position(portal)));
+            }
+        }
         let wake = next_wake(WakeSources {
             control: &mut control,
             click_session: &mut click_session,
@@ -695,7 +803,8 @@ async fn run_worker(
                     Ok(Ok(HotkeyRegistration { connection, portal, session, actual })) => {
                         // Bounded, so a stalled bus cannot delay a later Stop or Shutdown.
                         let streams = timeout(PORTAL_CLOSE_TIMEOUT, async {
-                            let activations = portal.receive_activated().await.map_err(|error| error.to_string())?;
+                            // Raw messages keep their receive position for the start barrier.
+                            let activations = portal.receive_signal("Activated").await.map_err(|error| error.to_string())?;
                             let changes = portal.receive_shortcuts_changed().await.map_err(|error| error.to_string())?;
                             Ok::<_, String>((activations, changes))
                         })
@@ -723,9 +832,13 @@ async fn run_worker(
                                     (emit)(WorkerEvent::Error("Die Hotkey-Sitzung kann nicht überwacht werden.".to_owned()));
                                     continue;
                                 }
+                                let activations = activations.filter_map(|message| {
+                                    let activation = message.body().deserialize::<Activated>().ok();
+                                    future::ready(activation.map(|activation| HotkeySignal::Activated(activation, message.recv_position())))
+                                });
                                 let events = futures_util::stream::select(
                                     futures_util::stream::select(
-                                        activations.map(HotkeySignal::Activated),
+                                        activations,
                                         changes.map(HotkeySignal::Changed),
                                     ),
                                     futures_util::stream::once(closed),
@@ -735,6 +848,7 @@ async fn run_worker(
                                     portal: Arc::new(portal),
                                     session,
                                     events: Box::pin(events),
+                                    start_barrier: StartBarrier::new(),
                                 });
                                 if let Some(actual) = actual {
                                     hotkey_bound = true;
@@ -796,11 +910,14 @@ async fn run_worker(
             }
             Wake::Hotkey(hotkey_event) => {
                 match hotkey_event {
-                    Some(HotkeySignal::Activated(activation)) if activation.shortcut_id() == HOTKEY_ID && hotkey_bound => {
+                    Some(HotkeySignal::Activated(activation, received)) if activation.shortcut_id() == HOTKEY_ID && hotkey_bound => {
                         if matches!(machine.state(), RunState::Starting | RunState::Clicking) {
+                            // Any press stops, also one from before the latest run end.
                             cancel_start(&mut start_task, &mut start_cancel).await;
                             stop_run(&mut machine, &mut active, &mut countdown, &emit);
-                        } else if configure_task.is_none() {
+                        } else if configure_task.is_none()
+                            && hotkey.as_mut().is_some_and(|state| !state.start_barrier.is_old(received))
+                        {
                             // Qt collects, validates and saves the current controls.
                             (emit)(WorkerEvent::StartRequested);
                         }
@@ -821,7 +938,7 @@ async fn run_worker(
                             (emit)(WorkerEvent::Error("Der globale Stop-Hotkey wurde entfernt.".to_owned()));
                         }
                     }
-                    Some(HotkeySignal::Activated(_)) => {}
+                    Some(HotkeySignal::Activated(..)) => {}
                     Some(HotkeySignal::Closed) | None => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         abort_run(&mut machine, &mut active, &mut countdown, &emit);
@@ -1069,6 +1186,39 @@ mod tests {
     async fn session_closed_before_registration_is_not_ready() {
         let (_ready_tx, ready_rx) = oneshot::channel();
         assert!(!register_hotkey_watcher(ready_rx, async { HotkeySignal::Closed }).await);
+    }
+
+    #[test]
+    fn start_barrier_separates_presses_at_the_reply() {
+        let mut barrier = StartBarrier::<u64>::new();
+        // Before any run has ended, every press may start one.
+        assert!(!barrier.is_old(1));
+        // While the reply is outstanding, every press counts as old.
+        let (reply_tx, reply_rx) = oneshot::channel();
+        barrier.arm(Box::pin(async move { reply_rx.await.unwrap_or(u64::MAX) }));
+        assert!(barrier.is_old(5));
+        assert!(barrier.is_old(50));
+        // A reply that is already there decides at once, without a wakeup.
+        assert_eq!(reply_tx.send(10), Ok(()));
+        assert!(barrier.is_old(9));
+        assert!(!barrier.is_old(11));
+        // A later run end moves the boundary on.
+        barrier.arm(Box::pin(future::ready(20)));
+        assert!(barrier.is_old(15));
+        assert!(!barrier.is_old(21));
+    }
+
+    #[tokio::test]
+    async fn start_barrier_settles_without_a_key_press() {
+        let mut barrier = StartBarrier::<u64>::new();
+        // Nothing to drive: settling must not return, or the hotkey wait would spin.
+        assert!(barrier.settle().now_or_never().is_none());
+        barrier.arm(Box::pin(future::ready(7)));
+        barrier.settle().await;
+        assert!(barrier.reply.is_none());
+        assert!(barrier.is_old(6));
+        assert!(!barrier.is_old(8));
+        assert!(barrier.settle().now_or_never().is_none());
     }
 
     fn settings() -> ClickSettings {
