@@ -57,7 +57,7 @@ Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
 4. Starte den Klicker mit dem Hotkey.
 5. Drücke den Hotkey erneut, um ihn zu stoppen.
 
-Hotkey-Betätigungen, die sich während eines Laufs angestaut haben, etwa weil KWin einen Klick verzögert bestätigt, können den Lauf noch beenden, aber nach dem Stopp keinen neuen Lauf starten. Die nächste Betätigung danach startet wie gewohnt.
+Hotkey-Betätigungen, die sich während eines Laufs angestaut haben, etwa weil ein Klick über das Portal verzögert bestätigt wird, können den Lauf noch beenden, aber nach dem Stopp keinen neuen Lauf starten. Die nächste Betätigung danach startet wie gewohnt.
 
 Wenn du mit der Schaltfläche **Starten** an der aktuellen Cursorposition beginnst, startet nach der Wayland-Freigabe ein sichtbarer Countdown von drei Sekunden. Bewege den Mauszeiger in dieser Zeit zum Ziel. **Start abbrechen** oder der globale Hotkey beendet den Countdown ohne Klick. Beim Start per Hotkey und bei einer festen Position beginnt der Klicker nach der Freigabe sofort: Beim Hotkey steht der Zeiger bereits am gewünschten Ort, bei einer festen Position setzt der Klicker ihn selbst auf das Ziel.
 
