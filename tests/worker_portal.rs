@@ -53,6 +53,7 @@ struct Observed {
     delay_button: bool,
     button_seen: Arc<Notify>,
     button_release: Arc<Notify>,
+    version_reads: usize,
 }
 type Shared = Arc<Mutex<Observed>>;
 
@@ -170,8 +171,13 @@ async fn create(
 struct FakeHotkeys(Shared);
 #[zbus::interface(name = "org.freedesktop.portal.GlobalShortcuts", crate = "ashpd::zbus")]
 impl FakeHotkeys {
+    /// Count reads, so a test can tell when the worker has asked for it.
     #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version_reads += 1;
         2
     }
 
@@ -1221,8 +1227,9 @@ fn continuous() -> ClickSettings {
     }
 }
 
-/// Start a run, hold its first press and fill all 16 command slots meanwhile.
-async fn fill_queue_during_held_click(
+/// Start a continuous run and hold its first press, so the worker stays
+/// inside that click until the returned notification releases it.
+async fn hold_first_click(
     worker: &WorkerHandle,
     observed: &Shared,
     events: &mut mpsc::UnboundedReceiver<WorkerEvent>,
@@ -1238,6 +1245,16 @@ async fn fill_queue_during_held_click(
     })
     .await?;
     timeout(Duration::from_secs(3), seen.notified()).await?;
+    Ok(release)
+}
+
+/// Start a run, hold its first press and fill all 16 command slots meanwhile.
+async fn fill_queue_during_held_click(
+    worker: &WorkerHandle,
+    observed: &Shared,
+    events: &mut mpsc::UnboundedReceiver<WorkerEvent>,
+) -> Result<Arc<Notify>, Box<dyn std::error::Error>> {
+    let release = hold_first_click(worker, observed, events).await?;
     // The Start button sends StartFromButton; such starts must be outdated
     // by a later Stop just like hotkey starts.
     for _ in 0..16 {
@@ -1583,4 +1600,296 @@ async fn button_countdown_delays_first_click_and_stop_cancels_it() -> TestResult
     result?;
     service.close().await?;
     Ok(())
+}
+
+fn hotkey_session(observed: &Shared) -> Result<OwnedObjectPath, Box<dyn std::error::Error>> {
+    let session = observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .hotkey_session
+        .clone();
+    Ok(OwnedObjectPath::try_from(session)?)
+}
+
+/// Send `Activated` (key press) or `Deactivated` (release) for the toggle shortcut.
+async fn shortcut_signal(
+    service: &zbus::Connection,
+    session: &OwnedObjectPath,
+    signal: &str,
+    timestamp: u64,
+) -> TestResult {
+    service
+        .emit_signal(
+            None::<&str>,
+            PATH,
+            "org.freedesktop.portal.GlobalShortcuts",
+            signal,
+            &(session, "toggle-clicking", timestamp, Options::new()),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Press and release the shortcut `count` times, numbering from `first`.
+async fn key_presses(
+    service: &zbus::Connection,
+    session: &OwnedObjectPath,
+    first: u64,
+    count: u64,
+) -> TestResult {
+    for timestamp in first..first + count {
+        shortcut_signal(service, session, "Activated", timestamp).await?;
+        shortcut_signal(service, session, "Deactivated", timestamp).await?;
+    }
+    Ok(())
+}
+
+fn version_reads(observed: &Shared) -> usize {
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .version_reads
+}
+
+/// Give the worker's request after the end of a run time to be answered,
+/// so a following key press is sent after that answer. Without such a
+/// request this only waits, so the test also runs against older workers.
+async fn wait_for_ordering_reply(observed: &Shared, reads_before: usize) {
+    let _ = timeout(Duration::from_millis(500), async {
+        while version_reads(observed) <= reads_before {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    // The fake portal sends its reply right after the property getter.
+    sleep(Duration::from_millis(50)).await;
+}
+
+fn start_requests(events: &[WorkerEvent]) -> usize {
+    events
+        .iter()
+        .filter(|e| matches!(e, WorkerEvent::StartRequested))
+        .count()
+}
+
+/// Issue #18: key presses that the portal sent while the worker was held in
+/// a click are still queued after Stop. None of them may start a new run,
+/// whether the Stop button or the first of these presses stopped the run.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn buffered_key_presses_before_stop_must_not_restart() -> TestResult {
+    let mut failures = Vec::new();
+    for stop_button in [true, false] {
+        if let Err(error) =
+            retry_if_click_window_missed(|| buffered_key_presses_once(stop_button)).await
+        {
+            let stop = if stop_button {
+                "Stop button"
+            } else {
+                "key press"
+            };
+            failures.push(format!("Stop by {stop}: {error}"));
+        }
+    }
+    ensure(failures.is_empty(), &failures.join("; "))
+}
+
+async fn buffered_key_presses_once(stop_button: bool) -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let session = hotkey_session(&observed)?;
+        let release = hold_first_click(&worker, &observed, &mut events).await?;
+        // All 40 signals are sent before Stop, while the worker waits for the click.
+        key_presses(&service, &session, 1, 20).await?;
+        sleep(Duration::from_millis(20)).await;
+        if stop_button {
+            worker.send(Command::Stop)?;
+        }
+        release_held_click(&observed, &release);
+        let stopped = events_until(&mut events, |e| {
+            matches!(
+                e,
+                WorkerEvent::State(RunState::Stopped) | WorkerEvent::Error(_)
+            )
+        })
+        .await?;
+        if let Some(WorkerEvent::Error(error)) = stopped.last() {
+            return Err(error.clone().into());
+        }
+        sleep(Duration::from_millis(200)).await;
+        let later: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        let stale_starts = start_requests(&later);
+        if stale_starts > 0 {
+            // Answer a request exactly as the idle controller does.
+            worker.send(Command::Start(continuous()))?;
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::State(RunState::Clicking))
+            })
+            .await?;
+            return Err(format!(
+                "Restart confirmed after Stop; {stale_starts} start requests from old key presses"
+            )
+            .into());
+        }
+        ensure(
+            run_states(&later).is_empty(),
+            &format!("old key presses must not change the stopped run: {later:?}"),
+        )
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+/// A new key press after Stop starts at once. Neither the first press after
+/// Stop is swallowed nor is a release signal needed before it.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn key_press_after_stop_starts_again() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let session = hotkey_session(&observed)?;
+        // Start by key press and stop with the button while the key is held.
+        shortcut_signal(&service, &session, "Activated", 1).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        let reads = version_reads(&observed);
+        worker.send(Command::Stop)?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        shortcut_signal(&service, &session, "Deactivated", 1).await?;
+        wait_for_ordering_reply(&observed, reads).await;
+        // The next press starts again.
+        shortcut_signal(&service, &session, "Activated", 2).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        // A press during the run stops it, and the very next press starts
+        // again without a release signal in between.
+        let reads = version_reads(&observed);
+        shortcut_signal(&service, &session, "Activated", 3).await?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        wait_for_ordering_reply(&observed, reads).await;
+        shortcut_signal(&service, &session, "Activated", 4).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::StartRequested)).await?;
+        Ok(())
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+/// Hotkey changes and the end of the hotkey session that queue up behind
+/// old key presses are still handled. 80 presses exceed the 64 signals the
+/// D-Bus connection queues per subscription.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn shortcut_change_and_closure_behind_old_key_presses_are_handled() -> TestResult {
+    retry_if_click_window_missed(changes_behind_key_presses_once).await
+}
+
+async fn changes_behind_key_presses_once() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let session = hotkey_session(&observed)?;
+        // A changed trigger between old presses, then the Stop button.
+        let release = hold_first_click(&worker, &observed, &mut events).await?;
+        key_presses(&service, &session, 1, 40).await?;
+        shortcuts_changed(&service, session.as_str(), "F8").await?;
+        key_presses(&service, &session, 41, 40).await?;
+        worker.send(Command::Stop)?;
+        release_held_click(&observed, &release);
+        let changed = events_until(
+            &mut events,
+            |e| matches!(e, WorkerEvent::Hotkey(hotkey) if hotkey == "F8"),
+        )
+        .await?;
+        sleep(Duration::from_millis(200)).await;
+        let later: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        ensure(
+            run_states(&changed) == [RunState::Stopped]
+                && run_states(&later).is_empty()
+                && start_requests(&changed) + start_requests(&later) == 0,
+            &format!("only the change may follow the old presses: {changed:?} {later:?}"),
+        )?;
+
+        // The end of the hotkey session behind old presses, without the button.
+        let release = hold_first_click(&worker, &observed, &mut events).await?;
+        key_presses(&service, &session, 81, 80).await?;
+        service
+            .emit_signal(
+                None::<&str>,
+                session.as_str(),
+                "org.freedesktop.portal.Session",
+                "Closed",
+                &(Options::new(),),
+            )
+            .await?;
+        release_held_click(&observed, &release);
+        let closed = events_until(
+            &mut events,
+            |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey-Sitzung")),
+        )
+        .await?;
+        sleep(Duration::from_millis(200)).await;
+        let later: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        ensure(
+            closed
+                .iter()
+                .any(|e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable)))
+                && run_states(&closed).first() == Some(&RunState::Stopped)
+                && !run_states(&closed).contains(&RunState::Clicking)
+                && run_states(&later).is_empty()
+                && start_requests(&closed) + start_requests(&later) == 0,
+            &format!("the session end must stop without a restart: {closed:?} {later:?}"),
+        )
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
 }
