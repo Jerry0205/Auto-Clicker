@@ -1813,6 +1813,72 @@ async fn key_press_after_stop_starts_again() -> TestResult {
     result
 }
 
+/// The hotkey stays a reliable Stop: an old key press cannot start a run,
+/// but it still stops one, here a start sent after the Stop that the
+/// worker handles before the queued presses.
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn old_key_press_still_stops_a_newer_run() -> TestResult {
+    retry_if_click_window_missed(old_key_press_stops_once).await
+}
+
+async fn old_key_press_stops_once() -> TestResult {
+    let _bus_guard = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        let session = hotkey_session(&observed)?;
+        let release = hold_first_click(&worker, &observed, &mut events).await?;
+        key_presses(&service, &session, 1, 5).await?;
+        sleep(Duration::from_millis(20)).await;
+        worker.send(Command::Stop)?;
+        worker.send(Command::Start(continuous()))?;
+        release_held_click(&observed, &release);
+        let restarted = events_until(&mut events, |e| {
+            matches!(
+                e,
+                WorkerEvent::State(RunState::Clicking) | WorkerEvent::Error(_)
+            )
+        })
+        .await?;
+        if let Some(WorkerEvent::Error(error)) = restarted.last() {
+            return Err(error.clone().into());
+        }
+        ensure(
+            run_states(&restarted) == [RunState::Stopped, RunState::Starting, RunState::Clicking],
+            &format!("the Stop and the later start must both apply: {restarted:?}"),
+        )?;
+        let stopped = timeout(
+            Duration::from_secs(1),
+            events_until(&mut events, |e| {
+                matches!(e, WorkerEvent::State(RunState::Stopped))
+            }),
+        )
+        .await
+        .map_err(|_| "an old key press must still stop the newer run")??;
+        sleep(Duration::from_millis(200)).await;
+        let later: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        ensure(
+            run_states(&stopped) == [RunState::Stopped]
+                && run_states(&later).is_empty()
+                && start_requests(&stopped) + start_requests(&later) == 0,
+            &format!("the remaining old presses must not restart: {stopped:?} {later:?}"),
+        )
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
 /// Hotkey changes and the end of the hotkey session that queue up behind
 /// old key presses are still handled. 80 presses exceed the 64 signals the
 /// D-Bus connection queues per subscription.
