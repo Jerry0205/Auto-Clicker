@@ -380,8 +380,8 @@ TestCase {
         const y = findChild(main, "yInput")
         verify(x !== null)
         verify(y !== null)
-        compare(x.Accessible.name, "X-Koordinate auf dem gewählten Monitor")
-        compare(y.Accessible.name, "Y-Koordinate auf dem gewählten Monitor")
+        compare(x.Accessible.name, "X-Koordinate auf dem gewählten Bildschirm")
+        compare(y.Accessible.name, "Y-Koordinate auf dem gewählten Bildschirm")
         compare(x.contentItem.Accessible.name, x.Accessible.name)
         compare(y.contentItem.Accessible.name, y.Accessible.name)
     }
@@ -419,9 +419,9 @@ TestCase {
             controller.interval_ms = scenario.interval
             controller.click_type = scenario.type
             tryCompare(rateLabel, "text", scenario.expected)
-            controller.status = "Klickt"
+            controller.status = "Klicken aktiv"
             controller.running = true
-            compare(statusLabel.text, "Status: Klickt · " + scenario.expected)
+            compare(statusLabel.text, "Status: Klicken aktiv · " + scenario.expected)
             controller.running = false
         }
     }
@@ -452,7 +452,7 @@ TestCase {
 
         controller.hotkey_ready = true
         controller.hotkey_configuring = true
-        compare(status.text, "Öffnet Dialog …")
+        compare(status.text, "Dialog öffnet …")
         compare(retry.enabled, false)
         compare(start.enabled, false)
 
@@ -486,7 +486,7 @@ TestCase {
         controller.fixed_position_confirmed = false
         // Keep scrolling necessary even with smaller CI fonts and icon themes.
         controller.error_message = Array(16).join("Ein Portalfehler mit zusätzlicher Beschreibung. ")
-        controller.status = data.busy ? "Warte auf Wayland-Berechtigung …" : (data.running ? "Klickt" : "Bereit")
+        controller.status = data.busy ? "Warte auf Freigabe für Maussteuerung …" : (data.running ? "Klicken aktiv" : "Bereit")
         controller.hotkey_ready = data.ready
         controller.hotkey_pending = data.pending
         controller.busy = data.busy

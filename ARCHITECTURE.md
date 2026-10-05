@@ -11,7 +11,7 @@ Jeder Startbefehl liefert die aktuellen, validierten Einstellungen. Eine aussteh
 
 ## Wayland-Backend
 
-- `org.freedesktop.portal.RemoteDesktop`: Fordert ausschließlich `POINTER` an und sendet Linux-evdev-Buttoncodes. Der Modus „aktuelle Cursorposition“ bewegt oder liest den Cursor nicht.
+- `org.freedesktop.portal.RemoteDesktop`: Fordert ausschließlich `POINTER` an und sendet Linux-evdev-Buttoncodes. Der Modus „Aktuelle Mauszeigerposition“ bewegt oder liest den Cursor nicht.
 - `org.freedesktop.portal.ScreenCast`: Wird nur für eine feste Position mit genau einem Monitor und verborgenem Cursor kombiniert. Es wird kein PipeWire-Remote geöffnet und kein Bildframe gelesen. Der Stream dient ausschließlich als Koordinatenreferenz für `NotifyPointerMotionAbsolute`.
 - `org.freedesktop.portal.GlobalShortcuts`: Bindet eine Toggle-Aktion mit Pause als bevorzugtem Trigger. KWin entscheidet über die tatsächliche Belegung und zeigt seinen eigenen Berechtigungsdialog.
 
@@ -25,7 +25,7 @@ Während der Worker auf einen Klick wartet, stauen sich Hotkey-Signale in der Ho
 
 ## Lebensdauer
 
-Das Schließen des Fensters fordert über das priorisierte Signal das Ende des Workers an und wartet höchstens 5 Sekunden, bis sein Thread endet. Der Worker verlässt seine Schleife und klickt danach nicht mehr; ein bereits laufender Klick wird noch abgeschlossen. Anschließend bricht er ausstehende Anfragen ab und schließt RemoteDesktop- und GlobalShortcuts-Sitzungen selbst mit begrenzter Wartezeit. Endet er nicht innerhalb der 5 Sekunden, arbeitet der Qt-Thread ohne ihn weiter, und der Worker räumt im Hintergrund zu Ende auf. Seine späten Ereignisse verwirft der Controller über die Worker-Epoche. Das gilt auch, wenn nach einem Speicherfehler „Weiter bearbeiten“ einen neuen Worker startet, während der alte noch aufräumt. Schließt sich das Fenster, beendet das Prozessende auch diesen Thread. Es werden keine Kindprozesse gestartet. Ein Prozessabbruch trennt die D-Bus-Verbindung, wodurch der Portal-Backendbesitzer die Sitzungen ebenfalls verwirft.
+Das Schließen des Fensters fordert über das priorisierte Signal das Ende des Workers an und wartet höchstens 5 Sekunden, bis sein Thread endet. Der Worker verlässt seine Schleife und klickt danach nicht mehr; ein bereits laufender Klick wird noch abgeschlossen. Anschließend bricht er ausstehende Anfragen ab und schließt RemoteDesktop- und GlobalShortcuts-Sitzungen selbst mit begrenzter Wartezeit. Endet er nicht innerhalb der 5 Sekunden, arbeitet der Qt-Thread ohne ihn weiter, und der Worker räumt im Hintergrund zu Ende auf. Seine späten Ereignisse verwirft der Controller über die Worker-Epoche. Das gilt auch, wenn nach einem Speicherfehler „Zurück zur Anwendung“ einen neuen Worker startet, während der alte noch aufräumt. Schließt sich das Fenster, beendet das Prozessende auch diesen Thread. Es werden keine Kindprozesse gestartet. Ein Prozessabbruch trennt die D-Bus-Verbindung, wodurch der Portal-Backendbesitzer die Sitzungen ebenfalls verwirft.
 
 ## Positionsauswahl
 

@@ -248,7 +248,7 @@ Kirigami.ApplicationWindow {
         objectName: "saveFailureDialog"
         modal: true
         closePolicy: Controls.Popup.NoAutoClose
-        title: qsTr("Einstellungen konnten nicht gespeichert werden")
+        title: qsTr("Einstellungen nicht gespeichert")
         width: Math.min(root.width - 32, 440)
         x: (root.width - width) / 2
         y: (root.height - height) / 2
@@ -264,7 +264,7 @@ Kirigami.ApplicationWindow {
             }
             Controls.Label {
                 Layout.fillWidth: true
-                text: qsTr("„Weiter bearbeiten“ startet den Hintergrunddienst neu. Der Stop-Hotkey wird dabei sofort neu eingerichtet, sodass KDE erneut nach der Hotkey-Freigabe fragen kann. Die Wayland-Freigabe zum Klicken wird beim nächsten Klickstart neu angefragt.")
+                text: qsTr("Beim Fortsetzen fragt KDE erneut nach der Freigabe für das Tastenkürzel. Die Freigabe für die Maussteuerung folgt beim nächsten Start.")
                 wrapMode: Text.WordWrap
                 color: Kirigami.Theme.disabledTextColor
             }
@@ -273,7 +273,7 @@ Kirigami.ApplicationWindow {
                 Controls.Button {
                     objectName: "continueEditingButton"
                     Layout.fillWidth: true
-                    text: qsTr("Weiter bearbeiten")
+                    text: qsTr("Zurück zur Anwendung")
                     onClicked: {
                         saveFailureDialog.close()
                         controller.initialize()
@@ -350,7 +350,7 @@ Kirigami.ApplicationWindow {
     }
 
     pageStack.initialPage: Kirigami.ScrollablePage {
-        title: qsTr("Auto Clicker")
+        title: qsTr("Automatisch klicken")
 
         ColumnLayout {
             spacing: Kirigami.Units.largeSpacing
@@ -383,13 +383,13 @@ Kirigami.ApplicationWindow {
                 Layout.fillWidth: true
                 visible: false
                 type: Kirigami.MessageType.Warning
-                text: qsTr("Klicken wurde gestoppt, weil sich der Monitor der festen Position geändert hat. Bitte Position prüfen und neu starten.")
+                text: qsTr("Klicken gestoppt: Der Bildschirm der festen Position hat sich geändert. Prüfe die Position vor dem nächsten Start.")
                 showCloseButton: true
             }
 
             Controls.GroupBox {
                 Layout.fillWidth: true
-                title: qsTr("Intervall")
+                title: qsTr("Klickintervall")
                 enabled: root.controlsEnabled
 
                 RowLayout {
@@ -425,7 +425,7 @@ Kirigami.ApplicationWindow {
 
             Controls.GroupBox {
                 Layout.fillWidth: true
-                title: qsTr("Klick")
+                title: qsTr("Maustaste und Klickart")
                 enabled: root.controlsEnabled
 
                 RowLayout {
@@ -441,17 +441,17 @@ Kirigami.ApplicationWindow {
                     Controls.ComboBox {
                         objectName: "clickTypeInput"
                         Layout.fillWidth: true
-                        model: [qsTr("Einfach"), qsTr("Doppelt")]
+                        model: [qsTr("Einzelklick"), qsTr("Doppelklick")]
                         currentIndex: controller.click_type
                         onActivated: { controller.click_type = currentIndex; controller.mark_settings_changed() }
-                        Accessible.name: qsTr("Klicktyp")
+                        Accessible.name: qsTr("Klickart")
                     }
                 }
             }
 
             Controls.GroupBox {
                 Layout.fillWidth: true
-                title: qsTr("Wiederholen")
+                title: qsTr("Wiederholungen")
                 enabled: root.controlsEnabled
 
                 ColumnLayout {
@@ -483,19 +483,25 @@ Kirigami.ApplicationWindow {
                             Accessible.name: qsTr("Anzahl der Klickzyklen")
                         }
                     }
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Ein Zyklus entspricht einem Einzel- oder Doppelklick.")
+                        wrapMode: Text.WordWrap
+                        color: Kirigami.Theme.disabledTextColor
+                    }
                 }
             }
 
             Controls.GroupBox {
                 Layout.fillWidth: true
-                title: qsTr("Position")
+                title: qsTr("Klickposition")
                 enabled: root.controlsEnabled
 
                 ColumnLayout {
                     anchors.fill: parent
                     Controls.RadioButton {
                         objectName: "currentPositionInput"
-                        text: qsTr("Aktuelle Cursorposition")
+                        text: qsTr("Aktuelle Mauszeigerposition")
                         checked: controller.current_position
                         onToggled: if (checked) controller.current_position = true
                         onClicked: controller.mark_settings_changed()
@@ -513,7 +519,7 @@ Kirigami.ApplicationWindow {
                         Controls.SpinBox {
                             id: xInput
                             objectName: "xInput"
-                            Accessible.name: qsTr("X-Koordinate auf dem gewählten Monitor")
+                            Accessible.name: qsTr("X-Koordinate auf dem gewählten Bildschirm")
                             Layout.fillWidth: true
                             from: 0
                             to: Math.max(0, controller.monitor_width - 1)
@@ -526,7 +532,7 @@ Kirigami.ApplicationWindow {
                         Controls.SpinBox {
                             id: yInput
                             objectName: "yInput"
-                            Accessible.name: qsTr("Y-Koordinate auf dem gewählten Monitor")
+                            Accessible.name: qsTr("Y-Koordinate auf dem gewählten Bildschirm")
                             Layout.fillWidth: true
                             from: 0
                             to: Math.max(0, controller.monitor_height - 1)
@@ -538,7 +544,7 @@ Kirigami.ApplicationWindow {
                     }
                     RowLayout {
                         enabled: !controller.current_position
-                        Controls.Label { text: qsTr("Monitor") }
+                        Controls.Label { text: qsTr("Bildschirm") }
                         Controls.ComboBox {
                             id: monitorInput
                             objectName: "monitorInput"
@@ -553,27 +559,27 @@ Kirigami.ApplicationWindow {
                                 root.ensureMonitorSelection()
                             }
                             onActivated: root.selectMonitor(model[currentIndex].screen)
-                            Accessible.name: qsTr("Monitor für die feste Position")
+                            Accessible.name: qsTr("Bildschirm für die feste Position")
                         }
                     }
                     Controls.Button {
                         Layout.fillWidth: true
                         enabled: !controller.current_position
-                        text: qsTr("Position wählen / Neu wählen …")
+                        text: qsTr("Position wählen …")
                         icon.name: "crosshairs"
                         onClicked: root.beginPicker(false)
                     }
                     Controls.Label {
                         Layout.fillWidth: true
                         visible: !controller.current_position && !controller.fixed_position_confirmed
-                        text: qsTr("Gespeicherte Position nicht zugeordnet. Bitte Monitor bestätigen oder eine neue Position wählen.")
+                        text: qsTr("Die Position muss bestätigt werden. Prüfe Bildschirm und Koordinaten oder wähle eine neue Position.")
                         wrapMode: Text.WordWrap
                     }
                     Controls.Button {
                         objectName: "confirmMonitorButton"
                         visible: !controller.current_position && !controller.fixed_position_confirmed
                         enabled: !!root.selectedMonitor
-                        text: qsTr("Monitor und Koordinaten bestätigen")
+                        text: qsTr("Position bestätigen")
                         onClicked: root.confirmMonitor()
                     }
                     Controls.Label {
@@ -596,24 +602,24 @@ Kirigami.ApplicationWindow {
                         visible: !controller.current_position
                         wrapMode: Text.WordWrap
                         color: Kirigami.Theme.disabledTextColor
-                        text: qsTr("Koordinaten gelten innerhalb dieses Monitors. Wähle beim Start im KWin-Dialog denselben Monitor; die Freigabe wird vor dem Klicken geprüft.")
+                        text: qsTr("Die Koordinaten beziehen sich auf diesen Bildschirm. Gib beim Start im KDE-Dialog denselben Bildschirm frei.")
                     }
                 }
             }
 
             Controls.GroupBox {
                 Layout.fillWidth: true
-                title: qsTr("Globaler Hotkey")
+                title: qsTr("Tastenkürzel")
 
                 RowLayout {
                     anchors.fill: parent
                     Controls.Label {
-                        text: qsTr("Start / Stop")
+                        text: qsTr("Start / Stopp")
                     }
                     Item { Layout.fillWidth: true }
                     Controls.Label {
                         objectName: "hotkeyStatusLabel"
-                        text: controller.hotkey_configuring ? qsTr("Öffnet Dialog …") :
+                        text: controller.hotkey_configuring ? qsTr("Dialog öffnet …") :
                               controller.hotkey_pending ? qsTr("Wird eingerichtet …") :
                                   (controller.hotkey_ready ? controller.hotkey : qsTr("Nicht verfügbar"))
                         font.bold: true

@@ -48,7 +48,7 @@ def combo(name, index):
     key(0x20)
     label = {
         "Maustaste": ["Links", "Rechts", "Mitte"],
-        "Klicktyp": ["Einfach", "Doppelt"],
+        "Klickart": ["Einzelklick", "Doppelklick"],
     }[name][index]
     wait_for(
         lambda: any(

@@ -14,8 +14,8 @@ from gi.repository import Atspi  # noqa: E402 -- require_version must run first
 
 ROOT = Path(__file__).resolve().parents[1]
 NAMES = (
-    "X-Koordinate auf dem gewählten Monitor",
-    "Y-Koordinate auf dem gewählten Monitor",
+    "X-Koordinate auf dem gewählten Bildschirm",
+    "Y-Koordinate auf dem gewählten Bildschirm",
 )
 ROLES = {Atspi.Role.SPIN_BUTTON, Atspi.Role.TEXT}
 

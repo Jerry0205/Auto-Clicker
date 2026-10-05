@@ -2,8 +2,9 @@
 Type=Application
 Name=Klickmeister
 GenericName=Auto Clicker
-Comment=Safe auto clicker for KDE Plasma Wayland
-Comment[de]=Sicherer Auto Clicker für KDE Plasma Wayland
+GenericName[de]=Auto-Clicker
+Comment=Automate repeated mouse clicks on KDE Plasma
+Comment[de]=Wiederholte Mausklicks unter KDE Plasma automatisieren
 Exec=klickmeister
 Icon=io.github.jerry0205.klickmeister
 Terminal=false

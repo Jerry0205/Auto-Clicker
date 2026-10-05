@@ -2,7 +2,7 @@
 pkgname=klickmeister
 pkgver=0.1.2
 pkgrel=2
-pkgdesc='Small, safe auto clicker for KDE Plasma Wayland'
+pkgdesc='Auto clicker for KDE Plasma on Wayland'
 arch=('x86_64')
 url='https://github.com/jerry0205/Auto-Clicker'
 license=('MIT')

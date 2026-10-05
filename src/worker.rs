@@ -50,7 +50,7 @@ const PORTAL_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 const HOTKEY_ID: &str = "toggle-clicking";
 const BUTTON_START_DELAY_SECS: u8 = 3;
-const WORKER_STOPPED: &str = "Der Hintergrund-Worker läuft nicht mehr.";
+const WORKER_STOPPED: &str = "Die Klicksteuerung wurde beendet. Starte Klickmeister neu.";
 
 #[derive(Debug)]
 pub enum Command {
@@ -161,7 +161,7 @@ impl WorkerHandle {
     /// Queue Start and ConfigureHotkey; Stop and Shutdown never wait for queue space.
     pub fn send(&self, command: Command) -> Result<(), &'static str> {
         if self.closing.load(Ordering::Acquire) {
-            return Err("Die Anwendung wird bereits beendet.");
+            return Err("Klickmeister wird geschlossen.");
         }
         let command = match command {
             Command::Stop => {
@@ -188,7 +188,7 @@ impl WorkerHandle {
             Command::ConfigureHotkey(preferred) => QueuedCommand::ConfigureHotkey(preferred),
         };
         self.tx.try_send(command).map_err(|error| match error {
-            TrySendError::Full(_) => "Der interne Befehlskanal ist ausgelastet.",
+            TrySendError::Full(_) => "Klickmeister ist ausgelastet. Versuche es erneut.",
             TrySendError::Closed(_) => WORKER_STOPPED,
         })
     }
@@ -202,8 +202,8 @@ impl WorkerHandle {
     pub fn shutdown(self) {
         if !self.shutdown_within(SHUTDOWN_WAIT) {
             eprintln!(
-                "Der Hintergrund-Worker hat sich nicht innerhalb von 5 s beendet. \
-                 Er klickt nicht mehr und schließt seine Portal-Sitzungen im Hintergrund."
+                "Klicken beendet. Das Schließen der Freigaben dauert länger als 5 s \
+                 und wird im Hintergrund fortgesetzt."
             );
         }
     }
@@ -241,7 +241,7 @@ impl Drop for WorkerHandle {
 
 fn worker_start_failed(error: &dyn fmt::Display) -> WorkerEvent {
     WorkerEvent::Error(format!(
-        "Der Hintergrund-Worker konnte nicht starten: {error}"
+        "Die Klicksteuerung konnte nicht gestartet werden: {error}"
     ))
 }
 
@@ -406,22 +406,26 @@ async fn setup_hotkey(
 ) -> Result<HotkeyRegistration, String> {
     let connection = tokio::select! {
         biased;
-        _ = &mut cancel => return Err("Hotkey-Anfrage abgebrochen.".to_owned()),
-        result = ashpd::zbus::Connection::session() => result.map_err(|error| error.to_string())?,
+        _ = &mut cancel => return Err("Die Freigabe für das Tastenkürzel wurde abgebrochen.".to_owned()),
+        result = ashpd::zbus::Connection::session() => result.map_err(|error| format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}"))?,
     };
     let mut session = None;
     let operation = async {
         let portal = GlobalShortcuts::with_connection(connection.clone())
             .await
-            .map_err(|error| format!("GlobalShortcuts-Portal nicht verfügbar: {error}"))?;
+            .map_err(|error| format!("Tastenkürzel sind nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {error}"))?;
         session = Some(
             portal
                 .create_session(Default::default())
                 .await
-                .map_err(|error| format!("Hotkey-Sitzung konnte nicht erstellt werden: {error}"))?,
+                .map_err(|error| {
+                    format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}")
+                })?,
         );
-        let owned_session = session.as_ref().ok_or("Hotkey-Sitzung fehlt.")?;
-        let shortcut = NewShortcut::new(HOTKEY_ID, "Auto Clicker starten oder stoppen")
+        let owned_session = session
+            .as_ref()
+            .ok_or("Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.")?;
+        let shortcut = NewShortcut::new(HOTKEY_ID, "Automatisches Klicken starten oder stoppen")
             .preferred_trigger(Some(preferred_hotkey.as_str()));
         let response = portal
             .bind_shortcuts(
@@ -431,21 +435,25 @@ async fn setup_hotkey(
                 BindShortcutsOptions::default(),
             )
             .await
-            .map_err(|error| format!("Hotkey konnte nicht angefragt werden: {error}"))?
+            .map_err(|error| {
+                format!(
+                    "Die Freigabe für das Tastenkürzel konnte nicht angefordert werden: {error}"
+                )
+            })?
             .response()
-            .map_err(|error| format!("Hotkey wurde nicht freigegeben: {error}"))?;
+            .map_err(|error| format!("Das Tastenkürzel wurde nicht freigegeben: {error}"))?;
         let shortcut = response
             .shortcuts()
             .iter()
             .find(|shortcut| shortcut.id() == HOTKEY_ID)
-            .ok_or_else(|| "KWin hat keinen globalen Stop-Hotkey gebunden.".to_owned())?;
+            .ok_or_else(|| "Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.".to_owned())?;
         let actual = (!shortcut.trigger_description().trim().is_empty())
             .then(|| shortcut.trigger_description().to_owned());
         Ok((portal, actual))
     };
     let result = tokio::select! {
         biased;
-        _ = &mut cancel => Err("Hotkey-Anfrage abgebrochen.".to_owned()),
+        _ = &mut cancel => Err("Die Freigabe für das Tastenkürzel wurde abgebrochen.".to_owned()),
         result = operation => result,
     };
     match result {
@@ -453,7 +461,8 @@ async fn setup_hotkey(
             connection,
             portal,
             actual,
-            session: session.ok_or("Hotkey-Sitzung fehlt.")?,
+            session: session
+                .ok_or("Die Freigabe für das Tastenkürzel fehlt. Wähle „Erneut versuchen“.")?,
         }),
         Err(error) => {
             if let Some(session) = session {
@@ -556,11 +565,12 @@ async fn discard_closed_click_session(
     if was_running {
         fail_run(machine, emit);
         (emit)(WorkerEvent::Error(
-            "Die Wayland-Berechtigung wurde beendet.".to_owned(),
+            "Die Freigabe für die Maussteuerung wurde beendet. Starte erneut, um sie anzufordern."
+                .to_owned(),
         ));
     } else {
         (emit)(WorkerEvent::Status(
-            "Wayland-Berechtigung beendet – wird beim nächsten Start neu angefragt".to_owned(),
+            "Freigabe erneut erforderlich".to_owned(),
         ));
     }
     was_running
@@ -665,7 +675,7 @@ async fn run_worker(
 
     (emit)(WorkerEvent::State(machine.state()));
     (emit)(WorkerEvent::Status(
-        "Bereit – Hotkey wird eingerichtet …".to_owned(),
+        "Tastenkürzel wird eingerichtet …".to_owned(),
     ));
     (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
     let mut ended_runs = machine.ended_runs();
@@ -728,7 +738,7 @@ async fn run_worker(
                         }
                         let delay = from_button && settings.position.is_none();
                         if !hotkey_bound || configure_task.is_some() {
-                            (emit)(WorkerEvent::Error("Vor dem Start muss der globale Stop-Hotkey von KWin bestätigt sein.".to_owned()));
+                            (emit)(WorkerEvent::Error("Richte vor dem Start ein Tastenkürzel für Start und Stopp ein.".to_owned()));
                             continue;
                         }
                         if click_session.as_mut().is_some_and(PortalClickSession::is_closed)
@@ -753,7 +763,7 @@ async fn run_worker(
                             if let Some(old_session) = click_session.take() {
                                 old_session.close().await;
                             }
-                            (emit)(WorkerEvent::Status("Warte auf Wayland-Berechtigung …".to_owned()));
+                            (emit)(WorkerEvent::Status("Warte auf Freigabe für Maussteuerung …".to_owned()));
                             let (tx, rx) = oneshot::channel();
                             start_cancel = Some(tx);
                             start_task = Some(tokio::spawn(setup_click_session(settings, delay, rx)));
@@ -775,14 +785,14 @@ async fn run_worker(
                                         ConfigureShortcutsOptions::default(),
                                     )
                                     .await
-                                    .map_err(|error| format!("Hotkey-Dialog konnte nicht geöffnet werden: {error}"))
+                                    .map_err(|error| format!("Die Einstellungen für das Tastenkürzel konnten nicht geöffnet werden: {error}"))
                             }));
                         } else {
                             let (tx, rx) = oneshot::channel();
                             hotkey_cancel = Some(tx);
                             hotkey_task = Some(tokio::spawn(setup_hotkey(preferred, rx)));
                             (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Registering));
-                            (emit)(WorkerEvent::Status("Hotkey wird erneut eingerichtet …".to_owned()));
+                            (emit)(WorkerEvent::Status("Tastenkürzel wird eingerichtet …".to_owned()));
                         }
                     }
                 }
@@ -795,7 +805,7 @@ async fn run_worker(
                         if session.is_closed() {
                             session.close().await;
                             fail_run(&mut machine, &emit);
-                            (emit)(WorkerEvent::Error("Die Wayland-Berechtigung wurde beendet.".to_owned()));
+                            (emit)(WorkerEvent::Error("Die Freigabe für die Maussteuerung wurde beendet. Starte erneut, um sie anzufordern.".to_owned()));
                         } else {
                             click_session = Some(session);
                             begin_run(&mut machine, &mut active, &mut countdown, settings, delay, &emit);
@@ -810,7 +820,7 @@ async fn run_worker(
                     }
                     Err(error) => {
                         fail_run(&mut machine, &emit);
-                        (emit)(WorkerEvent::Error(format!("Portal-Aufgabe ist fehlgeschlagen: {error}")));
+                        (emit)(WorkerEvent::Error(format!("Die Maussteuerung konnte nicht gestartet werden: {error}")));
                     }
                 }
             }
@@ -834,7 +844,7 @@ async fn run_worker(
                             Ok::<_, String>((activations, changes, owner))
                         })
                         .await
-                        .unwrap_or_else(|_| Err("Zeitüberschreitung bei der Hotkey-Signalanmeldung".to_owned()));
+                        .unwrap_or_else(|_| Err("Zeitüberschreitung beim Einrichten des Tastenkürzels.".to_owned()));
                         match streams {
                             Ok((activations, changes, portal_owner)) => {
                                 let session = Arc::new(session);
@@ -854,7 +864,7 @@ async fn run_worker(
                                     let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                     let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
                                     (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                                    (emit)(WorkerEvent::Error("Die Hotkey-Sitzung kann nicht überwacht werden.".to_owned()));
+                                    (emit)(WorkerEvent::Error("Die Freigabe für das Tastenkürzel kann nicht überwacht werden. Wähle „Erneut versuchen“.".to_owned()));
                                     continue;
                                 }
                                 let activations = activations.filter_map(|message| {
@@ -886,14 +896,14 @@ async fn run_worker(
                                 } else {
                                     hotkey_bound = false;
                                     (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                                    (emit)(WorkerEvent::Error("KWin hat keinen globalen Stop-Hotkey gebunden.".to_owned()));
+                                    (emit)(WorkerEvent::Error("Kein Tastenkürzel für Start und Stopp eingerichtet. Wähle unter „Tastenkürzel“ eine Taste.".to_owned()));
                                 }
                             }
                             Err(error) => {
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, session.close()).await;
                                 let _ = timeout(PORTAL_CLOSE_TIMEOUT, connection.close()).await;
                                 (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                                (emit)(WorkerEvent::Error(format!("Hotkey-Signale sind nicht verfügbar: {error}")));
+                                (emit)(WorkerEvent::Error(format!("Das Tastenkürzel kann nicht empfangen werden: {error}")));
                             }
                         }
                     }
@@ -903,7 +913,7 @@ async fn run_worker(
                     }
                     Err(error) if !error.is_cancelled() => {
                         (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                        (emit)(WorkerEvent::Error(format!("Hotkey-Aufgabe ist fehlgeschlagen: {error}")));
+                        (emit)(WorkerEvent::Error(format!("Das Tastenkürzel konnte nicht eingerichtet werden: {error}")));
                     }
                     Err(_) => (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable)),
                 }
@@ -918,7 +928,7 @@ async fn run_worker(
                         (emit)(WorkerEvent::Status("Bereit".to_owned()));
                     }
                     Ok(Ok(())) if !hotkey_bound => {
-                        (emit)(WorkerEvent::Status("Warte auf globalen Stop-Hotkey …".to_owned()));
+                        (emit)(WorkerEvent::Status("Warte auf Tastenkürzel für Start und Stopp …".to_owned()));
                     }
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
@@ -929,7 +939,7 @@ async fn run_worker(
                     Err(error) if !error.is_cancelled() => {
                         cancel_start(&mut start_task, &mut start_cancel).await;
                         abort_run(&mut machine, &mut active, &mut countdown, &emit);
-                        (emit)(WorkerEvent::Error(format!("Hotkey-Dialog ist fehlgeschlagen: {error}")));
+                        (emit)(WorkerEvent::Error(format!("Die Einstellungen für das Tastenkürzel konnten nicht geöffnet werden: {error}")));
                     }
                     Err(_) => {}
                 }
@@ -961,7 +971,7 @@ async fn run_worker(
                             abort_run(&mut machine, &mut active, &mut countdown, &emit);
                             hotkey_bound = false;
                             (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(false) } else { HotkeyPhase::Unavailable }));
-                            (emit)(WorkerEvent::Error("Der globale Stop-Hotkey wurde entfernt.".to_owned()));
+                            (emit)(WorkerEvent::Error("Das Tastenkürzel für Start und Stopp wurde entfernt. Wähle „Erneut versuchen“.".to_owned()));
                         }
                     }
                     Some(HotkeySignal::Activated(..)) => {}
@@ -971,7 +981,7 @@ async fn run_worker(
                         if let Some(task) = configure_task.take() { task.abort(); }
                         hotkey_bound = false;
                         (emit)(WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable));
-                        (emit)(WorkerEvent::Error("Die globale Hotkey-Sitzung wurde beendet.".to_owned()));
+                        (emit)(WorkerEvent::Error("Die Freigabe für das Tastenkürzel wurde beendet. Wähle „Erneut versuchen“.".to_owned()));
                         if let Some(state) = hotkey.take() {
                             let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
                         }
@@ -996,7 +1006,7 @@ async fn run_worker(
                 let Some(session) = click_session.as_ref() else {
                     fail_run(&mut machine, &emit);
                     active = None;
-                    (emit)(WorkerEvent::Error("Die Wayland-Sitzung wurde unerwartet beendet.".to_owned()));
+                    (emit)(WorkerEvent::Error("Die Freigabe für die Maussteuerung wurde unerwartet beendet. Versuche den Start erneut.".to_owned()));
                     continue;
                 };
                 if !run.schedule.record_tick() {
@@ -1092,7 +1102,7 @@ fn start_run(
         next_tick: Instant::now(),
     });
     (emit)(WorkerEvent::State(machine.state()));
-    (emit)(WorkerEvent::Status("Klickt".to_owned()));
+    (emit)(WorkerEvent::Status("Klicken aktiv".to_owned()));
 }
 
 /// Start clicking now, or first give the user a cancellable countdown.
@@ -1339,9 +1349,10 @@ mod tests {
         (emit, rx)
     }
 
-    const START_FAILED: &str = "Der Hintergrund-Worker konnte nicht starten:";
-    const WORKER_GONE: Result<(), &str> = Err("Der Hintergrund-Worker läuft nicht mehr.");
-    const QUEUE_FULL: Result<(), &str> = Err("Der interne Befehlskanal ist ausgelastet.");
+    const START_FAILED: &str = "Die Klicksteuerung konnte nicht gestartet werden:";
+    const WORKER_GONE: Result<(), &str> =
+        Err("Die Klicksteuerung wurde beendet. Starte Klickmeister neu.");
+    const QUEUE_FULL: Result<(), &str> = Err("Klickmeister ist ausgelastet. Versuche es erneut.");
 
     #[test]
     fn failed_thread_start_is_reported_and_commands_name_stopped_worker() {

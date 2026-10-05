@@ -61,7 +61,7 @@ def grant_remote():
 
 
 def open_picker():
-    action("Position wählen / Neu wählen …", role="button")
+    action("Position wählen …", role="button")
     wait_for(lambda: "Esc / Rechtsklick" in picker_text())
 
 
@@ -129,7 +129,7 @@ def main():
     action("Bis zum Stoppen", role="radio button")
     focus_target()
     action("Starten", role="button")
-    wait_for(lambda: "Klickt" in status())
+    wait_for(lambda: "Klicken aktiv" in status())
     wait_for(lambda: len(mouse_events()) >= before + 10)
     action("Stoppen", role="button")
     wait_for(lambda: "Gestoppt" in status())
@@ -143,7 +143,7 @@ def main():
     for index, button in enumerate([1, 2, 4]):
         combo("Maustaste", index)
         for click_type in [0, 1]:
-            combo("Klicktyp", click_type)
+            combo("Klickart", click_type)
             run_counted(
                 "native_click_matrix",
                 button=button,

@@ -78,17 +78,19 @@ pub struct ClickSettings {
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     #[error(
-        "Das Intervall muss mindestens {MIN_INTERVAL_MS} ms betragen ({MAX_CYCLES_PER_SECOND} Klickzyklen/s)."
+        "Wähle ein Klickintervall von mindestens {MIN_INTERVAL_MS} ms (höchstens {MAX_CYCLES_PER_SECOND} Klickzyklen/s)."
     )]
     IntervalTooShort,
-    #[error("Das Intervall darf höchstens 24 Stunden betragen.")]
+    #[error("Wähle ein Klickintervall von höchstens 24 Stunden.")]
     IntervalTooLong,
-    #[error("Die Wiederholungszahl muss zwischen 1 und {MAX_REPEAT_COUNT} liegen.")]
+    #[error("Wähle zwischen 1 und {MAX_REPEAT_COUNT} Klickzyklen.")]
     InvalidRepeat,
-    #[error("Die festen Koordinaten liegen außerhalb des unterstützten Bereichs.")]
+    #[error(
+        "Die Koordinaten liegen außerhalb des unterstützten Bereichs. Wähle eine neue Position."
+    )]
     InvalidCoordinates,
     #[error(
-        "Die feste Position liegt außerhalb des ausgewählten Monitors oder es ist kein Monitor verfügbar."
+        "Die feste Position liegt außerhalb des Bildschirms oder kein Bildschirm ist ausgewählt. Prüfe Bildschirm und Koordinaten."
     )]
     InvalidMonitorPosition,
 }
