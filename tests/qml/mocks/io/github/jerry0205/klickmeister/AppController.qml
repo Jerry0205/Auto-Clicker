@@ -69,7 +69,7 @@ QtObject {
     function save_config() {
         if (!configDirty) return true
         saveCount++
-        if (!saveConfigSucceeds) error_message = "Konfiguration konnte nicht gespeichert werden"
+        if (!saveConfigSucceeds) error_message = "Einstellungen konnten nicht gespeichert werden"
         else configDirty = false
         return saveConfigSucceeds
     }

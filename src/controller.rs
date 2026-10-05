@@ -207,12 +207,12 @@ impl AppControllerRust {
     /// A draft needs valid values but does not need an approved monitor yet.
     fn config_snapshot(&self) -> Result<AppConfig, String> {
         let interval_ms = u64::try_from(self.interval_ms)
-            .map_err(|_| "Das Intervall muss positiv sein.".to_owned())?;
+            .map_err(|_| "Wähle ein Klickintervall größer als 0 ms.".to_owned())?;
         validate_interval(interval_ms).map_err(|error| error.to_string())?;
         let repeat_count = match u64::try_from(self.repeat_count) {
             Ok(count) if (1..=MAX_REPEAT_COUNT).contains(&count) => count,
             _ if self.repeat_until_stopped => 100,
-            _ => return Err("Die Wiederholungszahl ist ungültig.".to_owned()),
+            _ => return Err("Die Anzahl der Klickzyklen ist ungültig. Prüfe den Wert.".to_owned()),
         };
         let position = if !self.fixed_position_confirmed {
             // A missing saved monitor makes the UI clamp coordinates to a
@@ -227,18 +227,18 @@ impl AppControllerRust {
         } else if self.current_position {
             SavedPosition::default()
         } else {
-            return Err("Die festen Koordinaten sind ungültig.".to_owned());
+            return Err("Die Koordinaten sind ungültig. Wähle eine neue Position.".to_owned());
         };
         let mouse_button = match self.mouse_button {
             0 => MouseButton::Left,
             1 => MouseButton::Right,
             2 => MouseButton::Middle,
-            _ => return Err("Unbekannte Maustaste.".to_owned()),
+            _ => return Err("Wähle eine gültige Maustaste.".to_owned()),
         };
         let click_type = match self.click_type {
             0 => ClickType::Single,
             1 => ClickType::Double,
-            _ => return Err("Unbekannter Klicktyp.".to_owned()),
+            _ => return Err("Wähle eine gültige Klickart.".to_owned()),
         };
         Ok(AppConfig {
             interval_ms,
@@ -487,7 +487,7 @@ impl qobject::AppController {
     fn send_command(mut self: Pin<&mut Self>, command: Command) {
         let worker = self.rust().worker.as_ref();
         let result = worker
-            .ok_or("Der Hintergrund-Worker wurde nicht gestartet.")
+            .ok_or("Die Klicksteuerung ist nicht verfügbar. Starte Klickmeister neu.")
             .and_then(|worker| worker.send(command));
         if let Err(error) = result {
             if send_failure_ends_run(worker) {
@@ -502,27 +502,29 @@ impl qobject::AppController {
     /// Build validated settings; unconfirmed fixed positions cannot start.
     fn settings(self: Pin<&Self>) -> Result<ClickSettings, String> {
         if !*self.current_position() && !*self.fixed_position_confirmed() {
-            return Err("Bitte den Monitor und die feste Position erneut bestätigen.".to_owned());
+            return Err(
+                "Prüfe Bildschirm und Koordinaten und bestätige die feste Position.".to_owned(),
+            );
         }
         let button = match *self.mouse_button() {
             0 => MouseButton::Left,
             1 => MouseButton::Right,
             2 => MouseButton::Middle,
-            _ => return Err("Unbekannte Maustaste.".to_owned()),
+            _ => return Err("Wähle eine gültige Maustaste.".to_owned()),
         };
         let click_type = match *self.click_type() {
             0 => ClickType::Single,
             1 => ClickType::Double,
-            _ => return Err("Unbekannter Klicktyp.".to_owned()),
+            _ => return Err("Wähle eine gültige Klickart.".to_owned()),
         };
         let interval_ms = u64::try_from(*self.interval_ms())
-            .map_err(|_| "Das Intervall muss positiv sein.".to_owned())?;
+            .map_err(|_| "Wähle ein Klickintervall größer als 0 ms.".to_owned())?;
         let repeat = if *self.repeat_until_stopped() {
             None
         } else {
             Some(
                 u64::try_from(*self.repeat_count())
-                    .map_err(|_| "Die Wiederholungszahl muss positiv sein.".to_owned())?,
+                    .map_err(|_| "Wähle mindestens einen Klickzyklus.".to_owned())?,
             )
         };
         let position = if *self.current_position() {
@@ -530,9 +532,9 @@ impl qobject::AppController {
         } else {
             Some((
                 u32::try_from(*self.fixed_x())
-                    .map_err(|_| "X muss eine nichtnegative Ganzzahl sein.".to_owned())?,
+                    .map_err(|_| "Die X-Koordinate muss eine ganze Zahl ab 0 sein.".to_owned())?,
                 u32::try_from(*self.fixed_y())
-                    .map_err(|_| "Y muss eine nichtnegative Ganzzahl sein.".to_owned())?,
+                    .map_err(|_| "Die Y-Koordinate muss eine ganze Zahl ab 0 sein.".to_owned())?,
             ))
         };
         let settings = ClickSettings {
@@ -575,7 +577,7 @@ impl qobject::AppController {
                 // The run is already `Starting`; the worker ends the countdown via `State`.
                 self.as_mut().set_countdown_remaining(i32::from(remaining));
                 self.as_mut().set_status(QString::from(&format!(
-                    "Start in {remaining} s – Cursor zum Ziel bewegen …"
+                    "Start in {remaining} s · Bewege den Mauszeiger zum Ziel."
                 )));
             }
             WorkerEvent::Status(status) => {
@@ -743,7 +745,7 @@ mod tests {
             .err()
             .unwrap_or_default();
         assert!(
-            error.starts_with("Konfiguration konnte nicht gespeichert werden"),
+            error.starts_with("Einstellungen konnten nicht gespeichert werden"),
             "{error}"
         );
         assert_eq!(std::fs::read_to_string(&path).ok(), previous);
@@ -811,7 +813,7 @@ mod tests {
         }
         assert!(!controller.config_dirty);
 
-        // "Weiter bearbeiten" starts a worker whose events apply again.
+        // "Zurück zur Anwendung" starts a worker whose events apply again.
         let second = controller.next_worker_epoch();
         assert!(matches!(
             controller.accept_worker_event(second, WorkerEvent::State(RunState::Ready)),

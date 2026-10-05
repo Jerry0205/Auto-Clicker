@@ -573,9 +573,9 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         let _ = tx.send(event);
     });
     let result: TestResult = async {
-        assert_hotkey_only(&events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey wurde nicht freigegeben"))).await?);
+        assert_hotkey_only(&events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel wurde nicht freigegeben"))).await?);
         worker.send(Command::Start(settings.clone()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel für Start und Stopp"))).await?;
 
         let (seen, release) = {
             let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
@@ -588,7 +588,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         timeout(Duration::from_secs(3), seen.notified()).await?;
         worker.send(Command::ConfigureHotkey("Pause".into()))?;
         worker.send(Command::Start(settings.clone()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel für Start und Stopp"))).await?;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).hotkey_created, 2);
         release.notify_one();
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
@@ -603,9 +603,9 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
                 &(Options::new(),),
             )
             .await?;
-        assert_hotkey_only(&events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey-Sitzung"))).await?);
+        assert_hotkey_only(&events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Freigabe für das Tastenkürzel"))).await?);
         worker.send(Command::Start(settings.clone()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel für Start und Stopp"))).await?;
 
         {
             let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
@@ -614,7 +614,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         }
         worker.send(Command::ConfigureHotkey("Pause".into()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Unavailable))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("keinen globalen Stop-Hotkey"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Kein Tastenkürzel für Start und Stopp"))).await?;
         {
             let state = observed.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(state.hotkey_created, 3);
@@ -643,7 +643,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         timeout(Duration::from_secs(3), seen.notified()).await?;
         worker.send(Command::ConfigureHotkey("Pause".into()))?;
         worker.send(Command::Start(settings.clone()))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel für Start und Stopp"))).await?;
         release.notify_one();
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).configure_calls, 2);
@@ -658,7 +658,7 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
         shortcuts_changed(&service, &session, "").await?;
         assert_hotkey_only(&events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("entfernt"))).await?);
         worker.send(Command::Start(settings))?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Stop-Hotkey"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel für Start und Stopp"))).await?;
         worker.send(Command::ConfigureHotkey("Pause".into()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Configuring(false)))).await?;
         let (seen, release) = {
@@ -741,7 +741,7 @@ async fn revocation_ends_start_while_response_is_pending() -> TestResult {
             event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))),
         )
         .await??;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Freigabe für die Maussteuerung"))).await?;
         assert!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.is_empty());
         Ok(())
     }
@@ -822,7 +822,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await
         })
         .await??;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Freigabe für die Maussteuerung"))).await?;
 
         // A stopped session must also be discarded, so a later start asks again.
         worker.send(Command::Start(settings.clone()))?;
@@ -831,7 +831,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         assert_ne!(observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session, first_session);
         let stopped_session = observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session.clone();
         close_remote_session(&service, &observed).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Status(message) if message.contains("Wayland-Berechtigung beendet"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Status(message) if message.contains("Freigabe erneut erforderlich"))).await?;
         worker.send(Command::Start(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
@@ -839,7 +839,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
 
         // If permission is revoked during Start, no run may be confirmed.
         close_remote_session(&service, &observed).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Status(message) if message.contains("Wayland-Berechtigung beendet"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Status(message) if message.contains("Freigabe erneut erforderlich"))).await?;
         let (seen, release) = {
             let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
             state.delay_start = true;
@@ -928,7 +928,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
             ..fixed.clone()
         }))?;
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
-        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Monitor stimmt nicht"))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Bildschirm stimmt nicht"))).await?;
         assert_eq!(observed.lock().unwrap_or_else(|e| e.into_inner()).buttons.len(), before);
 
         let (seen, release) = {
@@ -1091,7 +1091,7 @@ async fn clicks_stop_hotkey_loss_and_shutdown() -> TestResult {
         event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error))).await?;
         event(
             &mut events,
-            |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey-Sitzung")),
+            |e| matches!(e, WorkerEvent::Error(message) if message.contains("Freigabe für das Tastenkürzel")),
         )
         .await?;
         let count = observed
@@ -1283,7 +1283,7 @@ async fn fill_queue_during_held_click(
     }
     ensure(
         worker.send(Command::StartFromButton(continuous()))
-            == Err("Der interne Befehlskanal ist ausgelastet."),
+            == Err("Klickmeister ist ausgelastet. Versuche es erneut."),
         "the command queue must be full while the click is held",
     )?;
     // The controller keeps the shown run state unless the worker has ended.
@@ -1455,7 +1455,7 @@ fn countdowns(events: &[WorkerEvent]) -> Vec<u8> {
 fn waits_for_permission(events: &[WorkerEvent]) -> bool {
     events
         .iter()
-        .any(|e| matches!(e, WorkerEvent::Status(status) if status.contains("Warte auf Wayland")))
+        .any(|e| matches!(e, WorkerEvent::Status(status) if status.contains("Warte auf Freigabe für Maussteuerung")))
 }
 
 /// Drain queued events and fail if a cancelled countdown still ticked or started.
@@ -1599,7 +1599,7 @@ async fn button_countdown_delays_first_click_and_stop_cancels_it() -> TestResult
         worker.send(Command::StartFromButton(settings.clone()))?;
         event(&mut events, |e| matches!(e, WorkerEvent::Countdown(3))).await?;
         close_remote_session(&service, &observed).await?;
-        let revoked = events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Wayland-Berechtigung"))).await?;
+        let revoked = events_until(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Freigabe für die Maussteuerung"))).await?;
         assert_eq!(run_states(&revoked), [RunState::Stopped, RunState::Error]);
         sleep(Duration::from_millis(3200)).await;
         assert_eq!(presses(&observed), 3);
@@ -1959,7 +1959,7 @@ async fn changes_behind_key_presses_once() -> TestResult {
         release_held_click(&observed, &release);
         let closed = events_until(
             &mut events,
-            |e| matches!(e, WorkerEvent::Error(message) if message.contains("Hotkey-Sitzung")),
+            |e| matches!(e, WorkerEvent::Error(message) if message.contains("Freigabe für das Tastenkürzel")),
         )
         .await?;
         sleep(Duration::from_millis(200)).await;
@@ -2054,7 +2054,7 @@ async fn presses_sent_before_the_portal_reply_stay_old_when_read_later() -> Test
             close_release.notify_one();
         }
         let closed = events_until(&mut events, |e| {
-            matches!(e, WorkerEvent::Status(status) if status.contains("Wayland-Berechtigung beendet"))
+            matches!(e, WorkerEvent::Status(status) if status.contains("Freigabe erneut erforderlich"))
         })
         .await?;
         sleep(Duration::from_millis(200)).await;

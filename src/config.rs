@@ -59,15 +59,17 @@ impl AppConfig {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("HOME und XDG_CONFIG_HOME sind nicht gesetzt")]
+    #[error(
+        "Der Speicherort für die Einstellungen fehlt. HOME oder XDG_CONFIG_HOME muss gesetzt sein."
+    )]
     MissingHome,
-    #[error("Konfiguration konnte nicht gelesen werden: {0}")]
+    #[error("Einstellungen konnten nicht geladen werden: {0}")]
     Read(#[source] io::Error),
-    #[error("Konfiguration ist ungültig: {0}")]
+    #[error("Die Einstellungsdatei ist ungültig: {0}")]
     Parse(#[source] toml::de::Error),
-    #[error("Konfiguration konnte nicht gespeichert werden: {0}")]
+    #[error("Einstellungen konnten nicht gespeichert werden: {0}")]
     Write(#[source] io::Error),
-    #[error("Konfiguration konnte nicht serialisiert werden: {0}")]
+    #[error("Einstellungen konnten nicht für das Speichern vorbereitet werden: {0}")]
     Serialize(#[source] toml::ser::Error),
 }
 
@@ -110,7 +112,7 @@ pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
     let parent = path.parent().ok_or_else(|| {
         ConfigError::Write(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "Konfigurationspfad hat kein Elternverzeichnis",
+            "Der Speicherort hat kein übergeordnetes Verzeichnis.",
         ))
     })?;
     fs::create_dir_all(parent).map_err(ConfigError::Write)?;

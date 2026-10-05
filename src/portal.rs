@@ -22,30 +22,36 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Error)]
 pub enum PortalError {
-    #[error("Die Portal-Anfrage wurde abgebrochen.")]
+    #[error("Die Freigabe wurde abgebrochen.")]
     Cancelled,
-    #[error("Das XDG RemoteDesktop-Portal ist nicht verfügbar: {0}")]
+    #[error("Die Maussteuerung ist nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {0}")]
     Unavailable(#[source] ashpd::Error),
-    #[error("Die Portal-Anfrage wurde abgelehnt oder abgebrochen: {0}")]
+    #[error("Die Freigabe wurde abgelehnt oder abgebrochen: {0}")]
     Denied(#[source] ashpd::Error),
-    #[error("KWin hat keine Berechtigung für Zeigersteuerung erteilt.")]
+    #[error(
+        "Die Maussteuerung wurde nicht freigegeben. Erlaube sie beim nächsten Start im KDE-Dialog."
+    )]
     PointerNotGranted,
-    #[error("Die Wayland-Sitzung konnte nicht auf ihr Ende überwacht werden.")]
+    #[error(
+        "Die Freigabe für die Maussteuerung kann nicht überwacht werden. Versuche den Start erneut."
+    )]
     SessionWatchUnavailable,
-    #[error("Die Wayland-Berechtigung wurde beendet.")]
+    #[error("Die Freigabe für die Maussteuerung wurde beendet. Starte erneut, um sie anzufordern.")]
     SessionClosed,
-    #[error("Für die feste Position wurde kein Monitor-Stream freigegeben.")]
+    #[error(
+        "Kein Bildschirm freigegeben. Wähle beim nächsten Start den Bildschirm der festen Position."
+    )]
     MissingMonitorStream,
     #[error(
-        "Der freigegebene Monitor stimmt nicht mit der Positionsauswahl überein. Bitte beim nächsten Start denselben Monitor wie in der App freigeben."
+        "Der freigegebene Bildschirm stimmt nicht mit der Auswahl überein. Gib beim nächsten Start den in Klickmeister ausgewählten Bildschirm frei."
     )]
     MonitorMismatch,
     #[error(
-        "Das Portal liefert keine eindeutige Monitorposition. Die feste Position kann nicht sicher zugeordnet werden."
+        "Die feste Position kann keinem Bildschirm eindeutig zugeordnet werden. Wähle die aktuelle Mauszeigerposition oder versuche es erneut."
     )]
     MonitorUnverifiable,
     #[error(
-        "Die feste Position ({x}, {y}) liegt außerhalb des freigegebenen Monitors ({width} × {height})."
+        "Die Position ({x}, {y}) liegt außerhalb des freigegebenen Bildschirms ({width} × {height}). Wähle eine neue Position."
     )]
     PositionOutsideStream {
         x: u32,
@@ -53,9 +59,9 @@ pub enum PortalError {
         width: i32,
         height: i32,
     },
-    #[error("Der Klick konnte nicht an KWin gesendet werden: {0}")]
+    #[error("Der Klick konnte nicht ausgeführt werden: {0}")]
     Send(#[source] ashpd::Error),
-    #[error("KWin hat ein Zeigerereignis nicht innerhalb von 250 ms bestätigt.")]
+    #[error("KDE hat die Maussteuerung nicht rechtzeitig bestätigt. Versuche den Start erneut.")]
     EventTimeout,
 }
 

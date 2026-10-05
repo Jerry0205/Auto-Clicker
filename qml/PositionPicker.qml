@@ -179,9 +179,9 @@ Window {
             wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             text: picker.previewOnly
-                ? qsTr("Zielposition · X: %1 · Y: %2").arg(picker.targetX).arg(picker.targetY)
-                : !picker.inputReady ? qsTr("Vollbild wird vorbereitet … · Esc: abbrechen")
-                : qsTr("%1 · X: %2 · Y: %3\nKlicken: Ziel setzen · Enter: übernehmen · Pfeiltasten: 1 Schritt · Umschalt: 10 · Esc / Rechtsklick: abbrechen")
+                ? qsTr("Gespeicherte Position · X: %1 · Y: %2").arg(picker.targetX).arg(picker.targetY)
+                : !picker.inputReady ? qsTr("Positionsauswahl wird geöffnet … · Esc: abbrechen")
+                : qsTr("%1 · X: %2 · Y: %3\nLinksklick: auswählen · Enter: bestätigen\nPfeiltasten: verschieben · Umschalt + Pfeiltasten: 10 Schritte · Esc / Rechtsklick: abbrechen")
                     .arg(monitors.displayName(picker.screen, Qt.application.screens)).arg(picker.targetX).arg(picker.targetY)
         }
     }

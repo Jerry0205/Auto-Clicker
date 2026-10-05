@@ -37,7 +37,9 @@ fn main() -> ExitCode {
         "qrc:/qt/qml/io/github/jerry0205/klickmeister/qml/Main.qml",
     ));
     if !klickmeister::qml_runtime::has_root_object(&engine) {
-        eprintln!("Klickmeister konnte das eingebettete QML-Hauptfenster nicht laden.");
+        eprintln!(
+            "Klickmeister konnte nicht geöffnet werden: Das Anwendungsfenster konnte nicht geladen werden."
+        );
         return ExitCode::FAILURE;
     }
     if smoke_test {

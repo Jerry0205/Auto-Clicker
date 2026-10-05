@@ -1,5 +1,5 @@
 pkgbase = klickmeister
-	pkgdesc = Small, safe auto clicker for KDE Plasma Wayland
+	pkgdesc = Auto clicker for KDE Plasma on Wayland
 	pkgver = 0.1.2
 	pkgrel = 2
 	url = https://github.com/jerry0205/Auto-Clicker

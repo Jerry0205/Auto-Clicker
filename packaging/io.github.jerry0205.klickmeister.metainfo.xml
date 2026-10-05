@@ -4,11 +4,15 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>Klickmeister</name>
-  <summary>A small, safe auto clicker for KDE Plasma Wayland</summary>
-  <summary xml:lang="de">Ein kleiner, sicherer Auto Clicker für KDE Plasma Wayland</summary>
+  <summary>Auto clicker for KDE Plasma on Wayland</summary>
+  <summary xml:lang="de">Auto-Clicker für KDE Plasma unter Wayland</summary>
   <description>
-    <p>Klickmeister generates rate-limited mouse clicks through the XDG Desktop Portal. It has no network access, daemon, autostart, telemetry, or privileged device access.</p>
-    <p xml:lang="de">Klickmeister erzeugt begrenzte Mausklicks über das XDG Desktop Portal. Die Anwendung besitzt keinen Netzwerkzugriff, Daemon, Autostart, Telemetrie oder privilegierten Gerätezugriff.</p>
+    <p>Automate repeated mouse clicks on KDE Plasma. Choose the mouse button, use single or double clicks, and set the interval and number of click cycles.</p>
+    <p xml:lang="de">Automatisiere wiederholte Mausklicks unter KDE Plasma. Wähle Maustaste, Einzel- oder Doppelklick, Klickintervall und Anzahl der Klickzyklen.</p>
+    <p>Click at the current pointer position or select a fixed position on a screen. Start and stop with a global keyboard shortcut.</p>
+    <p xml:lang="de">Klicke an der aktuellen Mauszeigerposition oder wähle eine feste Position auf einem Bildschirm. Ein globales Tastenkürzel startet und stoppt das Klicken.</p>
+    <p>Klickmeister requires KDE Plasma 6 on Wayland. KDE asks for permission to use the shortcut and control the pointer. Settings stay on your device; no telemetry is collected.</p>
+    <p xml:lang="de">Klickmeister benötigt KDE Plasma 6 unter Wayland. KDE fragt nach der Freigabe für das Tastenkürzel und die Maussteuerung. Einstellungen bleiben auf deinem Gerät; Telemetrie wird nicht erfasst.</p>
   </description>
   <launchable type="desktop-id">io.github.jerry0205.klickmeister.desktop</launchable>
   <developer id="io.github.jerry0205">
@@ -25,12 +29,14 @@
   <releases>
     <release version="0.1.2" date="2026-09-14">
       <description>
-        <p>Clean up cancelled pointer and hotkey permission requests and restore saved coordinate values in the main window.</p>
+        <p>Cancelled permission requests now close reliably. Saved coordinates are shown correctly in the main window.</p>
+        <p xml:lang="de">Abgebrochene Freigabeanfragen werden zuverlässig geschlossen. Gespeicherte Koordinaten werden im Hauptfenster korrekt angezeigt.</p>
       </description>
     </release>
     <release version="0.1.1" date="2026-08-31">
       <description>
-        <p>Fix hotkey starts using stale settings and make fixed-position selection and version information easier to find.</p>
+        <p>Starting with the keyboard shortcut now uses the current settings. Fixed-position selection and version information are easier to find.</p>
+        <p xml:lang="de">Beim Start per Tastenkürzel werden die aktuellen Einstellungen verwendet. Positionsauswahl und Versionsangabe sind leichter zu finden.</p>
       </description>
     </release>
     <release version="0.1.0" date="2026-08-31" />
