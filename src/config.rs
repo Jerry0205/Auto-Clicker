@@ -49,8 +49,8 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// The SpinBoxes silently clamp out-of-range values, so the saved value would fail validation.
-    fn within_limits(mut self) -> Self {
+    /// Limits hand-edited values to the ranges the UI can display and start with.
+    fn clamp_to_valid_ranges(mut self) -> Self {
         self.interval_ms = self.interval_ms.clamp(MIN_INTERVAL_MS, MAX_INTERVAL_MS);
         self.repeat_count = self.repeat_count.clamp(1, MAX_REPEAT_COUNT);
         self
@@ -59,15 +59,17 @@ impl AppConfig {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("HOME und XDG_CONFIG_HOME sind nicht gesetzt")]
+    #[error(
+        "Der Speicherort für die Einstellungen fehlt. HOME oder XDG_CONFIG_HOME muss gesetzt sein."
+    )]
     MissingHome,
-    #[error("Konfiguration konnte nicht gelesen werden: {0}")]
+    #[error("Einstellungen konnten nicht geladen werden: {0}")]
     Read(#[source] io::Error),
-    #[error("Konfiguration ist ungültig: {0}")]
+    #[error("Die Einstellungsdatei ist ungültig: {0}")]
     Parse(#[source] toml::de::Error),
-    #[error("Konfiguration konnte nicht gespeichert werden: {0}")]
+    #[error("Einstellungen konnten nicht gespeichert werden: {0}")]
     Write(#[source] io::Error),
-    #[error("Konfiguration konnte nicht serialisiert werden: {0}")]
+    #[error("Einstellungen konnten nicht für das Speichern vorbereitet werden: {0}")]
     Serialize(#[source] toml::ser::Error),
 }
 
@@ -93,8 +95,8 @@ pub fn load() -> Result<AppConfig, ConfigError> {
 
 pub fn load_from(path: &Path) -> Result<AppConfig, ConfigError> {
     match fs::read_to_string(path) {
-        Ok(contents) => toml::from_str(&contents)
-            .map(AppConfig::within_limits)
+        Ok(contents) => toml::from_str::<AppConfig>(&contents)
+            .map(AppConfig::clamp_to_valid_ranges)
             .map_err(ConfigError::Parse),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(AppConfig::default()),
         Err(error) => Err(ConfigError::Read(error)),
@@ -110,7 +112,7 @@ pub fn save_to(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
     let parent = path.parent().ok_or_else(|| {
         ConfigError::Write(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "Konfigurationspfad hat kein Elternverzeichnis",
+            "Der Speicherort hat kein übergeordnetes Verzeichnis.",
         ))
     })?;
     fs::create_dir_all(parent).map_err(ConfigError::Write)?;
@@ -185,32 +187,48 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_values_are_clamped_on_load() {
-        for (contents, interval_ms, repeat_count) in [
-            (
-                "interval_ms = 5\nrepeat_count = 0\n".to_owned(),
-                MIN_INTERVAL_MS,
-                1,
-            ),
-            (
-                format!(
-                    "interval_ms = {}\nrepeat_count = {}\n",
-                    MAX_INTERVAL_MS + 1,
-                    MAX_REPEAT_COUNT + 1
-                ),
-                MAX_INTERVAL_MS,
-                MAX_REPEAT_COUNT,
-            ),
-        ] {
-            let path = test_path("limits");
-            assert!(fs::write(&path, contents).is_ok());
-            let config = load_from(&path);
-            let _ = fs::remove_file(path);
-            assert!(
-                config.is_ok_and(|config| config.interval_ms == interval_ms
-                    && config.repeat_count == repeat_count)
+    fn clamps_out_of_range_values_on_load() {
+        let too_small = test_path("too-small");
+        assert!(fs::write(&too_small, "interval_ms = 5\nrepeat_count = 0\n").is_ok());
+        let config = load_from(&too_small).ok();
+        assert_eq!(
+            config.as_ref().map(|config| config.interval_ms),
+            Some(MIN_INTERVAL_MS)
+        );
+        assert_eq!(config.map(|config| config.repeat_count), Some(1));
+        let _ = fs::remove_file(too_small);
+
+        let too_large = test_path("too-large");
+        let contents = format!(
+            "interval_ms = {}\nrepeat_count = {}\n",
+            MAX_INTERVAL_MS + 1,
+            MAX_REPEAT_COUNT + 1
+        );
+        assert!(fs::write(&too_large, contents).is_ok());
+        let config = load_from(&too_large).ok();
+        assert_eq!(
+            config.as_ref().map(|config| config.interval_ms),
+            Some(MAX_INTERVAL_MS)
+        );
+        assert_eq!(
+            config.map(|config| config.repeat_count),
+            Some(MAX_REPEAT_COUNT)
+        );
+        let _ = fs::remove_file(too_large);
+
+        let at_bounds = test_path("at-bounds");
+        for (interval_ms, repeat_count) in
+            [(MIN_INTERVAL_MS, 1), (MAX_INTERVAL_MS, MAX_REPEAT_COUNT)]
+        {
+            let contents = format!("interval_ms = {interval_ms}\nrepeat_count = {repeat_count}\n");
+            assert!(fs::write(&at_bounds, contents).is_ok());
+            let config = load_from(&at_bounds).ok();
+            assert_eq!(
+                config.map(|config| (config.interval_ms, config.repeat_count)),
+                Some((interval_ms, repeat_count))
             );
         }
+        let _ = fs::remove_file(at_bounds);
     }
 
     #[test]

@@ -2,30 +2,31 @@
 
 Aus dem Projektverzeichnis, in einer entsperrten **deutschen Plasma-Wayland-Sitzung
 mit genau einem Monitor**. Benötigt werden Python mit PySide6, dbus-python,
-PyGObject/AT-SPI, `qdbus6`, `spectacle` und das gebaute Release-Programm.
+PyGObject/AT-SPI, `qdbus6` und das gebaute Release-Programm.
 Diese Tests steuern den sichtbaren Desktop und bestätigen die eigenen KDE-Dialoge.
 Währenddessen den Desktop nicht anderweitig bedienen und keine andere Klickmeister-
 Instanz starten. Globale Tastenkürzel dürfen nicht parallel umkonfiguriert werden.
 
 ```bash
 cargo build --locked --release
-python -m unittest discover -s tests/native -p test_guard.py
+python -m unittest discover -s tests/native -p 'test_*.py'
 python tests/native/run.py tests/native/portal_cases.py
 ```
 
 `run.py` erstellt ein privates Artefaktverzeichnis samt eigener App-Konfiguration.
-Der Pfad wird ausgegeben; Ergebnisse, Mausereignisse, Prozess-IDs, Dialogbild und
-Lupenbild bleiben dort erhalten. Es wird kein Screenshot-Recht im PermissionStore
-gesetzt oder gelöscht. `portal_cases.py` bedient die tatsächlichen Portal-Dialoge
-über AT-SPI. KDE 6.7 meldet auf diesem Gerät leere zugängliche Buttonnamen; nur bei
+Die Monitoridentität darin entspricht byte-genau `JSON.stringify` aus
+`qml/MonitorSelection.qml`, auch bei gebrochener Skalierung; `test_run.py` prüft das.
+Der Pfad wird ausgegeben; Ergebnisse, Mausereignisse und Prozess-IDs bleiben
+dort erhalten. Es wird keine Screenshot-Freigabe angefragt. `portal_cases.py`
+bedient den RemoteDesktop-Dialog über AT-SPI. KDE 6.7 meldet auf diesem Gerät
+leere zugängliche Buttonnamen; nur bei
 exakt passendem Dialog und Buttonanzahl wird die visuell geprüfte Reihenfolge
 verwendet. Andere Sprachen/Layouts müssen vor Wiederverwendung angepasst werden.
 
-Die Tests prüfen Timeout, Ablehnung, Zustimmung mit echtem Vollbild-Screenshot,
-einen unabhängigen bereits freigegebenen RemoteDesktop-Client, Klicks und Stop
-nach Screenshotfehlern sowie App-Schließen bei offener Screenshot-Anfrage.
-Zusätzlich laufen alle drei Maustasten mit Einzel-/Doppelklick; die Optionen werden
-über die sichtbaren Auswahlknöpfe gewählt und anschließend als ausgewählt geprüft. Jeder neue Picker wird
+Die Tests prüfen Positionswahl ohne Screenshot-Dialog, Klicks und Stop
+nach der Positionswahl sowie reguläres App-Schließen.
+Zusätzlich laufen alle drei Maustasten mit Einzel-/Doppelklick; Optionen werden
+über sichtbare Auswahlknöpfe gewählt und als ausgewählt geprüft. Jeder neue Picker wird
 bei (80, 400) fixiert und vor dem Start bestätigt.
 
 Die aus den temporären Hilfsskripten übernommenen Korrekturen sind fest enthalten:

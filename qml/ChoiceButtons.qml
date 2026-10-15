@@ -32,7 +32,7 @@ RowLayout {
             onClicked: choices.selected(modelData.value)
 
             Controls.ToolTip.text: description
-            Controls.ToolTip.visible: hovered && description !== text
+            Controls.ToolTip.visible: hovered && (choices.iconOnly || description !== text)
             Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
 
             Accessible.role: Accessible.RadioButton

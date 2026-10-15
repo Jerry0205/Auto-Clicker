@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 
-pub const MAX_CPS: u32 = 100;
-pub const MIN_INTERVAL_MS: u64 = 1_000 / MAX_CPS as u64;
+pub const MAX_CYCLES_PER_SECOND: u32 = 100;
+pub const MIN_INTERVAL_MS: u64 = 1_000 / MAX_CYCLES_PER_SECOND as u64;
 pub const MAX_INTERVAL_MS: u64 = 86_400_000;
 pub const MAX_REPEAT_COUNT: u64 = 10_000_000;
 
@@ -78,22 +78,25 @@ pub struct ClickSettings {
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     #[error(
-        "Das Intervall muss mindestens {MIN_INTERVAL_MS} ms betragen (höchstens {MAX_CPS} Klicks pro Sekunde)."
+        "Wähle ein Klickintervall von mindestens {MIN_INTERVAL_MS} ms (höchstens {MAX_CYCLES_PER_SECOND} Klickzyklen/s)."
     )]
     IntervalTooShort,
-    #[error("Das Intervall darf höchstens 24 Stunden betragen.")]
+    #[error("Wähle ein Klickintervall von höchstens 24 Stunden.")]
     IntervalTooLong,
-    #[error("Die Wiederholungszahl muss zwischen 1 und {MAX_REPEAT_COUNT} liegen.")]
+    #[error("Wähle zwischen 1 und {MAX_REPEAT_COUNT} Klickzyklen.")]
     InvalidRepeat,
-    #[error("Die festen Koordinaten liegen außerhalb des unterstützten Bereichs.")]
+    #[error(
+        "Die Koordinaten liegen außerhalb des unterstützten Bereichs. Wähle eine neue Position."
+    )]
     InvalidCoordinates,
     #[error(
-        "Die feste Position liegt außerhalb des ausgewählten Monitors oder es ist kein Monitor verfügbar."
+        "Die feste Position liegt außerhalb des Bildschirms oder kein Bildschirm ist ausgewählt. Prüfe Bildschirm und Koordinaten."
     )]
     InvalidMonitorPosition,
 }
 
 impl ClickSettings {
+    /// Validate timing, repeat limits and fixed coordinates against their monitor.
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_interval(self.interval_ms)?;
         if let Some(repeat) = self.repeat
@@ -101,12 +104,10 @@ impl ClickSettings {
         {
             return Err(ValidationError::InvalidRepeat);
         }
-        if let Some((x, y)) = self.position
-            && (x > 100_000 || y > 100_000)
-        {
-            return Err(ValidationError::InvalidCoordinates);
-        }
         if let Some((x, y)) = self.position {
+            if x > 100_000 || y > 100_000 {
+                return Err(ValidationError::InvalidCoordinates);
+            }
             let monitor = self
                 .monitor
                 .ok_or(ValidationError::InvalidMonitorPosition)?;
@@ -121,11 +122,13 @@ impl ClickSettings {
         Ok(())
     }
 
+    /// Return the configured delay as a scheduler duration.
     pub const fn interval(&self) -> Duration {
         Duration::from_millis(self.interval_ms)
     }
 }
 
+/// Enforce the supported interval range and maximum click cycle rate.
 pub fn validate_interval(interval_ms: u64) -> Result<(), ValidationError> {
     if interval_ms < MIN_INTERVAL_MS {
         Err(ValidationError::IntervalTooShort)

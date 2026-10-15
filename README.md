@@ -1,37 +1,33 @@
 # Klickmeister
 
-Ein kleiner Auto Clicker für KDE Plasma 6 unter Wayland.
+Automatische Mausklicks für KDE Plasma.
 
-Klickmeister übernimmt wiederholte Mausklicks für dich – zum Beispiel in Spielen, beim Testen oder bei Aufgaben, bei denen du sonst immer wieder dieselbe Stelle anklicken müsstest.
+Klickmeister übernimmt wiederholte Mausklicks unter KDE Plasma 6 auf Wayland. Wähle Position, Klickintervall und Wiederholungen. Ein globales Tastenkürzel startet und stoppt das Klicken.
 
-![Klickmeister mit festem Klickpunkt](docs/screenshot.png)
+![Klickmeister mit festem Punkt und erreichbaren Start-/Stopp-Knöpfen](docs/screenshot.png)
 
-## „Moment, was macht das Programm genau?“
+## Funktionen
 
-Du entscheidest, wie geklickt werden soll:
-
-- linke, rechte oder mittlere Maustaste
+- Linke, rechte oder mittlere Maustaste
 - Einzel- oder Doppelklick
-- an der aktuellen Mausposition oder an einer festen Stelle
-- feste Positionen per Vollbild-Positionswähler auf einem ausgewählten Bildschirm
-- so lange, bis du stoppst, oder nur eine bestimmte Anzahl
-- langsam oder bis zu 100 Klicks (bzw. Doppelklicks) pro Sekunde
+- Aktuelle Mauszeigerposition oder feste Position auf einem ausgewählten Bildschirm
+- Positionsauswahl direkt auf dem Desktop, mit Feineinstellung per Pfeiltasten
+- Eine festgelegte Anzahl von Klickzyklen oder Klicken bis zum Stopp
+- Klickintervalle von 10 Millisekunden bis 24 Stunden
 
-Gestartet und gestoppt wird Klickmeister über einen globalen Hotkey. Standardmäßig ist dafür die `Pause`-Taste vorgesehen. Du kannst den Klicker jederzeit über den Hotkey oder den Button „Stoppen“ unten rechts beenden – er bleibt auch bei kleinem Fenster immer sichtbar.
-
-Klickmeister wurde speziell für KDE Plasma unter Wayland gebaut. Es gibt keinen Hintergrunddienst, keinen Autostart und keine versteckten Prozesse. Wenn du das Fenster schließt, ist das Programm wirklich beendet.
+Ein Klickzyklus entspricht einem Einzel- oder Doppelklick. Drei Zyklen erzeugen drei Einzelklicks oder drei Doppelklicks, also sechs einzelne Klicks. Bei 10 ms plant Klickmeister höchstens 100 Zyklen pro Sekunde. Die Oberfläche zeigt die Zyklus- und Klickrate an; bei Intervallen über einer Sekunde zeigt sie den Abstand zwischen den Zyklen.
 
 ## Installation
 
-Klickmeister ist aktuell für Arch Linux und darauf basierende Systeme wie CachyOS gedacht.
+Klickmeister benötigt KDE Plasma 6, eine Wayland-Sitzung und den KDE-Portaldienst. Das mitgelieferte Paket ist für Arch Linux und darauf basierende Distributionen wie CachyOS vorgesehen.
 
-Zuerst werden die benötigten Pakete installiert:
+Installiere die Build- und Laufzeitabhängigkeiten:
 
 ```bash
 sudo pacman -S git rust cargo clang lld pkgconf qt6-base qt6-declarative qt6-tools kirigami xdg-desktop-portal xdg-desktop-portal-kde
 ```
 
-Danach kannst du das Projekt herunterladen und installieren:
+Lade das Projekt herunter und baue das Paket:
 
 ```bash
 git clone https://github.com/jerry0205/Auto-Clicker.git
@@ -39,50 +35,72 @@ cd Auto-Clicker
 makepkg -si
 ```
 
-Anschließend findest du **Klickmeister** ganz normal im KDE-Anwendungsmenü.
+Danach ist **Klickmeister** im KDE-Anwendungsmenü verfügbar.
+
+`makepkg` baut den mit Prüfsumme gesicherten Quellstand für Version 0.1.2. Änderungen im lokalen Checkout werden dabei nicht übernommen. Die Befehle zum Bauen des aktuellen Checkouts stehen unter [Entwicklung](#entwicklung).
 
 ## Erste Schritte
 
-1. Öffne Klickmeister.
-2. Wähle Maustaste, Klick (1× oder 2×), Intervall und Wiederholung (∞ oder eine Anzahl) aus. Neben dem Intervall steht, wie oft pro Sekunde geklickt wird.
-3. Wähle als Ziel den **Mauszeiger** oder einen **festen Punkt**.
-4. Starte den Klicker mit dem Hotkey oder „Starten“.
-5. Drücke den Hotkey erneut oder „Stoppen“, um ihn anzuhalten.
+1. Öffne Klickmeister und bestätige im KDE-Dialog das Tastenkürzel für Start und Stopp.
+2. Wähle Maustaste, Klickart und Klickintervall.
+3. Lege die Wiederholungen und die Klickposition fest.
+4. Drücke das Tastenkürzel oder wähle **Starten**. Bestätige die Freigabe für die Maussteuerung im KDE-Dialog.
+5. Drücke das Tastenkürzel erneut oder wähle **Stoppen**, um das Klicken zu beenden.
 
-Unten im Fenster stehen immer Status, Hotkey und Start/Stopp. Ein Klick auf den Hotkey (z. B. „Pause“) öffnet die KDE-Einstellung für die Tastenkombination. Symbole ohne Text erklären sich per Tooltip.
+Als Tastenkürzel wird `Pause` vorgeschlagen. Das aktive Kürzel steht in der Fußleiste; mit **Ändern …** lässt es sich im KDE-Dialog anpassen. Klickmeister startet erst, wenn ein Tastenkürzel für Start und Stopp eingerichtet ist.
 
-Für einen festen Punkt wählst du zuerst den Monitor und klickst danach über „Auswählen …“ im Vollbild-Positionswähler auf die gewünschte Stelle. Das Hauptfenster wird dafür vorübergehend minimiert; seine bisherige Größe, Position und Maximierung bleiben erhalten. Ein Fadenkreuz zeigt die Koordinaten; Pfeiltasten verschieben das Ziel um eine logische Koordinateneinheit, Umschalt + Pfeiltasten um zehn. Ein Linksklick setzt das Ziel und hält es für die Feineinstellung fest. Enter übernimmt die Position, Esc oder Rechtsklick bricht ab. Mausbewegungen verschieben ein bereits angeklicktes oder per Pfeiltasten korrigiertes Ziel nicht mehr. Das Augensymbol („Punkt anzeigen“) markiert das gespeicherte Ziel kurz, ohne zu klicken.
+### Start an der Mauszeigerposition
 
-Optional verwendet „4×-Lupe“ eine über das interaktive Screenshot-Portal freigegebene Bildschirmaufnahme als Standbild. Wähle im KDE-Dialog **Vollbild**, dann **Übernehmen** (je nach Übersetzung „Aufnehmen“) und **Speichern**. Bei Ablehnung, Fehler oder nach spätestens drei Sekunden Wartezeit funktioniert die Auswahl ohne Lupe weiter; die ausstehende Anfrage wird geschlossen. Dieser Ablauf umgeht die blockierende nichtinteraktive Erstfreigabe von xdg-desktop-portal 1.22.1 und wurde mit echten KDE-Dialogen geprüft. Falls dennoch ein alter KDE-Freigabedialog offen bleibt, schließe ihn mit „Deny“/„Verweigern“. Details stehen im [Regressionstestbericht](tests/PORTAL_FIX_REPORT.md). Die Aufnahme ist keine Live-Vorschau.
+Bei **Mauszeiger** folgt jeder Klick dem Mauszeiger. Beim Start über die Schaltfläche beginnt nach der Freigabe ein Countdown von drei Sekunden. Bewege den Mauszeiger in dieser Zeit zum Ziel. **Start abbrechen** oder das Tastenkürzel beendet den Countdown ohne Klick.
 
-Beim Start fragt KDE, auf welchem Bildschirm geklickt werden darf. Wähle dort denselben Bildschirm aus. Position und Größe des freigegebenen Monitors werden vor dem ersten Klick geprüft. Ein anderer Monitor oder fehlende Zuordnungsdaten führen zu einer Fehlermeldung. Nach einem Monitorwechsel wird eine passende Freigabe erneut angefragt. Monitoridentität, Größe und Skalierung werden mit den Koordinaten gespeichert. Nach einem Neustart wird nur eine eindeutige Übereinstimmung wiederhergestellt; andernfalls müssen Monitor und Koordinaten bestätigt oder neu gewählt werden.
+Beim Start per Tastenkürzel beginnt das Klicken nach der Freigabe sofort. Das gilt auch beim Start an einer festen Position.
 
-## Warum fragt KDE nach Berechtigungen?
+### Feste Position wählen
 
-Wayland erlaubt Programmen nicht, ohne Erlaubnis deine Maus zu steuern oder globale Tastenkürzel zu verwenden. Deshalb zeigt KDE beim ersten Start einige eigene Sicherheitsdialoge an.
+1. Wähle **Fester Punkt** und den gewünschten **Bildschirm**.
+2. Wähle **Auswählen …**. Die Positionsauswahl öffnet sich auf diesem Bildschirm.
+3. Setze die Position mit einem Linksklick. Mit den Pfeiltasten verschiebst du sie um einen Schritt, mit `Umschalt` + Pfeiltasten um zehn Schritte.
+4. Bestätige mit `Enter`. `Esc` oder ein Rechtsklick bricht die Auswahl ab.
 
-Klickmeister benötigt die Erlaubnis:
+Nach einem Linksklick oder einer Korrektur per Pfeiltasten bleibt die Position fixiert; Mausbewegungen verändern sie dann nicht mehr. Das Augensymbol **Punkt anzeigen** markiert das gespeicherte Ziel kurz, ohne zu klicken.
 
-- den Start-/Stop-Hotkey systemweit zu erkennen
-- Mausklicks auszuführen
-- bei einer festen Position den ausgewählten Bildschirm zuzuordnen
+Das Hauptfenster wird während der Auswahl minimiert und danach mit seiner bisherigen Größe, Position und Maximierung wiederhergestellt. Die Auswahl liegt direkt über dem Desktop. Sie erstellt keine Bildschirmaufnahme und verwendet keine Lupe.
 
-Das Programm liest keine Tastatureingaben, Passwörter oder Zwischenablagen mit. Nur die optional aktivierte Lupe lädt eine Bildschirmaufnahme über das Screenshot-Portal. Diese wird nach der Auswahl aus der Anzeige entfernt; das Portal kann dafür eine temporäre Bilddatei erzeugen. Es wird kein Bildschirmvideo aufgenommen. Alle Freigaben enden, sobald du Klickmeister schließt.
+Gib beim Start im KDE-Dialog denselben Bildschirm frei, den du in Klickmeister ausgewählt hast. Klickmeister prüft die Zuordnung vor dem ersten Klick. Bei einem anderen Bildschirm oder einer uneindeutigen Zuordnung wird der Start abgebrochen.
 
-Ohne funktionierenden Stop-Hotkey startet der Auto Clicker absichtlich nicht. So kannst du ihn immer sicher anhalten.
+Eine feste Position bleibt mit ihrem Bildschirm gespeichert. Ändern sich Auflösung oder Skalierung, muss sie erneut bestätigt werden. Ist der Bildschirm nicht verfügbar oder nicht eindeutig wiederzuerkennen, prüfe Bildschirm und Koordinaten und wähle **Position bestätigen** oder eine neue Position. Die gespeicherte Position bleibt erhalten, bis du sie bestätigst oder ersetzt.
 
-## Gut zu wissen
+## Freigaben und Datenschutz
 
-- Das kleinste Intervall beträgt 10 Millisekunden. Mehr als 100 Klicks pro Sekunde sind nicht möglich. Im Modus 2× sind das 100 Doppelklicks, also 200 einzelne Klicks pro Sekunde; auch die Wiederholungsanzahl zählt dann Doppelklicks.
-- Eine feste Position gilt immer für den Bildschirm, den du im KDE-Dialog ausgewählt hast.
-- Die Monitorauswahl zeigt Hersteller und Modell aus den Systemdaten. Bei gleichen Modellen oder fehlenden Modellangaben wird der Anschluss zur Unterscheidung ergänzt.
-- Der Positionswähler öffnet sich auf dem Bildschirm, den du zuvor in Klickmeister ausgewählt hast.
-- Klickmeister ist nur für Wayland gedacht. Ein X11- oder `xdotool`-Ersatz ist nicht eingebaut.
-- Gespeichert werden nur deine Einstellungen. Es gibt keine Statistiken, keine Nutzungsdaten und keine Telemetrie.
+KDE fragt nach Freigaben für das globale Tastenkürzel und die Maussteuerung. Bei einer festen Position kommt eine Bildschirmfreigabe hinzu, damit Klickmeister die Koordinaten zuordnen kann. Dabei werden keine Bild- oder Videodaten gelesen.
 
-## Für Entwickler
+Klickmeister liest keine Tastatureingaben, Passwörter oder Zwischenablagen und fordert keine Screenshots an. Gespeichert werden nur die Einstellungen. Die Anwendung erfasst keine Nutzungsdaten oder Telemetrie und benötigt keinen Netzwerkzugriff.
 
-Du möchtest Klickmeister selbst bauen, verändern oder überprüfen? Die wichtigsten Befehle sind:
+Mit dem Schließen des Fensters endet die Anwendung einschließlich ihrer Freigaben. Es gibt keinen Hintergrunddienst und keinen Autostart.
+
+## Häufige Fragen
+
+### Warum ist „Starten“ nicht verfügbar?
+
+Für jeden Lauf muss das Tastenkürzel für Start und Stopp eingerichtet sein. Falls die Freigabe abgelehnt, die Taste entfernt oder die Freigabe beendet wurde, wähle in der Fußleiste die Schaltfläche **Erneut versuchen**. Ein Neustart ist dafür nicht nötig.
+
+### Warum wird eine feste Position nicht übernommen?
+
+Eine feste Position gilt nur für ihren ausgewählten Bildschirm. Gib im KDE-Dialog denselben Bildschirm frei. Nach Änderungen an Auflösung oder Skalierung sowie bei einer fehlenden Bildschirmzuordnung muss die Position in Klickmeister geprüft und bestätigt werden.
+
+### Wann werden die Einstellungen gespeichert?
+
+Die Einstellungen werden beim Start eines Klicklaufs und beim Schließen gespeichert. Änderungen werden auch übernommen, wenn kein Lauf gestartet wurde. Schlägt das Speichern beim Schließen fehl, kannst du zur Anwendung zurückkehren oder **Ohne Speichern schließen** wählen. Beim Zurückkehren werden die Freigaben erneut angefragt: das Tastenkürzel sofort, die Maussteuerung beim nächsten Start.
+
+### Funktioniert Klickmeister unter X11?
+
+Klickmeister ist für KDE Plasma unter Wayland ausgelegt. X11 wird nicht unterstützt.
+
+## Entwicklung
+
+Cargo-Befehle bauen den aktuellen Checkout einschließlich lokaler Änderungen. `makepkg` verwendet den oben genannten, festgelegten Quellstand. Mit `makepkg --allsource --nodeps` lässt sich ein Quellpaket einschließlich des Projektarchivs erstellen und in einem anderen Verzeichnis bauen. Cargo-Abhängigkeiten werden beim Paketbau mit `cargo fetch --locked` geladen.
+
+### Bauen und prüfen
 
 ```bash
 cargo fmt --all -- --check
@@ -92,16 +110,33 @@ dbus-run-session -- cargo test --locked --all-targets -- --ignored
 cargo build --locked --release
 bash tests/qml-smoke.sh target/release/klickmeister
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QT_QUICK_CONTROLS_STYLE=org.kde.desktop /usr/lib/qt6/bin/qmltestrunner -import tests/qml/mocks -input tests/qml
-bash tests/qml-wayland.sh # isolierter KWin mit drei Monitoren (benötigt kscreen-doctor)
+python tests/check_coordinate_accessibility.py # grafische Sitzung mit AT-SPI und PyGObject
+bash tests/qml-wayland.sh # isolierter KWin mit drei Bildschirmen, benötigt kscreen-doctor
 KLICKMEISTER_TEST_SCALE=1.5 bash tests/qml-wayland.sh
 ```
 
-Die QML-Tests verwenden denselben KDE-Control-Stil wie die App und für das Hauptfenster einen Controller-Testersatz. Die separaten D-Bus-Tests prüfen den echten Rust-Worker gegen simulierte Portale, einschließlich Klickfolgen, Stop-Hotkey, Sitzungsende und Button-Release-Fehlern. Sie erzeugen keine tatsächlichen Mausklicks auf dem Desktop. Echte KDE-Freigabedialoge und die Zeigersteuerung auf physischen Monitoren müssen zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft werden.
+Die QML-Tests verwenden den KDE-Control-Stil und einen Controller-Testersatz. Die AT-SPI-Prüfung startet das Hauptfenster ohne Worker und prüft die zugänglichen Namen der Koordinatenfelder und ihrer Texteingaben. Die D-Bus-Tests prüfen den Rust-Worker gegen simulierte Portale. Dazu gehören Klickfolgen, Stopps, verzögerte Tastenkürzel-Signale, Sitzungsende und Fehler beim Loslassen einer Maustaste. Diese Tests erzeugen keine Mausklicks auf dem Desktop.
 
-Die abgesicherten nativen Testwerkzeuge und ihre Voraussetzungen sind unter [tests/native](tests/native/README.md) dokumentiert.
+Tastenkürzel-Signale, die sich während eines Laufs angestaut haben, dürfen diesen noch stoppen, danach aber keinen neuen Lauf starten. Eine neue Betätigung nach dem Stopp startet wie gewohnt.
 
-Mehr über den Aufbau und die Sicherheitsentscheidungen findest du in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md).
+Echte KDE-Dialoge und die Zeigersteuerung auf physischen Bildschirmen werden zusätzlich in einer nativen Plasma-Wayland-Sitzung geprüft. Die Werkzeuge und Voraussetzungen dafür sind unter [tests/native](tests/native/README.md) dokumentiert.
+
+Prüfe den Start-Countdown manuell an einem eigenen Testziel: Vor Ablauf der drei Sekunden darf kein Klick erfolgen. **Start abbrechen** und das Tastenkürzel müssen den Countdown ohne Klick beenden. Wiederhole die Prüfung mit bereits erteilter Freigabe. Starts per Tastenkürzel und mit fester Position müssen ohne Countdown beginnen.
+
+GitHub Actions führt Formatierung, Clippy, Rust- und Portaltests, QML-Tests im KDE-Stil, Python-Tests sowie Desktop- und AppStream-Validierung aus. Danach folgen Release-Build und QML-Smoke-Test. Ein separater Job prüft die QML-Oberfläche unter einem virtuellen KWin mit drei Bildschirmen. Beide Jobs verwenden Arch-Linux-Container und die Cargo-Lockdatei; native Tests mit echten KDE-Dialogen bleiben eine manuelle Prüfung.
+
+### QML-Sprachserver
+
+Führe zuerst `cargo build --locked` und danach `bash scripts/setup-qmlls.sh` aus. Das Skript ermittelt das aktive Cargo-Buildverzeichnis, auch bei `CARGO_TARGET_DIR` oder `build.target-dir`, und schreibt die von Git ignorierte `.qmlls.ini`. Nach einem Wechsel des Buildverzeichnisses muss das Skript erneut ausgeführt werden. Python 3 ist erforderlich.
+
+`python tests/check_qmlls_checkout.py` prüft den committeten Stand in einem frischen Checkout mit anderem Pfad und fragt die `AppController`-Eigenschaften direkt beim QML-Sprachserver ab.
+
+### Desktop-Integration
+
+Der Qt-Desktop-Dateiname lautet `io.github.jerry0205.klickmeister` und entspricht der installierten `.desktop`-Datei. Der QML-Smoke-Test prüft diesen Wert. Die [Portal-Anwendungs-ID](https://flatpak.github.io/xdg-desktop-portal/docs/api-reference) wird für die separaten D-Bus-Verbindungen aus dem Startkontext bestimmt. Eine direkt gestartete Entwicklungs-Binärdatei kann deshalb in KDE-Freigabedialogen anders benannt werden als die über das Anwendungsmenü gestartete Anwendung.
+
+Details zum Aufbau und zu Sicherheitsentscheidungen stehen in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md).
 
 ## Lizenz
 
-Klickmeister ist freie Software und steht unter der [MIT-Lizenz](LICENSE).
+Klickmeister ist freie Software unter der [MIT-Lizenz](LICENSE).
