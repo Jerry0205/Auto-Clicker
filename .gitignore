@@ -1,4 +1,5 @@
 /target/
+/dist/
 /.qmlls.ini
 /pkg/
 /srcpkg/

@@ -21,23 +21,29 @@ Ein Klickzyklus entspricht einem Einzel- oder Doppelklick. Drei Zyklen erzeugen 
 
 Klickmeister benötigt KDE Plasma 6, eine Wayland-Sitzung und den KDE-Portaldienst. Das mitgelieferte Paket ist für Arch Linux und darauf basierende Distributionen wie CachyOS vorgesehen.
 
-Installiere die Build- und Laufzeitabhängigkeiten:
+### Fertiges Paket herunterladen
+
+1. Öffne die [Downloads der neuesten Version](https://github.com/Jerry0205/Auto-Clicker/releases/latest).
+2. Lade die Datei **`klickmeister-…-x86_64.pkg.tar.zst`** herunter.
+3. Öffne ein Terminal im Downloadordner und installiere die Datei:
 
 ```bash
-sudo pacman -S git rust cargo clang lld pkgconf qt6-base qt6-declarative qt6-tools kirigami xdg-desktop-portal xdg-desktop-portal-kde
+sudo pacman -U ./klickmeister-*-x86_64.pkg.tar.zst
 ```
 
-Lade das Projekt herunter und baue das Paket:
+Pacman installiert auch die benötigten Laufzeitabhängigkeiten. Danach ist **Klickmeister** im KDE-Anwendungsmenü verfügbar. Git, Rust und das Klonen des Projekts sind dafür nicht nötig. Verwende ein vollständig aktualisiertes Arch-/CachyOS-System mit x86_64-Prozessor.
+
+Die Archive mit **`-aur.tar.gz`** im Namen sind für Paketbetreuer bestimmt. Zum direkten Installieren verwendest du die **`.pkg.tar.zst`**-Datei.
+
+### Über das AUR
+
+Die Releases enthalten fertige Paketbeschreibungen für **`klickmeister-bin`** (ohne Kompilieren) und **`klickmeister`** (aus Quellcode). Sobald ein Betreuer sie im AUR veröffentlicht hat, ist die Installation beispielsweise mit einem vorhandenen AUR-Helfer möglich:
 
 ```bash
-git clone https://github.com/jerry0205/Auto-Clicker.git
-cd Auto-Clicker
-makepkg -si
+yay -S klickmeister-bin
 ```
 
-Danach ist **Klickmeister** im KDE-Anwendungsmenü verfügbar.
-
-`makepkg` baut den mit Prüfsumme gesicherten Quellstand für Version 0.1.2. Änderungen im lokalen Checkout werden dabei nicht übernommen. Die Befehle zum Bauen des aktuellen Checkouts stehen unter [Entwicklung](#entwicklung).
+Das Erzeugen eines Releases veröffentlicht die Paketbeschreibungen noch nicht im AUR. Die Schritte dafür stehen unter [Releases und AUR](docs/RELEASING.md).
 
 ## Erste Schritte
 
@@ -98,7 +104,15 @@ Klickmeister ist für KDE Plasma unter Wayland ausgelegt. X11 wird nicht unterst
 
 ## Entwicklung
 
-Cargo-Befehle bauen den aktuellen Checkout einschließlich lokaler Änderungen. `makepkg` verwendet den oben genannten, festgelegten Quellstand. Mit `makepkg --allsource --nodeps` lässt sich ein Quellpaket einschließlich des Projektarchivs erstellen und in einem anderen Verzeichnis bauen. Cargo-Abhängigkeiten werden beim Paketbau mit `cargo fetch --locked` geladen.
+Installiere auf Arch Linux die Build- und Laufzeitabhängigkeiten:
+
+```bash
+sudo pacman -S --needed base-devel git rust cargo clang lld pkgconf qt6-base qt6-declarative qt6-wayland qt6-tools kirigami qqc2-desktop-style xdg-desktop-portal xdg-desktop-portal-kde python
+```
+
+Cargo-Befehle bauen den aktuellen Checkout einschließlich lokaler Änderungen. Der `PKGBUILD` im Projektstamm verwendet einen festgelegten, mit Prüfsumme gesicherten Quellstand für Version 0.1.2. Mit `makepkg --allsource --nodeps` lässt sich ein Quellpaket einschließlich des Projektarchivs erstellen und in einem anderen Verzeichnis bauen. Cargo-Abhängigkeiten werden beim Paketbau mit `cargo fetch --locked` geladen.
+
+`bash scripts/build-release.sh` baut den aktuellen Checkout als installierbares Paket und erzeugt die AUR-Paketbeschreibungen samt Prüfsummen in `dist/`. Der GitHub-Workflow **Release packages** führt das bei einem Versionstag automatisch aus, prüft die Installation und stellt die Dateien unter [Releases](https://github.com/Jerry0205/Auto-Clicker/releases) bereit. Details stehen unter [Releases und AUR](docs/RELEASING.md).
 
 ### Bauen und prüfen
 
