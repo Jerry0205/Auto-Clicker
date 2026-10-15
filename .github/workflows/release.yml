@@ -1,0 +1,78 @@
+name: Release packages
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify Arch and AUR packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container: archlinux:base-devel
+    steps:
+      - name: Install build and test tools
+        run: >-
+          pacman -Syu --noconfirm --needed
+          git ca-certificates rust cargo clang lld pkgconf
+          qt6-base qt6-declarative qt6-wayland qt6-tools kirigami qqc2-desktop-style
+          xdg-desktop-portal xdg-desktop-portal-kde python
+
+      - uses: actions/checkout@v6
+
+      - name: Prepare unprivileged package builder
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build packages and verify the binary AUR recipe
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: runuser -u builder -- bash scripts/build-release.sh "$RELEASE_TAG"
+
+      - name: Test installation and the installed application
+        run: |
+          pacman -U --noconfirm dist/klickmeister-*-x86_64.pkg.tar.zst
+          runuser -u builder -- bash tests/qml-smoke.sh /usr/bin/klickmeister
+          pacman -Qkk klickmeister
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: klickmeister-release
+          path: |
+            dist/*.pkg.tar.zst
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    name: Publish downloads
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: klickmeister-release
+          path: dist
+
+      - name: Create GitHub release with installable package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          gh release create "$RELEASE_TAG" dist/*
+          --verify-tag --title "Klickmeister $RELEASE_TAG"
+          --generate-notes
+          --notes 'Arch Linux / CachyOS (x86_64): Die .pkg.tar.zst-Datei herunterladen und mit sudo pacman -U ./klickmeister-*-x86_64.pkg.tar.zst installieren. Klonen und Kompilieren sind nicht nötig. Die Archive mit -aur.tar.gz enthalten PKGBUILD und .SRCINFO für AUR-Betreuer; klickmeister-bin verwendet die fertige Anwendung. Diese Veröffentlichung trägt die Pakete noch nicht im AUR ein.'
