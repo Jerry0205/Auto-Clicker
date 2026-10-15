@@ -34,6 +34,12 @@ def coordinate_roles(pid):
         app = desktop.get_child_at_index(index)
         if app.get_process_id() == pid:
             found = {name: set() for name in NAMES}
+            # Fixed-position fields become visible after selecting that mode.
+            for node in descendants(app):
+                if (node.get_role() == Atspi.Role.RADIO_BUTTON
+                        and node.get_name() == "Feste Position"
+                        and not node.get_state_set().contains(Atspi.StateType.CHECKED)):
+                    node.get_action_iface().do_action(0)
             for node in descendants(app):
                 name = node.get_name()
                 if name in found:

@@ -4,6 +4,8 @@ Automatische Mausklicks für KDE Plasma.
 
 Klickmeister übernimmt wiederholte Mausklicks unter KDE Plasma 6 auf Wayland. Wähle Position, Klickintervall und Wiederholungen. Ein globales Tastenkürzel startet und stoppt das Klicken.
 
+![Klickmeister mit festem Punkt und erreichbaren Start-/Stopp-Knöpfen](docs/screenshot.png)
+
 ## Funktionen
 
 - Linke, rechte oder mittlere Maustaste
@@ -45,22 +47,22 @@ Danach ist **Klickmeister** im KDE-Anwendungsmenü verfügbar.
 4. Drücke das Tastenkürzel oder wähle **Starten**. Bestätige die Freigabe für die Maussteuerung im KDE-Dialog.
 5. Drücke das Tastenkürzel erneut oder wähle **Stoppen**, um das Klicken zu beenden.
 
-Als Tastenkürzel wird `Pause` vorgeschlagen. Das aktive Kürzel steht im Abschnitt **Tastenkürzel**; mit **Ändern …** lässt es sich im KDE-Dialog anpassen. Klickmeister startet erst, wenn ein Tastenkürzel für Start und Stopp eingerichtet ist.
+Als Tastenkürzel wird `Pause` vorgeschlagen. Das aktive Kürzel steht in der Fußleiste; mit **Ändern …** lässt es sich im KDE-Dialog anpassen. Klickmeister startet erst, wenn ein Tastenkürzel für Start und Stopp eingerichtet ist.
 
 ### Start an der Mauszeigerposition
 
-Bei **Aktuelle Mauszeigerposition** folgt jeder Klick dem Mauszeiger. Beim Start über die Schaltfläche beginnt nach der Freigabe ein Countdown von drei Sekunden. Bewege den Mauszeiger in dieser Zeit zum Ziel. **Start abbrechen** oder das Tastenkürzel beendet den Countdown ohne Klick.
+Bei **Mauszeiger** folgt jeder Klick dem Mauszeiger. Beim Start über die Schaltfläche beginnt nach der Freigabe ein Countdown von drei Sekunden. Bewege den Mauszeiger in dieser Zeit zum Ziel. **Start abbrechen** oder das Tastenkürzel beendet den Countdown ohne Klick.
 
 Beim Start per Tastenkürzel beginnt das Klicken nach der Freigabe sofort. Das gilt auch beim Start an einer festen Position.
 
 ### Feste Position wählen
 
-1. Wähle **Feste Position** und den gewünschten **Bildschirm**.
-2. Wähle **Position wählen …**. Die Positionsauswahl öffnet sich auf diesem Bildschirm.
+1. Wähle **Fester Punkt** und den gewünschten **Bildschirm**.
+2. Wähle **Auswählen …**. Die Positionsauswahl öffnet sich auf diesem Bildschirm.
 3. Setze die Position mit einem Linksklick. Mit den Pfeiltasten verschiebst du sie um einen Schritt, mit `Umschalt` + Pfeiltasten um zehn Schritte.
 4. Bestätige mit `Enter`. `Esc` oder ein Rechtsklick bricht die Auswahl ab.
 
-Nach einem Linksklick oder einer Korrektur per Pfeiltasten bleibt die Position fixiert; Mausbewegungen verändern sie dann nicht mehr. **Position anzeigen** markiert das gespeicherte Ziel kurz, ohne zu klicken.
+Nach einem Linksklick oder einer Korrektur per Pfeiltasten bleibt die Position fixiert; Mausbewegungen verändern sie dann nicht mehr. Das Augensymbol **Punkt anzeigen** markiert das gespeicherte Ziel kurz, ohne zu klicken.
 
 Das Hauptfenster wird während der Auswahl minimiert und danach mit seiner bisherigen Größe, Position und Maximierung wiederhergestellt. Die Auswahl liegt direkt über dem Desktop. Sie erstellt keine Bildschirmaufnahme und verwendet keine Lupe.
 
@@ -80,7 +82,7 @@ Mit dem Schließen des Fensters endet die Anwendung einschließlich ihrer Freiga
 
 ### Warum ist „Starten“ nicht verfügbar?
 
-Für jeden Lauf muss das Tastenkürzel für Start und Stopp eingerichtet sein. Falls die Freigabe abgelehnt, die Taste entfernt oder die Freigabe beendet wurde, wähle im Abschnitt **Tastenkürzel** die Schaltfläche **Erneut versuchen**. Ein Neustart ist dafür nicht nötig.
+Für jeden Lauf muss das Tastenkürzel für Start und Stopp eingerichtet sein. Falls die Freigabe abgelehnt, die Taste entfernt oder die Freigabe beendet wurde, wähle in der Fußleiste die Schaltfläche **Erneut versuchen**. Ein Neustart ist dafür nicht nötig.
 
 ### Warum wird eine feste Position nicht übernommen?
 

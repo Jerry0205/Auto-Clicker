@@ -1,5 +1,6 @@
 import QtQuick
 import QtTest
+import QtQuick.Controls as Controls
 import "../../qml"
 
 TestCase {
@@ -21,6 +22,101 @@ TestCase {
         tryCompare(main, "active", true)
     }
     function cleanup() { main.close() }
+
+    function findItem(item, predicate) {
+        if (predicate(item)) return item
+        for (const child of item.children) {
+            const found = findItem(child, predicate)
+            if (found) return found
+        }
+        return null
+    }
+
+    function choice(groupName, label) {
+        const group = findChild(main, groupName)
+        verify(group !== null)
+        const button = findItem(group, item => item.Accessible.name === label && item.checkable)
+        verify(button !== null, label)
+        return button
+    }
+
+    function test_choice_buttons_update_controller_data() {
+        return [
+            { tag: "right button", group: "mouseButtonInput", label: "Rechts", property: "mouse_button", value: 1 },
+            { tag: "middle button", group: "mouseButtonInput", label: "Mitte", property: "mouse_button", value: 2 },
+            { tag: "double click", group: "clickTypeInput", label: "Doppelklick", property: "click_type", value: 1 },
+            { tag: "repeat count", group: "repeatModeInput", label: "Klickzyklen", property: "repeat_until_stopped", value: false },
+            { tag: "fixed position", group: "positionModeInput", label: "Feste Position", property: "current_position", value: false }
+        ]
+    }
+    function test_choice_buttons_update_controller(data) {
+        const button = choice(data.group, data.label)
+        verify(!button.checked)
+        mouseClick(button)
+        compare(controller[data.property], data.value)
+        verify(button.checked)
+        mouseClick(button)
+        verify(button.checked, "clicking the selected option keeps it selected")
+        compare(button.Accessible.role, Accessible.RadioButton)
+    }
+
+    function test_fixed_position_controls_only_show_for_fixed_position() {
+        for (const fixed of [false, true]) {
+            controller.current_position = !fixed
+            for (const name of ["monitorInput", "xInput", "yInput", "pickButton", "previewButton"])
+                compare(findChild(main, name).visible, fixed, name)
+        }
+    }
+
+    function test_settings_fit_window_after_position_mode_changes_data() {
+        return [
+            { tag: "minimum", width: 360 },
+            { tag: "default", width: 450 },
+            { tag: "wide", width: 650 }
+        ]
+    }
+    function test_settings_fit_window_after_position_mode_changes(data) {
+        main.width = data.width
+        controller.interval_ms = 86400000
+        controller.repeat_until_stopped = false
+        controller.repeat_count = 10000000
+        for (const fixed of [true, false, true]) {
+            controller.current_position = !fixed
+            wait(50)
+            for (const name of ["intervalInput", "repeatInput", "monitorInput", "xInput", "yInput", "rateLabel", "positionModeInput"]) {
+                const field = findChild(main, name)
+                if (!field.visible) continue
+                const left = field.mapToItem(null, 0, 0).x
+                verify(left >= 0 && left + field.width <= main.width,
+                       name + " spans " + left + " to " + (left + field.width) + " in " + main.width)
+            }
+        }
+    }
+
+    function test_keyboard_focus_scrolls_settings_into_view() {
+        main.width = main.minimumWidth
+        main.height = main.minimumHeight
+        controller.current_position = false
+        const input = findChild(main, "yInput")
+        waitForRendering(input)
+        input.forceActiveFocus(Qt.TabFocusReason)
+        const flickable = main.pageStack.currentItem.flickable
+        tryVerify(() => {
+            const point = input.mapToItem(flickable, 0, 0)
+            return point.y >= 0 && point.y + input.height <= flickable.height
+        })
+    }
+
+    function test_mouse_icon_buttons_have_tooltips() {
+        const button = choice("mouseButtonInput", "Links")
+        // The offscreen platform disables hover effects by default.
+        button.hoverEnabled = true
+        waitForRendering(button)
+        mouseMove(button, button.width / 2, button.height / 2)
+        tryCompare(button, "hovered", true)
+        tryCompare(button.Controls.ToolTip, "visible", true)
+        compare(button.Controls.ToolTip.text, "Links")
+    }
 
     function test_saved_coordinates_are_visible_after_monitor_initialization() {
         compare(controller.fixed_x, 80)
@@ -49,6 +145,9 @@ TestCase {
 
             const closeButton = closeButtonIn(banner)
             verify(closeButton !== null)
+            // The header animates open; wait until its close button is on screen.
+            tryVerify(() => closeButton.mapToItem(null, 0, 0).y >= 0)
+            waitForRendering(closeButton)
             mouseClick(closeButton)
             tryCompare(banner, "visible", false)
             compare(controller.error_message, "")
@@ -287,22 +386,20 @@ TestCase {
 
     function test_edits_are_saved_on_close_without_click_start_data() {
         return [
-            { tag: "mouse button", input: "mouseButtonInput", key: Qt.Key_Down, property: "mouse_button", value: 1 },
-            { tag: "click type", input: "clickTypeInput", key: Qt.Key_Down, property: "click_type", value: 1 },
-            { tag: "repeat mode", input: "repeatCountLabel", key: Qt.Key_Space, property: "repeat_until_stopped", value: false },
-            { tag: "position mode", input: "fixedPositionInput", key: Qt.Key_Space, property: "current_position", value: false },
-            // Start from the opposite state; clicking a checked radio changes nothing.
-            { tag: "repeat until stopped", input: "repeatUntilStoppedInput", key: Qt.Key_Space, property: "repeat_until_stopped", initial: false, value: true },
-            { tag: "cursor position", input: "currentPositionInput", key: Qt.Key_Space, property: "current_position", initial: false, value: true }
+            { tag: "mouse button", group: "mouseButtonInput", label: "Rechts", property: "mouse_button", value: 1 },
+            { tag: "click type", group: "clickTypeInput", label: "Doppelklick", property: "click_type", value: 1 },
+            { tag: "repeat mode", group: "repeatModeInput", label: "Klickzyklen", property: "repeat_until_stopped", value: false },
+            { tag: "position mode", group: "positionModeInput", label: "Feste Position", property: "current_position", value: false },
+            { tag: "repeat until stopped", group: "repeatModeInput", label: "Bis zum Stoppen", property: "repeat_until_stopped", initial: false, value: true },
+            { tag: "cursor position", group: "positionModeInput", label: "Aktuelle Mauszeigerposition", property: "current_position", initial: false, value: true }
         ]
     }
     function test_edits_are_saved_on_close_without_click_start(data) {
         if (data.initial !== undefined) controller[data.property] = data.initial
         compare(controller.configDirty, false)
-        const input = findChild(main, data.input)
-        verify(input !== null)
+        const input = choice(data.group, data.label)
         input.forceActiveFocus()
-        keyClick(data.key)
+        keyClick(Qt.Key_Space)
         compare(controller[data.property], data.value)
         compare(controller.configDirty, true)
         main.close()
@@ -427,7 +524,7 @@ TestCase {
     }
 
     function test_repeat_count_is_labeled_as_cycles() {
-        compare(findChild(main, "repeatCountLabel").text, "Klickzyklen")
+        compare(choice("repeatModeInput", "Klickzyklen").text, "Klickzyklen")
     }
 
     function test_hotkey_recovery_controls() {
@@ -527,6 +624,8 @@ TestCase {
         controller.running = data.running
 
         const flickable = main.pageStack.currentItem.flickable
+        verify(flickable.height > 0, "Long errors must leave room for the settings")
+        verify(findChild(main, "messageHeader").height <= main.height / 3 + 1)
         tryVerify(function() { return flickable.contentHeight > flickable.height },
                   1000, "Settings must remain scrollable")
         flickable.contentY = flickable.contentHeight - flickable.height

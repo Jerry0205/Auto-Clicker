@@ -14,6 +14,7 @@ Kirigami.ApplicationWindow {
     property bool monitorRestored: false
     property bool monitorSelectionInProgress: false
     property bool discardSettingsOnClose: false
+    readonly property bool fixedPosition: !controller.current_position
     readonly property bool controlsEnabled: !controller.running && !controller.busy
     readonly property var monitorOptions: {
         const screens = Qt.application.screens
@@ -158,10 +159,10 @@ Kirigami.ApplicationWindow {
         monitorInput.currentIndex = screens.length > 0 ? 0 : -1
     }
 
-    width: 520
-    height: 720
-    minimumWidth: 460
-    minimumHeight: 620
+    width: Kirigami.Units.gridUnit * 25
+    height: Kirigami.Units.gridUnit * 29
+    minimumWidth: Kirigami.Units.gridUnit * 20
+    minimumHeight: Kirigami.Units.gridUnit * 16
     visible: true
     title: qsTr("Klickmeister %1").arg(Qt.application.version)
 
@@ -304,6 +305,29 @@ Kirigami.ApplicationWindow {
         contentItem: ColumnLayout {
             spacing: Kirigami.Units.smallSpacing
 
+            RowLayout {
+                Layout.fillWidth: true
+                Controls.Label {
+                    objectName: "hotkeyStatusLabel"
+                    Layout.fillWidth: true
+                    text: controller.hotkey_configuring ? qsTr("Dialog öffnet …") :
+                          controller.hotkey_pending ? qsTr("Wird eingerichtet …") :
+                              (controller.hotkey_ready ? controller.hotkey : qsTr("Nicht verfügbar"))
+                    elide: Text.ElideRight
+                    Accessible.name: qsTr("Tastenkürzel: %1").arg(text)
+                }
+                Controls.ToolButton {
+                    objectName: "hotkeyConfigureButton"
+                    icon.name: "input-keyboard"
+                    text: controller.hotkey_ready ? qsTr("Ändern …") : qsTr("Erneut versuchen")
+                    enabled: root.controlsEnabled && !controller.hotkey_pending
+                    onClicked: controller.configure_hotkey()
+                    Controls.ToolTip.text: qsTr("Tastenkürzel für Start und Stopp ändern")
+                    Controls.ToolTip.visible: hovered
+                    Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
+                }
+            }
+
             Controls.Button {
                 readonly property bool stopMode: controller.running || controller.busy
                 // A button start at the cursor counts down after the permission.
@@ -329,7 +353,9 @@ Kirigami.ApplicationWindow {
                     implicitWidth: Kirigami.Units.smallSpacing
                     implicitHeight: implicitWidth
                     radius: implicitWidth / 2
-                    color: controller.running ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
+                    color: controller.running ? Kirigami.Theme.positiveTextColor
+                        : controller.error_message.length > 0 ? Kirigami.Theme.negativeTextColor
+                        : Kirigami.Theme.disabledTextColor
                 }
                 Controls.Label {
                     objectName: "statusLabel"
@@ -349,295 +375,313 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
     pageStack.initialPage: Kirigami.ScrollablePage {
-        title: qsTr("Automatisch klicken")
+        id: settingsPage
+        header: Controls.ScrollView {
+            id: messageHeader
+            objectName: "messageHeader"
+            // Long portal errors must leave room for the settings and run controls.
+            implicitHeight: Math.min(messageColumn.implicitHeight, root.height / 3)
+            contentWidth: availableWidth
+            Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
 
-        ColumnLayout {
-            spacing: Kirigami.Units.largeSpacing
-
-            Kirigami.InlineMessage {
-                id: errorBanner
-                objectName: "errorBanner"
-                Layout.fillWidth: true
-                visible: false
-                type: Kirigami.MessageType.Error
-                text: controller.error_message
-                showCloseButton: true
-                onLinkActivated: controller.clear_error()
-                onVisibleChanged: if (!visible) controller.clear_error()
-                Component.onCompleted: visible = controller.error_message.length > 0
-            }
-
-            Connections {
-                target: controller
-                function onError_messageChanged() {
-                    errorBanner.visible = controller.error_message.length > 0
+            ColumnLayout {
+                id: messageColumn
+                width: messageHeader.availableWidth
+                Kirigami.InlineMessage {
+                    id: errorBanner
+                    objectName: "errorBanner"
+                    Layout.fillWidth: true
+                    visible: false
+                    type: Kirigami.MessageType.Error
+                    text: controller.error_message
+                    showCloseButton: true
+                    onVisibleChanged: if (!visible) controller.clear_error()
+                    Component.onCompleted: visible = controller.error_message.length > 0
                 }
-                function onRunningChanged() { if (controller.running) monitorStopMessage.visible = false }
-                function onBusyChanged() { if (controller.busy) monitorStopMessage.visible = false }
-            }
-
-            Kirigami.InlineMessage {
-                id: monitorStopMessage
-                objectName: "monitorStopMessage"
-                Layout.fillWidth: true
-                visible: false
-                type: Kirigami.MessageType.Warning
-                text: qsTr("Klicken gestoppt: Der Bildschirm der festen Position hat sich geändert. Prüfe die Position vor dem nächsten Start.")
-                showCloseButton: true
-            }
-
-            Controls.GroupBox {
-                Layout.fillWidth: true
-                title: qsTr("Klickintervall")
-                enabled: root.controlsEnabled
-
-                RowLayout {
-                    anchors.fill: parent
-                    Controls.SpinBox {
-                        id: intervalInput
-                        objectName: "intervalInput"
-                        Layout.fillWidth: true
-                        from: 10
-                        to: 86400000
-                        stepSize: 10
-                        editable: true
-                        value: controller.interval_ms
-                        onValueModified: { controller.interval_ms = value; controller.mark_settings_changed() }
-                        textFromValue: function(value) { return value.toLocaleString(Qt.locale(), 'f', 0) }
-                        valueFromText: function(text) {
-                            return Number.fromLocaleString(Qt.locale(), text)
-                        }
-                        Accessible.name: qsTr("Klickintervall in Millisekunden")
-                    }
-                    Controls.Label {
-                        text: qsTr("ms")
-                    }
-                    Controls.Label {
-                        id: rateLabel
-                        objectName: "rateLabel"
-                        color: Kirigami.Theme.disabledTextColor
-                        text: root.rateDescription
-                        wrapMode: Text.WordWrap
-                    }
+                Kirigami.InlineMessage {
+                    id: monitorStopMessage
+                    objectName: "monitorStopMessage"
+                    Layout.fillWidth: true
+                    visible: false
+                    type: Kirigami.MessageType.Warning
+                    text: qsTr("Klicken gestoppt: Der Bildschirm der festen Position hat sich geändert. Prüfe die Position vor dem nächsten Start.")
+                    showCloseButton: true
                 }
             }
+        }
 
-            Controls.GroupBox {
-                Layout.fillWidth: true
-                title: qsTr("Maustaste und Klickart")
-                enabled: root.controlsEnabled
-
-                RowLayout {
-                    anchors.fill: parent
-                    Controls.ComboBox {
-                        objectName: "mouseButtonInput"
-                        Layout.fillWidth: true
-                        model: [qsTr("Links"), qsTr("Rechts"), qsTr("Mitte")]
-                        currentIndex: controller.mouse_button
-                        onActivated: { controller.mouse_button = currentIndex; controller.mark_settings_changed() }
-                        Accessible.name: qsTr("Maustaste")
-                    }
-                    Controls.ComboBox {
-                        objectName: "clickTypeInput"
-                        Layout.fillWidth: true
-                        model: [qsTr("Einzelklick"), qsTr("Doppelklick")]
-                        currentIndex: controller.click_type
-                        onActivated: { controller.click_type = currentIndex; controller.mark_settings_changed() }
-                        Accessible.name: qsTr("Klickart")
-                    }
-                }
+        Connections {
+            target: controller
+            function onError_messageChanged() {
+                errorBanner.visible = controller.error_message.length > 0
             }
+            function onRunningChanged() { if (controller.running) monitorStopMessage.visible = false }
+            function onBusyChanged() { if (controller.busy) monitorStopMessage.visible = false }
+        }
 
-            Controls.GroupBox {
-                Layout.fillWidth: true
-                title: qsTr("Wiederholungen")
-                enabled: root.controlsEnabled
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    Controls.RadioButton {
-                        objectName: "repeatUntilStoppedInput"
-                        text: qsTr("Bis zum Stoppen")
-                        checked: controller.repeat_until_stopped
-                        onToggled: if (checked) controller.repeat_until_stopped = true
-                        onClicked: controller.mark_settings_changed()
-                    }
-                    RowLayout {
-                        Controls.RadioButton {
-                            objectName: "repeatCountLabel"
-                            text: qsTr("Klickzyklen")
-                            checked: !controller.repeat_until_stopped
-                            onToggled: if (checked) controller.repeat_until_stopped = false
-                            onClicked: controller.mark_settings_changed()
-                        }
-                        Controls.SpinBox {
-                            objectName: "repeatInput"
-                            Layout.fillWidth: true
-                            from: 1
-                            to: 10000000
-                            editable: true
-                            value: controller.repeat_count
-                            enabled: !controller.repeat_until_stopped
-                            onValueModified: { controller.repeat_count = value; controller.mark_settings_changed() }
-                            Accessible.name: qsTr("Anzahl der Klickzyklen")
-                        }
-                    }
-                    Controls.Label {
-                        Layout.fillWidth: true
-                        text: qsTr("Ein Zyklus entspricht einem Einzel- oder Doppelklick.")
-                        wrapMode: Text.WordWrap
-                        color: Kirigami.Theme.disabledTextColor
-                    }
-                }
+        Connections {
+            target: root
+            function onActiveFocusItemChanged() {
+                const item = root.activeFocusItem
+                let ancestor = item
+                while (ancestor && ancestor !== settingsForm) ancestor = ancestor.parent
+                if (!ancestor) return
+                const position = item.mapToItem(settingsPage.flickable.contentItem, 0, 0)
+                settingsPage.ensureVisible(item, position.x - item.x, position.y - item.y)
             }
+        }
 
-            Controls.GroupBox {
-                Layout.fillWidth: true
-                title: qsTr("Klickposition")
-                enabled: root.controlsEnabled
+        GridLayout {
+            id: settingsForm
+            columns: width >= Kirigami.Units.gridUnit * 22 ? 2 : 1
+            columnSpacing: Kirigami.Units.largeSpacing
+            rowSpacing: Kirigami.Units.smallSpacing
+            enabled: root.controlsEnabled
+            Accessible.role: Accessible.Form
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    Controls.RadioButton {
-                        objectName: "currentPositionInput"
-                        text: qsTr("Aktuelle Mauszeigerposition")
-                        checked: controller.current_position
-                        onToggled: if (checked) controller.current_position = true
-                        onClicked: controller.mark_settings_changed()
-                    }
-                    Controls.RadioButton {
-                        objectName: "fixedPositionInput"
-                        text: qsTr("Feste Position")
-                        checked: !controller.current_position
-                        onToggled: if (checked) controller.current_position = false
-                        onClicked: controller.mark_settings_changed()
-                    }
-                    RowLayout {
-                        enabled: !controller.current_position
-                        Controls.Label { text: qsTr("X") }
-                        Controls.SpinBox {
-                            id: xInput
-                            objectName: "xInput"
-                            Accessible.name: qsTr("X-Koordinate auf dem gewählten Bildschirm")
-                            Layout.fillWidth: true
-                            from: 0
-                            to: Math.max(0, controller.monitor_width - 1)
-                            editable: true
-                            wheelEnabled: false
-                            value: controller.fixed_x
-                            onValueModified: { controller.fixed_x = value; controller.mark_position_changed() }
-                        }
-                        Controls.Label { text: qsTr("Y") }
-                        Controls.SpinBox {
-                            id: yInput
-                            objectName: "yInput"
-                            Accessible.name: qsTr("Y-Koordinate auf dem gewählten Bildschirm")
-                            Layout.fillWidth: true
-                            from: 0
-                            to: Math.max(0, controller.monitor_height - 1)
-                            editable: true
-                            wheelEnabled: false
-                            value: controller.fixed_y
-                            onValueModified: { controller.fixed_y = value; controller.mark_position_changed() }
-                        }
-                    }
-                    RowLayout {
-                        enabled: !controller.current_position
-                        Controls.Label { text: qsTr("Bildschirm") }
-                        Controls.ComboBox {
-                            id: monitorInput
-                            objectName: "monitorInput"
-                            Layout.fillWidth: true
-                            model: root.monitorOptions
-                            textRole: "label"
-                            // Scrolling the page must not replace the saved position.
-                            wheelEnabled: false
-                            onModelChanged: Qt.callLater(root.ensureMonitorSelection)
-                            Component.onCompleted: {
-                                root.monitorSelectionReady = true
-                                root.ensureMonitorSelection()
-                            }
-                            onActivated: root.selectMonitor(model[currentIndex].screen)
-                            Accessible.name: qsTr("Bildschirm für die feste Position")
-                        }
-                    }
-                    Controls.Button {
-                        Layout.fillWidth: true
-                        enabled: !controller.current_position
-                        text: qsTr("Position wählen …")
-                        icon.name: "crosshairs"
-                        onClicked: root.beginPicker(false)
-                    }
-                    Controls.Label {
-                        Layout.fillWidth: true
-                        visible: !controller.current_position && !controller.fixed_position_confirmed
-                        text: qsTr("Die Position muss bestätigt werden. Prüfe Bildschirm und Koordinaten oder wähle eine neue Position.")
-                        wrapMode: Text.WordWrap
-                    }
-                    Controls.Button {
-                        objectName: "confirmMonitorButton"
-                        visible: !controller.current_position && !controller.fixed_position_confirmed
-                        enabled: !!root.selectedMonitor
-                        text: qsTr("Position bestätigen")
-                        onClicked: root.confirmMonitor()
-                    }
-                    Controls.Label {
-                        Layout.fillWidth: true
-                        visible: !controller.current_position
-                        text: qsTr("%1 · X: %2 · Y: %3")
-                            .arg(monitors.displayName(root.selectedMonitor, Qt.application.screens))
-                            .arg(controller.fixed_x).arg(controller.fixed_y)
-                        wrapMode: Text.WordWrap
-                    }
-                    Controls.Button {
-                        visible: !controller.current_position
-                        enabled: !!root.selectedMonitor && controller.fixed_position_confirmed
-                        text: qsTr("Position anzeigen")
-                        icon.name: "view-preview"
-                        onClicked: root.beginPicker(true)
-                    }
-                    Controls.Label {
-                        Layout.fillWidth: true
-                        visible: !controller.current_position
-                        wrapMode: Text.WordWrap
-                        color: Kirigami.Theme.disabledTextColor
-                        text: qsTr("Die Koordinaten beziehen sich auf diesen Bildschirm. Gib beim Start im KDE-Dialog denselben Bildschirm frei.")
-                    }
-                }
+            Controls.Label {
+                text: qsTr("Maustaste:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
-
-            Controls.GroupBox {
+            ChoiceButtons {
+                objectName: "mouseButtonInput"
                 Layout.fillWidth: true
-                title: qsTr("Tastenkürzel")
-
-                RowLayout {
-                    anchors.fill: parent
-                    Controls.Label {
-                        text: qsTr("Start / Stopp")
-                    }
-                    Item { Layout.fillWidth: true }
-                    Controls.Label {
-                        objectName: "hotkeyStatusLabel"
-                        text: controller.hotkey_configuring ? qsTr("Dialog öffnet …") :
-                              controller.hotkey_pending ? qsTr("Wird eingerichtet …") :
-                                  (controller.hotkey_ready ? controller.hotkey : qsTr("Nicht verfügbar"))
-                        font.bold: true
-                    }
-                    Controls.Button {
-                        objectName: "hotkeyConfigureButton"
-                        text: controller.hotkey_ready ? qsTr("Ändern …") : qsTr("Erneut versuchen")
-                        enabled: root.controlsEnabled && !controller.hotkey_pending
-                        onClicked: controller.configure_hotkey()
-                    }
-                }
+                Layout.minimumWidth: 0
+                iconOnly: true
+                value: controller.mouse_button
+                options: [
+                    { value: 0, icon: "input-mouse-click-left", text: qsTr("Links") },
+                    { value: 2, icon: "input-mouse-click-middle", text: qsTr("Mitte") },
+                    { value: 1, icon: "input-mouse-click-right", text: qsTr("Rechts") }
+                ]
+                onSelected: choice => { controller.mouse_button = choice; controller.mark_settings_changed() }
             }
 
             Controls.Label {
-                Layout.alignment: Qt.AlignHCenter
+                text: qsTr("Klick:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
+            ChoiceButtons {
+                objectName: "clickTypeInput"
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                value: controller.click_type
+                options: [
+                    { value: 0, text: qsTr("1×"), description: qsTr("Einzelklick") },
+                    { value: 1, text: qsTr("2×"), description: qsTr("Doppelklick") }
+                ]
+                onSelected: choice => { controller.click_type = choice; controller.mark_settings_changed() }
+            }
+
+            Controls.Label {
+                text: qsTr("Intervall:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                Controls.SpinBox {
+                    id: intervalInput
+                    objectName: "intervalInput"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    from: 10
+                    to: 86400000
+                    stepSize: 10
+                    editable: true
+                    wheelEnabled: false
+                    value: controller.interval_ms
+                    onValueModified: { controller.interval_ms = value; controller.mark_settings_changed() }
+                    textFromValue: value => value.toLocaleString(Qt.locale(), "f", 0)
+                    valueFromText: text => Number.fromLocaleString(Qt.locale(), text)
+                    Accessible.name: qsTr("Klickintervall in Millisekunden")
+                }
+                Controls.Label { text: qsTr("ms") }
+            }
+
+            Controls.Label {
+                objectName: "rateLabel"
+                Layout.columnSpan: settingsForm.columns
+                Layout.fillWidth: true
                 color: Kirigami.Theme.disabledTextColor
-                text: qsTr("Klickmeister %1").arg(Qt.application.version)
-                Accessible.name: qsTr("Installierte Version %1").arg(Qt.application.version)
+                text: root.rateDescription
+                wrapMode: Text.WordWrap
+            }
+
+            Controls.Label {
+                text: qsTr("Wiederholen:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
+            ChoiceButtons {
+                objectName: "repeatModeInput"
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                value: controller.repeat_until_stopped
+                options: [
+                    { value: true, text: "∞", description: qsTr("Bis zum Stoppen") },
+                    { value: false, text: qsTr("Klickzyklen") }
+                ]
+                onSelected: choice => { controller.repeat_until_stopped = choice; controller.mark_settings_changed() }
+            }
+            Controls.Label {
+                text: qsTr("Anzahl:")
+                visible: !controller.repeat_until_stopped
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
+            Controls.SpinBox {
+                objectName: "repeatInput"
+                visible: !controller.repeat_until_stopped
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                from: 1
+                to: 10000000
+                editable: true
+                wheelEnabled: false
+                value: controller.repeat_count
+                onValueModified: { controller.repeat_count = value; controller.mark_settings_changed() }
+                Accessible.name: qsTr("Anzahl der Klickzyklen")
+            }
+
+            Kirigami.Separator {
+                Layout.columnSpan: settingsForm.columns
+                Layout.fillWidth: true
+            }
+
+            Controls.Label {
+                text: qsTr("Ziel:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
+            ChoiceButtons {
+                objectName: "positionModeInput"
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                value: controller.current_position
+                options: [
+                    { value: true, icon: "cursor-arrow", text: qsTr("Mauszeiger"),
+                      description: qsTr("Aktuelle Mauszeigerposition") },
+                    { value: false, icon: "crosshairs", text: qsTr("Fester Punkt"),
+                      description: qsTr("Feste Position") }
+                ]
+                onSelected: choice => { controller.current_position = choice; controller.mark_settings_changed() }
+            }
+
+            Controls.Label {
+                text: qsTr("Bildschirm:")
+                visible: root.fixedPosition
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
+            Controls.ComboBox {
+                id: monitorInput
+                objectName: "monitorInput"
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                visible: root.fixedPosition
+                model: root.monitorOptions
+                textRole: "label"
+                onModelChanged: Qt.callLater(root.ensureMonitorSelection)
+                Component.onCompleted: {
+                    root.monitorSelectionReady = true
+                    root.ensureMonitorSelection()
+                }
+                wheelEnabled: false
+                onActivated: root.selectMonitor(model[currentIndex].screen)
+                Accessible.name: qsTr("Bildschirm für die feste Position")
+            }
+
+            Controls.Label {
+                text: qsTr("Punkt:")
+                visible: root.fixedPosition
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                visible: root.fixedPosition
+                Controls.Label { text: "X" }
+                Controls.SpinBox {
+                    id: xInput
+                    objectName: "xInput"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    from: 0
+                    to: Math.max(0, controller.monitor_width - 1)
+                    editable: true
+                    wheelEnabled: false
+                    value: controller.fixed_x
+                    onValueModified: { controller.fixed_x = value; controller.mark_position_changed() }
+                    Accessible.name: qsTr("X-Koordinate auf dem gewählten Bildschirm")
+                }
+                Controls.Label { text: "Y" }
+                Controls.SpinBox {
+                    id: yInput
+                    objectName: "yInput"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    from: 0
+                    to: Math.max(0, controller.monitor_height - 1)
+                    editable: true
+                    wheelEnabled: false
+                    value: controller.fixed_y
+                    onValueModified: { controller.fixed_y = value; controller.mark_position_changed() }
+                    Accessible.name: qsTr("Y-Koordinate auf dem gewählten Bildschirm")
+                }
+            }
+
+            RowLayout {
+                Layout.columnSpan: settingsForm.columns
+                visible: root.fixedPosition
+                Controls.Button {
+                    objectName: "pickButton"
+                    icon.name: "crosshairs"
+                    text: qsTr("Auswählen …")
+                    enabled: !!root.selectedMonitor
+                    onClicked: root.beginPicker(false)
+                    Controls.ToolTip.text: qsTr("Punkt im Vollbild auf dem Bildschirm wählen")
+                    Controls.ToolTip.visible: hovered
+                    Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
+                }
+                Controls.ToolButton {
+                    objectName: "previewButton"
+                    icon.name: "view-visible"
+                    text: qsTr("Punkt anzeigen")
+                    display: Controls.AbstractButton.IconOnly
+                    enabled: !!root.selectedMonitor && controller.fixed_position_confirmed
+                    onClicked: root.beginPicker(true)
+                    Controls.ToolTip.text: text
+                    Controls.ToolTip.visible: hovered
+                    Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
+                }
+            }
+
+            Kirigami.InlineMessage {
+                objectName: "confirmMessage"
+                Layout.columnSpan: settingsForm.columns
+                Layout.fillWidth: true
+                visible: root.fixedPosition && !controller.fixed_position_confirmed
+                type: Kirigami.MessageType.Warning
+                text: qsTr("Prüfe Bildschirm und Koordinaten und bestätige die Position oder wähle sie neu.")
+            }
+
+            Controls.Button {
+                objectName: "confirmMonitorButton"
+                Layout.columnSpan: settingsForm.columns
+                visible: root.fixedPosition && !controller.fixed_position_confirmed
+                enabled: !!root.selectedMonitor
+                icon.name: "dialog-ok-apply"
+                text: qsTr("Position bestätigen")
+                onClicked: root.confirmMonitor()
+            }
+
+            Controls.Label {
+                Layout.columnSpan: settingsForm.columns
+                Layout.fillWidth: true
+                visible: root.fixedPosition
+                wrapMode: Text.WordWrap
+                font: Kirigami.Theme.smallFont
+                color: Kirigami.Theme.disabledTextColor
+                text: qsTr("Gib beim Start im KDE-Dialog denselben Bildschirm frei.")
             }
         }
     }

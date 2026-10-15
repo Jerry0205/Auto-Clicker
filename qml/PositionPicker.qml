@@ -16,6 +16,7 @@ Window {
     property int targetY: 0
     property int hostVisibility: Window.Windowed
     property bool hintAtBottom: false
+    readonly property bool adjustable: inputReady && !previewOnly
     signal finished()
     signal picked(int x, int y)
 
@@ -75,13 +76,13 @@ Window {
     }
 
     function moveTarget(dx, dy) {
-        if (!inputReady || previewOnly) return
+        if (!adjustable) return
         positionPinned = true
         setTarget(targetX + dx, targetY + dy)
     }
 
     function confirm() {
-        if (!inputReady || previewOnly) return
+        if (!adjustable) return
         picked(targetX, targetY)
         finish()
     }
@@ -115,9 +116,9 @@ Window {
         focusSelection()
     }
     onScreenChanged: updateInputReady()
-    onHeightChanged: updateInputReady()
     onVisibilityChanged: updateInputReady()
     onWidthChanged: updateInputReady()
+    onHeightChanged: updateInputReady()
     onClosing: function(close) { close.accepted = false; finish() }
 
     Timer { id: previewTimer; interval: 1800; onTriggered: picker.finish() }
@@ -130,7 +131,7 @@ Window {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: picker.inputReady ? Qt.CrossCursor : Qt.BusyCursor
         onPositionChanged: function(mouse) {
-            if (picker.inputReady && !picker.previewOnly && !picker.positionPinned) picker.setTarget(mouse.x, mouse.y)
+            if (picker.adjustable && !picker.positionPinned) picker.setTarget(mouse.x, mouse.y)
         }
         onPressed: function(mouse) {
             if (mouse.button === Qt.LeftButton) {
@@ -190,13 +191,13 @@ Window {
     // Window shortcuts work even when Wayland changes the focused Quick item.
     // Keep them scoped to this window so they cannot affect the host controls.
     Item { id: keyboard; focus: true }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequences: ["Return", "Enter"]; context: Qt.WindowShortcut; onActivated: picker.confirm() }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-1, 0) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(1, 0) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -1) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 1) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-10, 0) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(10, 0) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -10) }
-    Shortcut { enabled: picker.inputReady && !picker.previewOnly; sequence: "Shift+Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 10) }
+    Shortcut { enabled: picker.adjustable; sequences: ["Return", "Enter"]; context: Qt.WindowShortcut; onActivated: picker.confirm() }
+    Shortcut { enabled: picker.adjustable; sequence: "Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-1, 0) }
+    Shortcut { enabled: picker.adjustable; sequence: "Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(1, 0) }
+    Shortcut { enabled: picker.adjustable; sequence: "Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -1) }
+    Shortcut { enabled: picker.adjustable; sequence: "Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 1) }
+    Shortcut { enabled: picker.adjustable; sequence: "Shift+Left"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(-10, 0) }
+    Shortcut { enabled: picker.adjustable; sequence: "Shift+Right"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(10, 0) }
+    Shortcut { enabled: picker.adjustable; sequence: "Shift+Up"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, -10) }
+    Shortcut { enabled: picker.adjustable; sequence: "Shift+Down"; context: Qt.WindowShortcut; onActivated: picker.moveTarget(0, 10) }
 }

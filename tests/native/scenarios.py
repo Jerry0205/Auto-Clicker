@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 import tomllib
-from access import Atspi, action, find, nodes, pump, walk
+from access import Atspi, action, find, nodes, pump
 from control import BASE, events, mark, rpc, wait_for
 
 
@@ -40,31 +40,34 @@ def key(k):
     rpc("driver", cmd="key", keysym=k)
 
 
-def combo(name, index):
+CHOICES = {
+    "Maustaste": ["Links", "Rechts", "Mitte"],
+    "Klickart": ["Einzelklick", "Doppelklick"],
+}
+
+
+def choose(name, index):
+    """Select the named option and verify its accessible checked state."""
     focus_app()
-    n = find(name, role="combo box")
-    assert Atspi.Component.grab_focus(n)
-    time.sleep(0.1)
-    key(0x20)
-    label = {
-        "Maustaste": ["Links", "Rechts", "Mitte"],
-        "Klickart": ["Einzelklick", "Doppelklick"],
-    }[name][index]
+    label = CHOICES[name][index]
+    action(label, role="radio button")
+    pump()
     wait_for(
-        lambda: any(
-            x.get_name() == label
-            and x.get_role_name() == "menu item"
-            and x.get_state_set().contains(Atspi.StateType.SHOWING)
-            for x, d in nodes()
+        lambda: find(label, role="radio button")
+        .get_state_set()
+        .contains(Atspi.StateType.CHECKED)
+    )
+
+
+def fixed_point():
+    """Read the displayed monitor-relative coordinates through AT-SPI."""
+    return tuple(
+        int(Atspi.Value.get_current_value(find(name, role="spin button")))
+        for name in (
+            "X-Koordinate auf dem gewählten Bildschirm",
+            "Y-Koordinate auf dem gewählten Bildschirm",
         )
     )
-    action(label, role="menu item")
-    time.sleep(0.1)
-    pump()
-    text = [
-        Atspi.Text.get_text(x, 0, -1) for x, d in walk(n) if x.get_role_name() == "text"
-    ]
-    assert label in text, (name, label, text)
 
 
 def mouse_events():
@@ -79,9 +82,7 @@ def run_counted(
     interval=100,
     hotkey=True,
 ):
-    assert any("X: 80 · Y: 400" in n.get_name() for n, d in nodes()), (
-        "Restore the test coordinates before starting"
-    )
+    assert fixed_point() == (80, 400), "Restore the test coordinates before starting"
     before = len(mouse_events())
     focus_target()
     if hotkey:

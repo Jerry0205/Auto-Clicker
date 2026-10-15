@@ -7,7 +7,8 @@ from pathlib import Path
 from access import Atspi, action, nodes, walk
 from control import BASE, mark, rpc, wait_for
 from scenarios import (
-    combo,
+    choose,
+    fixed_point,
     focus_app,
     focus_target,
     key,
@@ -61,7 +62,7 @@ def grant_remote():
 
 
 def open_picker():
-    action("Position wählen …", role="button")
+    action("Auswählen …", role="button")
     wait_for(lambda: "Esc / Rechtsklick" in picker_text())
 
 
@@ -97,7 +98,7 @@ def pin_target():
     rpc("driver", cmd="click")
     wait_for(lambda: "X: 80 · Y: 400" in picker_text())
     key(0xFF0D)
-    wait_for(lambda: any("X: 80 · Y: 400" in n.get_name() for n, _ in nodes()))
+    wait_for(lambda: fixed_point() == (80, 400))
 
 
 def main():
@@ -138,12 +139,12 @@ def main():
     assert len(mouse_events()) == count
     mark("stop_after_position_selection", passed=True, quiet_ms=300)
 
-    # Saved helpers exercise real visible menu choices and verify their values.
+    # Exercise the visible option buttons and verify their checked states.
     action("Klickzyklen", role="radio button")
     for index, button in enumerate([1, 2, 4]):
-        combo("Maustaste", index)
+        choose("Maustaste", index)
         for click_type in [0, 1]:
-            combo("Klickart", click_type)
+            choose("Klickart", click_type)
             run_counted(
                 "native_click_matrix",
                 button=button,
