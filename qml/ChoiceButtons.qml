@@ -23,6 +23,7 @@ RowLayout {
             required property var modelData
             readonly property string description: modelData.description ?? modelData.text
 
+            Layout.minimumWidth: 0
             checkable: true
             autoExclusive: true
             checked: modelData.value === choices.value

@@ -377,6 +377,7 @@ Kirigami.ApplicationWindow {
 
     pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
     pageStack.initialPage: Kirigami.ScrollablePage {
+        id: settingsPage
         header: Controls.ScrollView {
             id: messageHeader
             objectName: "messageHeader"
@@ -420,15 +421,34 @@ Kirigami.ApplicationWindow {
             function onBusyChanged() { if (controller.busy) monitorStopMessage.visible = false }
         }
 
-        Kirigami.FormLayout {
-            // Dynamic fields can leave Kirigami's automatic width hint stale.
-            wideMode: width >= Kirigami.Units.gridUnit * 22
-            implicitWidth: width
-            enabled: root.controlsEnabled
+        Connections {
+            target: root
+            function onActiveFocusItemChanged() {
+                const item = root.activeFocusItem
+                let ancestor = item
+                while (ancestor && ancestor !== settingsForm) ancestor = ancestor.parent
+                if (!ancestor) return
+                const position = item.mapToItem(settingsPage.flickable.contentItem, 0, 0)
+                settingsPage.ensureVisible(item, position.x - item.x, position.y - item.y)
+            }
+        }
 
+        GridLayout {
+            id: settingsForm
+            columns: width >= Kirigami.Units.gridUnit * 22 ? 2 : 1
+            columnSpacing: Kirigami.Units.largeSpacing
+            rowSpacing: Kirigami.Units.smallSpacing
+            enabled: root.controlsEnabled
+            Accessible.role: Accessible.Form
+
+            Controls.Label {
+                text: qsTr("Maustaste:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
             ChoiceButtons {
                 objectName: "mouseButtonInput"
-                Kirigami.FormData.label: qsTr("Maustaste:")
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 iconOnly: true
                 value: controller.mouse_button
                 options: [
@@ -439,9 +459,14 @@ Kirigami.ApplicationWindow {
                 onSelected: choice => { controller.mouse_button = choice; controller.mark_settings_changed() }
             }
 
+            Controls.Label {
+                text: qsTr("Klick:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
             ChoiceButtons {
                 objectName: "clickTypeInput"
-                Kirigami.FormData.label: qsTr("Klick:")
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 value: controller.click_type
                 options: [
                     { value: 0, text: qsTr("1×"), description: qsTr("Einzelklick") },
@@ -450,12 +475,18 @@ Kirigami.ApplicationWindow {
                 onSelected: choice => { controller.click_type = choice; controller.mark_settings_changed() }
             }
 
+            Controls.Label {
+                text: qsTr("Intervall:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
             RowLayout {
-                Kirigami.FormData.label: qsTr("Intervall:")
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 Controls.SpinBox {
                     id: intervalInput
                     objectName: "intervalInput"
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     from: 10
                     to: 86400000
                     stepSize: 10
@@ -472,44 +503,60 @@ Kirigami.ApplicationWindow {
 
             Controls.Label {
                 objectName: "rateLabel"
+                Layout.columnSpan: settingsForm.columns
                 Layout.fillWidth: true
                 color: Kirigami.Theme.disabledTextColor
                 text: root.rateDescription
                 wrapMode: Text.WordWrap
             }
 
-            RowLayout {
-                Kirigami.FormData.label: qsTr("Wiederholen:")
-                ChoiceButtons {
-                    objectName: "repeatModeInput"
-                    value: controller.repeat_until_stopped
-                    options: [
-                        { value: true, text: "∞", description: qsTr("Bis zum Stoppen") },
-                        { value: false, text: qsTr("Klickzyklen") }
-                    ]
-                    onSelected: choice => { controller.repeat_until_stopped = choice; controller.mark_settings_changed() }
-                }
-                Controls.SpinBox {
-                    objectName: "repeatInput"
-                    visible: !controller.repeat_until_stopped
-                    Layout.fillWidth: true
-                    from: 1
-                    to: 10000000
-                    editable: true
-                    wheelEnabled: false
-                    value: controller.repeat_count
-                    onValueModified: { controller.repeat_count = value; controller.mark_settings_changed() }
-                    Accessible.name: qsTr("Anzahl der Klickzyklen")
-                }
+            Controls.Label {
+                text: qsTr("Wiederholen:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
+            ChoiceButtons {
+                objectName: "repeatModeInput"
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                value: controller.repeat_until_stopped
+                options: [
+                    { value: true, text: "∞", description: qsTr("Bis zum Stoppen") },
+                    { value: false, text: qsTr("Klickzyklen") }
+                ]
+                onSelected: choice => { controller.repeat_until_stopped = choice; controller.mark_settings_changed() }
+            }
+            Controls.Label {
+                text: qsTr("Anzahl:")
+                visible: !controller.repeat_until_stopped
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
+            Controls.SpinBox {
+                objectName: "repeatInput"
+                visible: !controller.repeat_until_stopped
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                from: 1
+                to: 10000000
+                editable: true
+                wheelEnabled: false
+                value: controller.repeat_count
+                onValueModified: { controller.repeat_count = value; controller.mark_settings_changed() }
+                Accessible.name: qsTr("Anzahl der Klickzyklen")
             }
 
             Kirigami.Separator {
-                Kirigami.FormData.isSection: true
+                Layout.columnSpan: settingsForm.columns
+                Layout.fillWidth: true
             }
 
+            Controls.Label {
+                text: qsTr("Ziel:")
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
             ChoiceButtons {
                 objectName: "positionModeInput"
-                Kirigami.FormData.label: qsTr("Ziel:")
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 value: controller.current_position
                 options: [
                     { value: true, icon: "cursor-arrow", text: qsTr("Mauszeiger"),
@@ -520,11 +567,16 @@ Kirigami.ApplicationWindow {
                 onSelected: choice => { controller.current_position = choice; controller.mark_settings_changed() }
             }
 
+            Controls.Label {
+                text: qsTr("Bildschirm:")
+                visible: root.fixedPosition
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
             Controls.ComboBox {
                 id: monitorInput
                 objectName: "monitorInput"
-                Kirigami.FormData.label: qsTr("Bildschirm:")
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 visible: root.fixedPosition
                 model: root.monitorOptions
                 textRole: "label"
@@ -538,14 +590,21 @@ Kirigami.ApplicationWindow {
                 Accessible.name: qsTr("Bildschirm für die feste Position")
             }
 
+            Controls.Label {
+                text: qsTr("Punkt:")
+                visible: root.fixedPosition
+                Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+            }
             RowLayout {
-                Kirigami.FormData.label: qsTr("Punkt:")
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 visible: root.fixedPosition
                 Controls.Label { text: "X" }
                 Controls.SpinBox {
                     id: xInput
                     objectName: "xInput"
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     from: 0
                     to: Math.max(0, controller.monitor_width - 1)
                     editable: true
@@ -559,6 +618,7 @@ Kirigami.ApplicationWindow {
                     id: yInput
                     objectName: "yInput"
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     from: 0
                     to: Math.max(0, controller.monitor_height - 1)
                     editable: true
@@ -570,6 +630,7 @@ Kirigami.ApplicationWindow {
             }
 
             RowLayout {
+                Layout.columnSpan: settingsForm.columns
                 visible: root.fixedPosition
                 Controls.Button {
                     objectName: "pickButton"
@@ -596,6 +657,7 @@ Kirigami.ApplicationWindow {
 
             Kirigami.InlineMessage {
                 objectName: "confirmMessage"
+                Layout.columnSpan: settingsForm.columns
                 Layout.fillWidth: true
                 visible: root.fixedPosition && !controller.fixed_position_confirmed
                 type: Kirigami.MessageType.Warning
@@ -604,6 +666,7 @@ Kirigami.ApplicationWindow {
 
             Controls.Button {
                 objectName: "confirmMonitorButton"
+                Layout.columnSpan: settingsForm.columns
                 visible: root.fixedPosition && !controller.fixed_position_confirmed
                 enabled: !!root.selectedMonitor
                 icon.name: "dialog-ok-apply"
@@ -612,6 +675,7 @@ Kirigami.ApplicationWindow {
             }
 
             Controls.Label {
+                Layout.columnSpan: settingsForm.columns
                 Layout.fillWidth: true
                 visible: root.fixedPosition
                 wrapMode: Text.WordWrap

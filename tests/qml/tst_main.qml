@@ -93,6 +93,20 @@ TestCase {
         }
     }
 
+    function test_keyboard_focus_scrolls_settings_into_view() {
+        main.width = main.minimumWidth
+        main.height = main.minimumHeight
+        controller.current_position = false
+        const input = findChild(main, "yInput")
+        waitForRendering(input)
+        input.forceActiveFocus(Qt.TabFocusReason)
+        const flickable = main.pageStack.currentItem.flickable
+        tryVerify(() => {
+            const point = input.mapToItem(flickable, 0, 0)
+            return point.y >= 0 && point.y + input.height <= flickable.height
+        })
+    }
+
     function test_mouse_icon_buttons_have_tooltips() {
         const button = choice("mouseButtonInput", "Links")
         // The offscreen platform disables hover effects by default.
