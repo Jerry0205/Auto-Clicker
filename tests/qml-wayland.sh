@@ -4,7 +4,7 @@ set -euo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 qml_runner="${QMLTESTRUNNER:-/usr/lib/qt6/bin/qmltestrunner}"
-for dependency in kwin_wayland kscreen-doctor dbus-run-session setsid timeout "$qml_runner"; do
+for dependency in kwin_wayland kscreen-doctor dbus-run-session setsid timeout python3 "$qml_runner"; do
   command -v "$dependency" >/dev/null || { printf 'Missing dependency: %s\n' "$dependency" >&2; exit 1; }
 done
 
@@ -37,11 +37,18 @@ cat > "$test_dir/run.sh" <<'SESSION'
 set -euo pipefail
 export QT_QPA_PLATFORM=wayland QT_QUICK_BACKEND=software QT_QUICK_CONTROLS_STYLE=org.kde.desktop
 scale="${KLICKMEISTER_TEST_SCALE:-1}"
+# KWin rejects negative output positions. Translate the staggered layout so
+# Virtual-2 remains above and left of Virtual-0 without a negative origin.
 kscreen-doctor "output.Virtual-0.scale.$scale" \
   "output.Virtual-1.scale.${KLICKMEISTER_TEST_SCALE_1:-$scale}" \
   "output.Virtual-2.scale.${KLICKMEISTER_TEST_SCALE_2:-$scale}" \
-  output.Virtual-0.position.0,1080 output.Virtual-1.position.1920,1080 output.Virtual-2.position.-1920,0 > "$PICKER_TEST_DIR/outputs.log" 2>&1
+  output.Virtual-0.position.1920,1080 output.Virtual-1.position.3840,1080 output.Virtual-2.position.0,0 > "$PICKER_TEST_DIR/outputs.log" 2>&1
 kscreen-doctor -o >> "$PICKER_TEST_DIR/outputs.log" 2>&1
+# kscreen-doctor can return success even when KWin rejects the configuration.
+# Verify the effective state before running any QML assertions.
+kscreen-doctor -j > "$PICKER_TEST_DIR/outputs.json" 2>> "$PICKER_TEST_DIR/outputs.log"
+python3 "$PICKER_TEST_REPO/tests/check_virtual_outputs.py" "$PICKER_TEST_DIR/outputs.json" \
+  "$scale" "${KLICKMEISTER_TEST_SCALE_1:-$scale}" "${KLICKMEISTER_TEST_SCALE_2:-$scale}" > "$PICKER_TEST_DIR/verified.log" 2>> "$PICKER_TEST_DIR/outputs.log"
 "$PICKER_TEST_RUNNER" -import "$PICKER_TEST_REPO/tests/qml/mocks" -input "$PICKER_TEST_REPO/tests/qml" > "$PICKER_TEST_DIR/tests.log" 2>&1
 SESSION
 chmod +x "$test_dir/run.sh"
@@ -55,6 +62,7 @@ setsid timeout --foreground 60s env \
   --exit-with-session "$test_dir/run.sh" > "$test_dir/kwin.log" 2>&1 &
 session_pid=$!
 wait "$session_pid" || status=$?
+if [[ -f "$test_dir/verified.log" ]]; then cat "$test_dir/verified.log"; fi
 if [[ -f "$test_dir/tests.log" ]]; then cat "$test_dir/tests.log"; fi
 if ((status != 0)); then
   cat "$test_dir/kwin.log" >&2
