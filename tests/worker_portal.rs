@@ -42,8 +42,10 @@ struct Observed {
     fixed_stream: bool,
     motions: Vec<(u32, f64, f64)>,
     delay_hotkey: bool,
+    close_after_hotkey_response: bool,
     hotkey_seen: Arc<Notify>,
     hotkey_release: Arc<Notify>,
+    hotkey_responded: Arc<Notify>,
     configure_calls: usize,
     configure_seen: Arc<Notify>,
     configure_release: Arc<Notify>,
@@ -262,7 +264,28 @@ impl FakeHotkeys {
             "shortcuts".into(),
             Value::new(shortcuts).try_into().map_err(failed)?,
         )]);
-        respond(connection, &header, &options, results).await
+        let response = respond(connection, &header, &options, results).await;
+        let (close_after_response, responded) = {
+            let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                state.close_after_hotkey_response,
+                state.hotkey_responded.clone(),
+            )
+        };
+        if close_after_response {
+            connection
+                .emit_signal(
+                    header.sender().cloned(),
+                    &_session,
+                    "org.freedesktop.portal.Session",
+                    "Closed",
+                    &(Options::new(),),
+                )
+                .await
+                .map_err(failed)?;
+        }
+        responded.notify_one();
+        response
     }
 
     async fn configure_shortcuts(
@@ -558,6 +581,135 @@ async fn shortcuts_changed(service: &zbus::Connection, session: &str, trigger: &
             &(session, shortcuts),
         )
         .await?;
+    Ok(())
+}
+
+/// Revocation must be observed while BindShortcuts is pending and across its
+/// successful response, before a registration can be handed to the worker.
+async fn revoked_hotkey_registration(after_response: bool, stall_close: bool) -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    let (seen, release, responded) = {
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        state.close_after_hotkey_response = after_response;
+        state.delay_hotkey = !after_response;
+        state.stall_close = stall_close;
+        (
+            state.hotkey_seen.clone(),
+            state.hotkey_release.clone(),
+            state.hotkey_responded.clone(),
+        )
+    };
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        if !after_response {
+            timeout(Duration::from_secs(3), seen.notified()).await?;
+            service.emit_signal(
+                None::<&str>, hotkey_session(&observed)?,
+                "org.freedesktop.portal.Session", "Closed", &(Options::new(),),
+            ).await?;
+        }
+        let phases = events_until(&mut events, |e| matches!(e,
+            WorkerEvent::HotkeyPhase(HotkeyPhase::Ready | HotkeyPhase::Unavailable)
+        )).await?;
+        let incorrectly_ready = phases.iter().any(|e| matches!(e,
+            WorkerEvent::HotkeyPhase(HotkeyPhase::Ready)
+        ));
+        if incorrectly_ready {
+            worker.send(Command::Start(continuous()))?;
+            event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Clicking))).await?;
+            timeout(Duration::from_secs(1), async {
+                while presses(&observed) == 0 { sleep(Duration::from_millis(5)).await; }
+            }).await?;
+        }
+        ensure(!incorrectly_ready && presses(&observed) == 0,
+            &format!("revoked hotkey was reported Ready and allowed {} pointer presses", presses(&observed)))?;
+        assert_hotkey_only(&phases);
+        let failed = events_until(&mut events, |e| matches!(e,
+            WorkerEvent::Error(message) if message.contains("Freigabe für das Tastenkürzel")
+        )).await?;
+        ensure(run_states(&failed).is_empty(), "idle revocation changed the run state")?;
+        let (old_session, owner, closed) = {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            (state.hotkey_session.clone(), state.hotkey_owner.clone(), state.closed)
+        };
+        ensure(closed == 1, "revocation must close the failed registration session")?;
+        let bus = zbus::fdo::DBusProxy::new(&service).await?;
+        ensure(!bus.name_has_owner(owner.as_str().try_into()?).await?,
+            "revocation must disconnect the registration owner, even if Close stalls")?;
+        worker.send(Command::Start(continuous()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::Error(message) if message.contains("Tastenkürzel für Start und Stopp"))).await?;
+        ensure(observed.lock().unwrap_or_else(|e| e.into_inner()).remote_session.is_none(),
+            "a revoked registration must not request pointer permission")?;
+
+        // A successful response arriving after cancellation belongs to the old
+        // connection. It must neither publish Ready nor poison a fresh retry.
+        if !after_response {
+            release.notify_one();
+        }
+        timeout(Duration::from_secs(3), responded.notified()).await?;
+        {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.close_after_hotkey_response = false;
+            state.delay_hotkey = false;
+            state.stall_close = false;
+            for close_release in std::mem::take(&mut state.close_releases) {
+                close_release.notify_one();
+            }
+        }
+        ensure(events.try_recv().is_err(), "a late bind response published a worker event")?;
+        worker.send(Command::ConfigureHotkey("Pause".into()))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Registering))).await?;
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+        {
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            ensure(state.hotkey_created == 2 && state.hotkey_session != old_session,
+                "retry must create a fresh hotkey session")?;
+        }
+        worker.send(Command::Start(ClickSettings { repeat: Some(1), ..continuous() }))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        ensure(presses(&observed) == 1, "healthy retry must allow exactly its requested click")?;
+
+        // The watcher that protected binding must remain active at runtime.
+        service.emit_signal(
+            None::<&str>, hotkey_session(&observed)?,
+            "org.freedesktop.portal.Session", "Closed", &(Options::new(),),
+        ).await?;
+        assert_hotkey_only(&events_until(&mut events, |e| matches!(e,
+            WorkerEvent::Error(message) if message.contains("Freigabe für das Tastenkürzel")
+        )).await?);
+        Ok(())
+    }.await;
+    release.notify_one();
+    for close_release in std::mem::take(
+        &mut observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .close_releases,
+    ) {
+        close_release.notify_one();
+    }
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn hotkey_closed_right_after_bind_response_blocks_start_and_allows_retry() -> TestResult {
+    revoked_hotkey_registration(true, false).await
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn hotkey_closed_during_bind_cleans_up_and_ignores_late_response() -> TestResult {
+    for stall_close in [false, true] {
+        revoked_hotkey_registration(false, stall_close).await?;
+    }
     Ok(())
 }
 
