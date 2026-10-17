@@ -13,6 +13,7 @@ Kirigami.ApplicationWindow {
     property var positionPicker: null
     property bool monitorRestored: false
     property bool monitorSelectionInProgress: false
+    property bool positionWasClamped: false
     property bool discardSettingsOnClose: false
     readonly property bool fixedPosition: !controller.current_position
     readonly property bool controlsEnabled: !controller.running && !controller.busy
@@ -66,6 +67,11 @@ Kirigami.ApplicationWindow {
     function confirmMonitor() {
         syncMonitor()
         controller.fixed_position_confirmed = !!selectedMonitor
+        markPositionChanged()
+    }
+
+    function markPositionChanged() {
+        positionWasClamped = false
         controller.mark_position_changed()
     }
 
@@ -77,13 +83,13 @@ Kirigami.ApplicationWindow {
         selectedMonitor = screen
         monitorSelectionInProgress = false
         const fits = syncMonitor()
-        // Reselecting an unconfirmed screen must not accept coordinates that
-        // an earlier geometry change already clamped on that same screen.
-        const confirmed = fits && (!sameSelection || wasConfirmed)
+        // Switching screens must not accept a point clamped by an earlier
+        // selection or geometry change, even if it now fits the new screen.
+        const confirmed = fits && !positionWasClamped && (!sameSelection || wasConfirmed)
         controller.fixed_position_confirmed = confirmed
         // Clamping to a smaller monitor is not a chosen position. Keep the
         // saved coordinates until the user confirms or edits the displayed ones.
-        if (confirmed && !sameSelection) controller.mark_position_changed()
+        if (confirmed && !sameSelection) markPositionChanged()
     }
 
     function syncMonitor() {
@@ -110,8 +116,12 @@ Kirigami.ApplicationWindow {
         // Reselecting the saved monitor shows its saved position before clamping.
         controller.restore_saved_position()
         const fits = !!screen && controller.fixed_x < width && controller.fixed_y < height
-        controller.fixed_x = Math.max(0, Math.min(controller.fixed_x, xInput.to))
-        controller.fixed_y = Math.max(0, Math.min(controller.fixed_y, yInput.to))
+        const clampedX = Math.max(0, Math.min(controller.fixed_x, xInput.to))
+        const clampedY = Math.max(0, Math.min(controller.fixed_y, yInput.to))
+        if (clampedX !== controller.fixed_x || clampedY !== controller.fixed_y)
+            positionWasClamped = true
+        controller.fixed_x = clampedX
+        controller.fixed_y = clampedY
         // SpinBox initially clamps saved coordinates to its zero-sized monitor.
         // Restore the display even when the controller's coordinate is unchanged.
         xInput.value = controller.fixed_x
@@ -184,7 +194,7 @@ Kirigami.ApplicationWindow {
                 controller.fixed_y = y
                 controller.current_position = false
                 controller.fixed_position_confirmed = true
-                controller.mark_position_changed()
+                root.markPositionChanged()
             }
             onFinished: {
                 if (root.positionPicker === picker) root.positionPicker = null
@@ -610,7 +620,7 @@ Kirigami.ApplicationWindow {
                     editable: true
                     wheelEnabled: false
                     value: controller.fixed_x
-                    onValueModified: { controller.fixed_x = value; controller.mark_position_changed() }
+                    onValueModified: { controller.fixed_x = value; root.markPositionChanged() }
                     Accessible.name: qsTr("X-Koordinate auf dem gewählten Bildschirm")
                 }
                 Controls.Label { text: "Y" }
@@ -624,7 +634,7 @@ Kirigami.ApplicationWindow {
                     editable: true
                     wheelEnabled: false
                     value: controller.fixed_y
-                    onValueModified: { controller.fixed_y = value; controller.mark_position_changed() }
+                    onValueModified: { controller.fixed_y = value; root.markPositionChanged() }
                     Accessible.name: qsTr("Y-Koordinate auf dem gewählten Bildschirm")
                 }
             }
