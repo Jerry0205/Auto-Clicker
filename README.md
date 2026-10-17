@@ -125,6 +125,8 @@ Prüfe den Start-Countdown manuell an einem eigenen Testziel: Vor Ablauf der dre
 
 GitHub Actions führt Formatierung, Clippy, Rust- und Portaltests, QML-Tests im KDE-Stil, Python-Tests sowie Desktop- und AppStream-Validierung aus. Danach folgen Release-Build und QML-Smoke-Test. Ein separater Job prüft die QML-Oberfläche unter einem virtuellen KWin mit drei Bildschirmen. Beide Jobs verwenden Arch-Linux-Container und die Cargo-Lockdatei; native Tests mit echten KDE-Dialogen bleiben eine manuelle Prüfung.
 
+Der virtuelle KWin-Job verwendet einen zusammenhängenden Arch-Archivstand mit KWin 6.7.5, da KWin 6.8 das gerätefreie QPainter-Backend entfernt hat. Ursache, isolierte Reproduktion und Aktualisierung des Archivstands sind unter [tests/virtual-wayland.md](tests/virtual-wayland.md) beschrieben.
+
 ### QML-Sprachserver
 
 Führe zuerst `cargo build --locked` und danach `bash scripts/setup-qmlls.sh` aus. Das Skript ermittelt das aktive Cargo-Buildverzeichnis, auch bei `CARGO_TARGET_DIR` oder `build.target-dir`, und schreibt die von Git ignorierte `.qmlls.ini`. Nach einem Wechsel des Buildverzeichnisses muss das Skript erneut ausgeführt werden. Python 3 ist erforderlich.
