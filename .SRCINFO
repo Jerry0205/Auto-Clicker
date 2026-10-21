@@ -21,7 +21,7 @@ pkgbase = klickmeister
 	depends = xdg-desktop-portal
 	depends = xdg-desktop-portal-kde
 	options = !lto
-	source = Auto-Clicker-4b9d1d711889ddfbfc9f92e5a363cd35aabbf10f.tar.gz::https://github.com/Jerry0205/Auto-Clicker/archive/4b9d1d711889ddfbfc9f92e5a363cd35aabbf10f.tar.gz
-	b2sums = adbeeec692c1d41becbdb4295c5ff862b6954c9c7776664965a6d54943847d3cf7bb6fa725cd1607ef9d8ae301bf7eb0e16c56c09da3600669b95994d1ef2611
+	source = Auto-Clicker-947a56dfe9b5fcd5938406552267030c181c86e2.tar.gz::https://github.com/Jerry0205/Auto-Clicker/archive/947a56dfe9b5fcd5938406552267030c181c86e2.tar.gz
+	b2sums = 568c6578396336a6d5a5ebe844225478a14054db66df3fc2ffa23816e41a133db8583ea7ce3799dac4508c6d615776fbef3e6504157e24cdf86ab2b489aabf40
 
 pkgname = klickmeister

@@ -10,9 +10,9 @@ depends=('gcc-libs' 'glibc' 'kirigami' 'qqc2-desktop-style' 'qt6-base' 'qt6-decl
 makedepends=('cargo' 'clang' 'lld' 'pkgconf' 'qt6-tools' 'rust')
 options=('!lto')
 # Pinned source for standalone builds; releases use their own source snapshot.
-_commit=4b9d1d711889ddfbfc9f92e5a363cd35aabbf10f
+_commit=947a56dfe9b5fcd5938406552267030c181c86e2
 source=("Auto-Clicker-${_commit}.tar.gz::https://github.com/Jerry0205/Auto-Clicker/archive/${_commit}.tar.gz")
-b2sums=('adbeeec692c1d41becbdb4295c5ff862b6954c9c7776664965a6d54943847d3cf7bb6fa725cd1607ef9d8ae301bf7eb0e16c56c09da3600669b95994d1ef2611')
+b2sums=('568c6578396336a6d5a5ebe844225478a14054db66df3fc2ffa23816e41a133db8583ea7ce3799dac4508c6d615776fbef3e6504157e24cdf86ab2b489aabf40')
 
 _cargo_jobs() {
   local threads

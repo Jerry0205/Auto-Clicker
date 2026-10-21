@@ -110,7 +110,7 @@ Installiere auf Arch Linux die Build- und Laufzeitabhängigkeiten:
 sudo pacman -S --needed base-devel git rust cargo clang lld pkgconf qt6-base qt6-declarative qt6-wayland qt6-tools kirigami qqc2-desktop-style xdg-desktop-portal xdg-desktop-portal-kde python
 ```
 
-Cargo-Befehle bauen den aktuellen Checkout einschließlich lokaler Änderungen. Der `PKGBUILD` im Projektstamm verwendet einen festgelegten, mit Prüfsumme gesicherten Quellstand für Version 0.1.2. Mit `makepkg --allsource --nodeps` lässt sich ein Quellpaket einschließlich des Projektarchivs erstellen und in einem anderen Verzeichnis bauen. Cargo-Abhängigkeiten werden beim Paketbau mit `cargo fetch --locked` geladen.
+Cargo-Befehle bauen den aktuellen Checkout einschließlich lokaler Änderungen. Der `PKGBUILD` im Projektstamm verwendet einen festgelegten, mit Prüfsumme gesicherten Quellstand für Version 0.1.3. Mit `makepkg --allsource --nodeps` lässt sich ein Quellpaket einschließlich des Projektarchivs erstellen und in einem anderen Verzeichnis bauen. Cargo-Abhängigkeiten werden beim Paketbau mit `cargo fetch --locked` geladen.
 
 `bash scripts/build-release.sh` baut den aktuellen Checkout als installierbares Paket und erzeugt die AUR-Paketbeschreibungen samt Prüfsummen in `dist/`. Der GitHub-Workflow **Release packages** führt das bei einem Versionstag automatisch aus, prüft die Installation und stellt die Dateien unter [Releases](https://github.com/Jerry0205/Auto-Clicker/releases) bereit. Details stehen unter [Releases und AUR](docs/RELEASING.md).
 
