@@ -1,7 +1,7 @@
 # Maintainer: Klickmeister contributors
 pkgname=klickmeister
-pkgver=0.1.2
-pkgrel=3
+pkgver=0.1.3
+pkgrel=1
 pkgdesc='Auto clicker for KDE Plasma on Wayland'
 arch=('x86_64')
 url='https://github.com/jerry0205/Auto-Clicker'
