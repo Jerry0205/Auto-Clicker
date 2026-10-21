@@ -114,7 +114,8 @@ Kirigami.ApplicationWindow {
         controller.monitor_width = width
         controller.monitor_height = height
         // Reselecting the saved monitor shows its saved position before clamping.
-        controller.restore_saved_position()
+        // Those are the user's own coordinates, not a point clamped earlier.
+        if (controller.restore_saved_position()) positionWasClamped = false
         const fits = !!screen && controller.fixed_x < width && controller.fixed_y < height
         const clampedX = Math.max(0, Math.min(controller.fixed_x, xInput.to))
         const clampedY = Math.max(0, Math.min(controller.fixed_y, yInput.to))
