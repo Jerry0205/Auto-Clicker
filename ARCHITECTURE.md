@@ -9,6 +9,8 @@ Zwischen beiden Richtungen laufen begrenzte Nachrichtenkanäle beziehungsweise i
 
 Jeder Startbefehl liefert die aktuellen, validierten Einstellungen. Eine ausstehende Portal-Aufgabe besitzt diese Einstellungen bis zur Freigabe; weitere Startbefehle können sie nicht überschreiben. Der Worker hält keinen Einstellungs-Cache für spätere Starts.
 
+Ein Hotkey-Start reserviert im Worker bereits `Starting`, bevor Qt die aktuellen Eingaben sammelt. Jede Aktivierung besitzt einen eigenen einmalig verwendbaren Antwortkanal und die Stop-Generation zum Zeitpunkt der Aktivierung. Stop, ein weiterer Tastendruck sowie Änderungen oder das Ende der Hotkey-Freigabe verwerfen die ausstehende Antwort; eine verspätete GUI-Antwort kann dadurch auch keinen späteren Start übernehmen. Kann Qt wegen Positionsauswahl, ungültiger Eingaben oder eines nicht mehr verfügbaren Controllers nicht antworten, beendet das Verwerfen der Anfrage die Reservierung. Die Antwort umgeht den begrenzten Befehlskanal, sodass ein voller Kanal keine abgelehnte Anfrage festhalten kann.
+
 ## Wayland-Backend
 
 - `org.freedesktop.portal.RemoteDesktop`: Fordert ausschließlich `POINTER` an und sendet Linux-evdev-Buttoncodes. Der Modus „Aktuelle Mauszeigerposition“ bewegt oder liest den Cursor nicht.

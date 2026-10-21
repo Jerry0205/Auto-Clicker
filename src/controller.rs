@@ -375,24 +375,32 @@ impl qobject::AppController {
     }
 
     fn start_with_origin(mut self: Pin<&mut Self>, from_button: bool) {
-        if *self.selecting_position() {
+        let Some(settings) = self.as_mut().collect_start_settings() else {
             return;
-        }
-        self.as_mut().clear_error();
-        let settings = match self.as_ref().settings() {
-            Ok(settings) => settings,
-            Err(error) => {
-                self.as_mut().show_error(&error);
-                return;
-            }
         };
-        self.as_mut().persist_config(true);
         let command = if from_button {
             Command::StartFromButton(settings)
         } else {
             Command::Start(settings)
         };
         self.as_mut().send_command(command);
+    }
+
+    /// Both start paths read and validate the live controls only on the Qt thread.
+    fn collect_start_settings(mut self: Pin<&mut Self>) -> Option<ClickSettings> {
+        if *self.selecting_position() {
+            return None;
+        }
+        self.as_mut().clear_error();
+        let settings = match self.as_ref().settings() {
+            Ok(settings) => settings,
+            Err(error) => {
+                self.as_mut().show_error(&error);
+                return None;
+            }
+        };
+        self.as_mut().persist_config(true);
+        Some(settings)
     }
 
     /// Stop a run or an outstanding start request.
@@ -604,9 +612,13 @@ impl qobject::AppController {
                 self.as_mut()
                     .set_hotkey_configuring(matches!(phase, HotkeyPhase::Configuring(_)));
             }
-            WorkerEvent::StartRequested => {
-                if !*self.running() && !*self.busy() {
-                    self.as_mut().start();
+            WorkerEvent::StartRequested(request) => {
+                // The worker owns the pending run; GUI flags can lag behind it.
+                // Dropping the reply declines it on picker/validation failures.
+                if !request.is_cancelled()
+                    && let Some(settings) = self.as_mut().collect_start_settings()
+                {
+                    request.start(settings);
                 }
             }
             WorkerEvent::Error(error) => self.as_mut().show_error(&error),
@@ -803,15 +815,20 @@ mod tests {
 
         // shutdown() starts a new epoch, so it clears the run indicators itself.
         controller.next_worker_epoch();
+        let (request, mut response) = crate::worker::StartRequest::channel();
         for event in [
             WorkerEvent::State(RunState::Closing),
             WorkerEvent::Countdown(2),
             WorkerEvent::Hotkey("F8".into()),
-            WorkerEvent::StartRequested,
+            WorkerEvent::StartRequested(request),
         ] {
             assert!(controller.accept_worker_event(first, event).is_none());
         }
         assert!(!controller.config_dirty);
+        assert_eq!(
+            response.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        );
 
         // "Zurück zur Anwendung" starts a worker whose events apply again.
         let second = controller.next_worker_epoch();
