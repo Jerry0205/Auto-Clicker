@@ -65,6 +65,17 @@ jobs:
           /usr/lib/qt6/bin/qmltestrunner
           -import tests/qml/mocks -input tests/qml
 
+      # German number formatting uses group separators. Qt reads LANG even
+      # without a generated glibc locale.
+      - name: Run QML tests with the KDE style in German
+        run: >-
+          LANG=de_DE.UTF-8
+          QT_QPA_PLATFORM=offscreen
+          QT_QUICK_BACKEND=software
+          QT_QUICK_CONTROLS_STYLE=org.kde.desktop
+          /usr/lib/qt6/bin/qmltestrunner
+          -import tests/qml/mocks -input tests/qml
+
       - name: Run Python unit tests
         run: python -m unittest discover -s tests/native -p 'test_*.py'
 

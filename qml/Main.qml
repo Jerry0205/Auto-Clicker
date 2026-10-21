@@ -26,6 +26,16 @@ Kirigami.ApplicationWindow {
     }
     readonly property string rateDescription: describeRate(intervalInput.value, controller.click_type)
 
+    // SpinBox parses its text on focus loss or Enter and clamps the result to
+    // from/to. Empty or unfinished text keeps the last valid value instead of
+    // silently becoming a limit such as the 10 ms maximum rate or a screen edge.
+    function parseSpinBoxText(spinBox, text, locale) {
+        let parsed = NaN
+        try { parsed = Number.fromLocaleString(locale, text) } catch (error) {}
+        return Number.isInteger(parsed) && parsed >= spinBox.from && parsed <= spinBox.to
+            ? parsed : spinBox.value
+    }
+
     function formatRateNumber(value, decimalPlaces) {
         return value.toLocaleString(Qt.locale(), 'f', decimalPlaces)
             .replace(/([,.]\d*?)0+$/, "$1")
@@ -491,11 +501,10 @@ Kirigami.ApplicationWindow {
                     to: 86400000
                     stepSize: 10
                     editable: true
+                    valueFromText: (text, locale) => root.parseSpinBoxText(intervalInput, text, locale)
                     wheelEnabled: false
                     value: controller.interval_ms
                     onValueModified: { controller.interval_ms = value; controller.mark_settings_changed() }
-                    textFromValue: value => value.toLocaleString(Qt.locale(), "f", 0)
-                    valueFromText: text => Number.fromLocaleString(Qt.locale(), text)
                     Accessible.name: qsTr("Klickintervall in Millisekunden")
                 }
                 Controls.Label { text: qsTr("ms") }
@@ -531,6 +540,7 @@ Kirigami.ApplicationWindow {
                 Layout.alignment: settingsForm.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
             }
             Controls.SpinBox {
+                id: repeatInput
                 objectName: "repeatInput"
                 visible: !controller.repeat_until_stopped
                 Layout.fillWidth: true
@@ -538,6 +548,7 @@ Kirigami.ApplicationWindow {
                 from: 1
                 to: 10000000
                 editable: true
+                valueFromText: (text, locale) => root.parseSpinBoxText(repeatInput, text, locale)
                 wheelEnabled: false
                 value: controller.repeat_count
                 onValueModified: { controller.repeat_count = value; controller.mark_settings_changed() }
@@ -608,6 +619,7 @@ Kirigami.ApplicationWindow {
                     from: 0
                     to: Math.max(0, controller.monitor_width - 1)
                     editable: true
+                    valueFromText: (text, locale) => root.parseSpinBoxText(xInput, text, locale)
                     wheelEnabled: false
                     value: controller.fixed_x
                     onValueModified: { controller.fixed_x = value; controller.mark_position_changed() }
@@ -622,6 +634,7 @@ Kirigami.ApplicationWindow {
                     from: 0
                     to: Math.max(0, controller.monitor_height - 1)
                     editable: true
+                    valueFromText: (text, locale) => root.parseSpinBoxText(yInput, text, locale)
                     wheelEnabled: false
                     value: controller.fixed_y
                     onValueModified: { controller.fixed_y = value; controller.mark_position_changed() }
