@@ -178,6 +178,93 @@ TestCase {
         compare(controller.positionDirty, data.position)
     }
 
+    function replaceText(input, text) {
+        input.contentItem.forceActiveFocus()
+        keyClick(Qt.Key_A, Qt.ControlModifier)
+        keyClick(Qt.Key_Backspace)
+        for (const digit of text) keyClick(digit)
+        compare(input.contentItem.text, text)
+    }
+
+    // SpinBox parses unfinished text on focus loss and clamps it to from/to,
+    // which turned an empty interval into the 10 ms maximum rate.
+    function test_start_button_keeps_interval_of_unfinished_input_data() {
+        return [
+            { tag: "empty", text: "" },
+            { tag: "below minimum", text: "5" }
+        ]
+    }
+    function test_start_button_keeps_interval_of_unfinished_input(data) {
+        controller.interval_ms = 1000
+        const input = findChild(main, "intervalInput")
+        const start = findChild(main, "startStopButton")
+        let startedWith = -1
+        start.clicked.connect(() => { startedWith = controller.interval_ms })
+        replaceText(input, data.text)
+        mouseClick(start)
+        compare(controller.button_starts, 1)
+        compare(startedWith, 1000)
+        compare(input.contentItem.text, "1000")
+        compare(controller.configDirty, false)
+    }
+
+    function test_cleared_inputs_keep_values_data() {
+        const rows = []
+        for (const field of [
+            { name: "interval", input: "intervalInput", property: "interval_ms" },
+            { name: "repeat", input: "repeatInput", property: "repeat_count" },
+            { name: "x", input: "xInput", property: "fixed_x" },
+            { name: "y", input: "yInput", property: "fixed_y" }
+        ]) {
+            for (const key of [{ name: "tab", code: Qt.Key_Tab }, { name: "enter", code: Qt.Key_Return }])
+                rows.push({ tag: field.name + " " + key.name, input: field.input, property: field.property, key: key.code })
+        }
+        return rows
+    }
+    function test_cleared_inputs_keep_values(data) {
+        controller.repeat_until_stopped = false
+        controller.current_position = false
+        const input = findChild(main, data.input)
+        const before = controller[data.property]
+        replaceText(input, "")
+        keyClick(data.key)
+        compare(controller[data.property], before)
+        compare(input.contentItem.text, String(before))
+        compare(controller.configDirty, false)
+        compare(controller.positionDirty, false)
+    }
+
+    function test_hotkey_start_keeps_interval_of_unfinished_input() {
+        controller.interval_ms = 1000
+        const input = findChild(main, "intervalInput")
+        const rateLabel = findChild(main, "rateLabel")
+        replaceText(input, "5")
+        const rate = rateLabel.text
+        // A hotkey start runs with the last committed value and then
+        // disables the form, which takes focus from the unfinished input.
+        controller.busy = true
+        verify(!input.contentItem.activeFocus)
+        compare(controller.interval_ms, 1000)
+        compare(input.contentItem.text, "1000")
+        compare(rateLabel.text, rate)
+        compare(controller.configDirty, false)
+    }
+
+    function test_interval_edits_reach_controller_without_group_separators() {
+        // A German "1.500" became "1.5000" after typing a digit, which the
+        // validator rejects until focus loss. Run with LANG=de_DE.UTF-8 too.
+        controller.interval_ms = 1500
+        const input = findChild(main, "intervalInput")
+        compare(input.contentItem.text, "1500")
+        input.contentItem.forceActiveFocus()
+        keyClick(Qt.Key_End)
+        keyClick("0")
+        compare(controller.interval_ms, 15000)
+        keyClick(Qt.Key_Backspace)
+        keyClick(Qt.Key_Backspace)
+        compare(controller.interval_ms, 150)
+    }
+
     function test_monitor_initialization_does_not_replace_saved_position() {
         // Restoring the monitor at startup clamps and rewrites the displayed
         // position, but only user actions may replace the saved one.
