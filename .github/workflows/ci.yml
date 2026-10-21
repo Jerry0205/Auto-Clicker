@@ -97,10 +97,14 @@ jobs:
     container: archlinux:base-devel
     steps:
       - name: Install virtual compositor and QML test tools
-        run: >-
-          pacman -Syu --noconfirm --needed
-          git ca-certificates qt6-base qt6-declarative qt6-wayland
-          kirigami qqc2-desktop-style kwin libkscreen dbus mesa libcap
+        # KWin 6.8 removed device-free QPainter compositing. Keep this job's
+        # dependency set coherent; see tests/virtual-wayland.md before updating.
+        run: |
+          printf 'Server = https://archive.archlinux.org/repos/2026/10/13/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
+          pacman -Syyuu --noconfirm --needed \
+            git ca-certificates python qt6-base qt6-declarative qt6-wayland \
+            kirigami qqc2-desktop-style kwin libkscreen dbus mesa libcap
+          pacman -Q kwin qt6-base qt6-declarative qt6-wayland libkscreen mesa
 
       - uses: actions/checkout@v6
 
