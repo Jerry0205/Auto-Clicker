@@ -61,7 +61,7 @@ pub enum Command {
     Shutdown,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum WorkerEvent {
     Status(String),
     State(RunState),
@@ -69,8 +69,38 @@ pub enum WorkerEvent {
     Countdown(u8),
     Hotkey(String),
     HotkeyPhase(HotkeyPhase),
-    StartRequested,
+    /// Reserved hotkey start: return current Qt settings, or drop to decline.
+    StartRequested(StartRequest),
     Error(String),
+}
+
+/// A single-use reply to one hotkey activation, with its own cancellation identity.
+/// Dropping it declines the start, including when Qt cannot queue the event.
+#[derive(Debug)]
+pub struct StartRequest {
+    reply: oneshot::Sender<ClickSettings>,
+}
+
+impl StartRequest {
+    pub(crate) fn channel() -> (Self, oneshot::Receiver<ClickSettings>) {
+        let (reply, response) = oneshot::channel();
+        (Self { reply }, response)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.reply.is_closed()
+    }
+
+    /// Return the controls collected on the Qt thread. A cancelled reply is ignored.
+    pub fn start(self, settings: ClickSettings) {
+        let _ = self.reply.send(settings);
+    }
+}
+
+struct PendingStartRequest {
+    reply: oneshot::Receiver<ClickSettings>,
+    /// Keep the Stop generation from the activation, never from the GUI reply.
+    stops: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +134,7 @@ enum QueuedCommand {
         settings: ClickSettings,
         stops: u64,
         from_button: bool,
+        reserved: bool,
     },
     ConfigureHotkey(String),
 }
@@ -179,11 +210,13 @@ impl WorkerHandle {
                 settings,
                 stops: self.control.borrow().stops,
                 from_button: false,
+                reserved: false,
             },
             Command::StartFromButton(settings) => QueuedCommand::Start {
                 settings,
                 stops: self.control.borrow().stops,
                 from_button: true,
+                reserved: false,
             },
             Command::ConfigureHotkey(preferred) => QueuedCommand::ConfigureHotkey(preferred),
         };
@@ -603,6 +636,7 @@ enum Wake {
     Control(Result<(), watch::error::RecvError>),
     ClickSessionClosed,
     Command(Option<QueuedCommand>),
+    StartReply(Result<ClickSettings, oneshot::error::RecvError>),
     StartTask(Result<Result<StartedSession, String>, tokio::task::JoinError>),
     HotkeyTask(Result<Result<HotkeyRegistration, String>, tokio::task::JoinError>),
     ConfigureTask(Result<Result<(), String>, tokio::task::JoinError>),
@@ -616,6 +650,7 @@ struct WakeSources<'a> {
     control: &'a mut watch::Receiver<Control>,
     click_session: &'a mut Option<PortalClickSession>,
     commands: &'a mut mpsc::Receiver<QueuedCommand>,
+    start_request: &'a mut Option<PendingStartRequest>,
     start_task: &'a mut Option<JoinHandle<Result<StartedSession, String>>>,
     hotkey_task: &'a mut Option<JoinHandle<Result<HotkeyRegistration, String>>>,
     configure_task: &'a mut Option<JoinHandle<Result<(), String>>>,
@@ -631,6 +666,7 @@ async fn next_wake(sources: WakeSources<'_>) -> Wake {
         control,
         click_session,
         commands,
+        start_request,
         start_task,
         hotkey_task,
         configure_task,
@@ -643,6 +679,12 @@ async fn next_wake(sources: WakeSources<'_>) -> Wake {
         changed = control.changed() => Wake::Control(changed),
         () = wait_click_session_closed(click_session), if click_session.is_some() => Wake::ClickSessionClosed,
         command = commands.recv() => Wake::Command(command),
+        result = async {
+            match start_request {
+                Some(request) => (&mut request.reply).await,
+                None => future::pending().await,
+            }
+        } => Wake::StartReply(result),
         result = wait_task(start_task), if start_task.is_some() => Wake::StartTask(result),
         result = wait_task(hotkey_task), if hotkey_task.is_some() => Wake::HotkeyTask(result),
         result = wait_task(configure_task), if configure_task.is_some() => Wake::ConfigureTask(result),
@@ -666,6 +708,7 @@ async fn run_worker(
     let mut countdown: Option<PendingCountdown> = None;
     let mut start_task: Option<JoinHandle<Result<StartedSession, String>>> = None;
     let mut start_cancel = None;
+    let mut start_request: Option<PendingStartRequest> = None;
     let (tx, rx) = oneshot::channel();
     let mut hotkey_cancel = Some(tx);
     let mut hotkey_task = Some(tokio::spawn(setup_hotkey(preferred_hotkey, rx)));
@@ -681,6 +724,10 @@ async fn run_worker(
     let mut ended_runs = machine.ended_runs();
 
     loop {
+        if machine.state() != RunState::Starting {
+            // Closing this receiver revokes even a reply already queued on Qt.
+            start_request = None;
+        }
         // A run ended, by Stop, key press, error or its last click. Key
         // presses the portal has sent up to now may still be queued behind
         // the busy worker. Ask for a new boundary before reading the next one.
@@ -698,6 +745,7 @@ async fn run_worker(
             control: &mut control,
             click_session: &mut click_session,
             commands: &mut commands,
+            start_request: &mut start_request,
             start_task: &mut start_task,
             hotkey_task: &mut hotkey_task,
             configure_task: &mut configure_task,
@@ -706,6 +754,26 @@ async fn run_worker(
             tick: active.as_ref().map(|run| run.next_tick),
         })
         .await;
+        let wake = match wake {
+            Wake::StartReply(result) => {
+                let Some(request) = start_request.take() else {
+                    continue;
+                };
+                match result {
+                    Ok(settings) => Wake::Command(Some(QueuedCommand::Start {
+                        settings,
+                        stops: request.stops,
+                        from_button: false,
+                        reserved: true,
+                    })),
+                    Err(_) => {
+                        stop_run(&mut machine, &mut active, &mut countdown, &emit);
+                        continue;
+                    }
+                }
+            }
+            wake => wake,
+        };
         #[rustfmt::skip]
         let () = match wake {
             Wake::Control(changed) => {
@@ -721,7 +789,7 @@ async fn run_worker(
             Wake::Command(command) => {
                 let Some(command) = command else { break; };
                 match command {
-                    QueuedCommand::Start { settings, stops, from_button } => {
+                    QueuedCommand::Start { settings, stops, from_button, reserved } => {
                         // A Stop may have arrived after this turn checked for one.
                         // Handle it first, so it cannot cancel a start sent after it.
                         match take_control_change(&mut control) {
@@ -746,7 +814,7 @@ async fn run_worker(
                         {
                             continue;
                         }
-                        match request_validated_start(&mut machine, &settings) {
+                        match request_validated_start(&mut machine, &settings, reserved) {
                             Ok(true) => {
                                 (emit)(WorkerEvent::State(machine.state()));
                             }
@@ -772,6 +840,9 @@ async fn run_worker(
                     QueuedCommand::ConfigureHotkey(preferred) => {
                         if configure_task.is_some() || hotkey_task.is_some() {
                             continue;
+                        }
+                        if start_request.take().is_some() {
+                            stop_run(&mut machine, &mut active, &mut countdown, &emit);
                         }
                         if let Some(state) = &hotkey {
                             let portal = Arc::clone(&state.portal);
@@ -954,12 +1025,25 @@ async fn run_worker(
                         } else if configure_task.is_none()
                             && hotkey.as_mut().is_some_and(|state| !state.start_barrier.is_old(received))
                         {
-                            // Qt collects, validates and saves the current controls.
-                            (emit)(WorkerEvent::StartRequested);
+                            // Reserve Starting before asking Qt for current controls, so
+                            // a second press toggles off even while Qt is still busy.
+                            if machine.request_start() {
+                                let (request, response) = StartRequest::channel();
+                                start_request = Some(PendingStartRequest {
+                                    reply: response,
+                                    stops: control.borrow().stops,
+                                });
+                                (emit)(WorkerEvent::State(machine.state()));
+                                (emit)(WorkerEvent::StartRequested(request));
+                            }
                         }
                     }
                     Some(HotkeySignal::Changed(changed)) => {
                         if let Some(shortcut) = changed.shortcuts().iter().find(|shortcut| shortcut.id() == HOTKEY_ID && !shortcut.trigger_description().trim().is_empty()) {
+                            // A reply for the previous shortcut configuration cannot start.
+                            if start_request.take().is_some() {
+                                stop_run(&mut machine, &mut active, &mut countdown, &emit);
+                            }
                             hotkey_bound = true;
                             (emit)(WorkerEvent::Hotkey(shortcut.trigger_description().to_owned()));
                             (emit)(WorkerEvent::HotkeyPhase(if configure_task.is_some() { HotkeyPhase::Configuring(true) } else { HotkeyPhase::Ready }));
@@ -988,6 +1072,7 @@ async fn run_worker(
                     }
                 }
             }
+            Wake::StartReply(_) => unreachable!("GUI replies are handled before commands"),
             Wake::CountdownTick => {
                 let Some(pending) = countdown.as_mut() else { continue; };
                 if pending.remaining > 1 {
@@ -1075,8 +1160,14 @@ fn fail_run(machine: &mut StateMachine, emit: &Emitter) {
 fn request_validated_start(
     machine: &mut StateMachine,
     settings: &ClickSettings,
+    reserved: bool,
 ) -> Result<bool, ValidationError> {
-    if !machine.request_start() {
+    let accepted = if reserved {
+        machine.state() == RunState::Starting
+    } else {
+        machine.request_start()
+    };
+    if !accepted {
         return Ok(false);
     }
     if let Err(error) = settings.validate() {
@@ -1307,10 +1398,41 @@ mod tests {
     }
 
     #[test]
+    fn gui_reply_keeps_activation_stop_generation_and_bypasses_full_queue() {
+        let (worker, side) = WorkerHandle::stalled(1);
+        let (request, mut reply) = StartRequest::channel();
+        let stops = side.control.borrow().stops;
+        assert_eq!(worker.send(Command::Start(settings())), Ok(()));
+        assert_eq!(worker.send(Command::Stop), Ok(()));
+        // Qt answers after Stop, even while the command queue is full.
+        request.start(settings());
+        assert!(reply.try_recv().is_ok());
+        assert!(is_outdated(stops, &side.control));
+    }
+
+    #[test]
+    fn declining_or_revoking_gui_reply_is_terminal_only_for_that_request() {
+        let (declined, mut reply) = StartRequest::channel();
+        drop(declined);
+        assert_eq!(reply.try_recv(), Err(oneshot::error::TryRecvError::Closed));
+        let (cancelled, reply) = StartRequest::channel();
+        drop(reply);
+        assert!(cancelled.is_cancelled());
+        let (fresh, mut reply) = StartRequest::channel();
+        cancelled.start(settings());
+        assert_eq!(reply.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+        fresh.start(settings());
+        assert!(reply.try_recv().is_ok());
+    }
+
+    #[test]
     fn duplicate_start_keeps_pending_settings_and_active_run_stoppable() {
         for clicking in [false, true] {
             let mut machine = StateMachine::default();
-            assert_eq!(request_validated_start(&mut machine, &settings()), Ok(true));
+            assert_eq!(
+                request_validated_start(&mut machine, &settings(), false),
+                Ok(true)
+            );
             if clicking {
                 assert!(machine.started());
             }
@@ -1320,7 +1442,10 @@ mod tests {
                     interval_ms,
                     ..settings()
                 };
-                assert_eq!(request_validated_start(&mut machine, &duplicate), Ok(false));
+                assert_eq!(
+                    request_validated_start(&mut machine, &duplicate, false),
+                    Ok(false)
+                );
                 assert_eq!(machine.state(), expected);
             }
             assert!(machine.stop());
@@ -1335,9 +1460,12 @@ mod tests {
             interval_ms: 0,
             ..settings()
         };
-        assert!(request_validated_start(&mut machine, &invalid).is_err());
+        assert!(request_validated_start(&mut machine, &invalid, false).is_err());
         assert_eq!(machine.state(), RunState::Error);
-        assert_eq!(request_validated_start(&mut machine, &settings()), Ok(true));
+        assert_eq!(
+            request_validated_start(&mut machine, &settings(), false),
+            Ok(true)
+        );
         assert!(machine.started());
     }
 
@@ -1493,6 +1621,7 @@ mod tests {
             control: &mut side.control,
             click_session: &mut None,
             commands: &mut side.commands,
+            start_request: &mut None,
             start_task: &mut None,
             hotkey_task: &mut None,
             configure_task: &mut None,
