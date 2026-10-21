@@ -1,0 +1,22 @@
+# Maintainer: Klickmeister contributors
+pkgname=klickmeister-bin
+pkgver=@PKGVER@
+pkgrel=@PKGREL@
+pkgdesc='Auto clicker for KDE Plasma on Wayland (prebuilt)'
+arch=('x86_64')
+url='https://github.com/jerry0205/Auto-Clicker'
+license=('MIT')
+@DEPENDS@
+provides=("klickmeister=$pkgver")
+conflicts=('klickmeister')
+options=('!strip' '!debug')
+_archive="klickmeister-${pkgver}-${pkgrel}-x86_64.pkg.tar.zst"
+source=("$url/releases/download/v$pkgver/$_archive")
+noextract=("$_archive")
+b2sums=('@B2SUM@')
+
+package() {
+  # Copy only the payload, never the original package manager metadata.
+  bsdtar -xf "$srcdir/$_archive" -C "$pkgdir" usr/
+  mv "$pkgdir/usr/share/licenses/klickmeister" "$pkgdir/usr/share/licenses/$pkgname"
+}

@@ -27,6 +27,14 @@
   <content_rating type="oars-1.1" />
   <url type="homepage">https://github.com/jerry0205/Auto-Clicker</url>
   <releases>
+    <release version="0.1.3" date="2026-10-21">
+      <description>
+        <p>Stopping with the keyboard shortcut reliably cancels a start that is still waiting for the settings. If the shortcut permission ends during setup, no run can start without a working stop shortcut.</p>
+        <p xml:lang="de">Ein Stopp per Tastenkürzel bricht auch einen Start zuverlässig ab, der noch auf die Einstellungen wartet. Endet die Freigabe des Tastenkürzels während der Einrichtung, startet kein Lauf ohne funktionierenden Stopp.</p>
+        <p>Empty or unfinished number fields keep their last valid value instead of falling back to the fastest click rate. A position adjusted to a smaller monitor must be confirmed before it is used on another monitor.</p>
+        <p xml:lang="de">Leere oder unvollständige Zahlenfelder behalten ihren letzten gültigen Wert, statt auf die schnellste Klickrate zu springen. Eine an einen kleineren Bildschirm angepasste Position muss bestätigt werden, bevor sie auf einem anderen Bildschirm verwendet wird.</p>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-09-14">
       <description>
         <p>Cancelled permission requests now close reliably. Saved coordinates are shown correctly in the main window.</p>
