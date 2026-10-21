@@ -10,6 +10,20 @@ TestCase {
     height: 800
 
     Component { id: mainComponent; Main { smokeTest: true } }
+    Component {
+        id: monitorComponent
+        QtObject {
+            property string name: ""
+            property string manufacturer: ""
+            property string model: ""
+            property string serialNumber: ""
+            property int width: 3840
+            property int height: 2160
+            property int virtualX: 0
+            property int virtualY: 0
+            property real devicePixelRatio: 1
+        }
+    }
     property var main
     property var controller
 
@@ -354,6 +368,142 @@ TestCase {
         compare(controller.fixed_position_confirmed, false)
         compare(controller.positionDirty, false)
         compare(controller.savedMonitorIdentity, "")
+    }
+
+    function test_switching_monitors_keeps_clamped_position_unconfirmed_data() {
+        return [
+            { tag: "confirm", action: "confirm" },
+            { tag: "edit x", action: "xInput" },
+            { tag: "edit y", action: "yInput" },
+            { tag: "pick", action: "pick" },
+            { tag: "restore saved monitor", action: "restore" },
+            { tag: "geometry change", action: "restore", resize: true }
+        ]
+    }
+    function test_switching_monitors_keeps_clamped_position_unconfirmed(data) {
+        const original = createTemporaryObject(monitorComponent, main, { name: "A" })
+        const smaller = createTemporaryObject(monitorComponent, main,
+            { name: "B", width: 1920, height: 1080 })
+        const larger = createTemporaryObject(monitorComponent, main, { name: "C" })
+        controller.current_position = false
+        main.selectMonitor(original)
+        controller.fixed_x = 3000
+        controller.fixed_y = 1500
+        main.confirmMonitor()
+        const savedIdentity = controller.savedMonitorIdentity
+        controller.configDirty = false
+        controller.positionDirty = false
+
+        if (data.resize) {
+            original.width = 1920
+            original.height = 1080
+        } else {
+            main.selectMonitor(smaller)
+        }
+        compare(controller.fixed_x, 1919)
+        compare(controller.fixed_y, 1079)
+        compare(controller.fixed_position_confirmed, false)
+
+        main.selectMonitor(larger)
+
+        compare(controller.fixed_x, 1919)
+        compare(controller.fixed_y, 1079)
+        compare(controller.fixed_position_confirmed, false)
+        compare(controller.configDirty, false)
+        compare(controller.positionDirty, false)
+        compare(controller.savedMonitorIdentity, savedIdentity)
+        compare(controller.savedFixedX, 3000)
+        compare(controller.savedFixedY, 1500)
+
+        if (data.action === "restore") {
+            original.width = 3840
+            original.height = 2160
+            main.selectMonitor(original)
+            compare(controller.fixed_x, 3000)
+            compare(controller.fixed_y, 1500)
+            compare(findChild(main, "xInput").value, 3000)
+            compare(findChild(main, "yInput").value, 1500)
+            compare(controller.savedMonitorIdentity, savedIdentity)
+            // The restored point is the user's own choice, not a clamped one.
+            compare(controller.fixed_position_confirmed, true)
+            compare(controller.savedFixedX, 3000)
+            compare(controller.savedFixedY, 1500)
+        } else if (data.action === "confirm") {
+            main.confirmMonitor()
+        } else if (data.action === "pick") {
+            // The picker needs a real QScreen; keep it inside the test display.
+            main.selectMonitor(main.monitorOptions[0].screen)
+            main.beginPicker(false)
+            const picker = main.positionPicker
+            verify(picker !== null)
+            tryCompare(picker, "inputReady", true)
+            tryCompare(picker, "active", true)
+            mouseClick(picker.contentItem, 120, 180)
+            keyClick(Qt.Key_Return)
+            tryCompare(main, "positionPicker", null)
+            compare(controller.fixed_x, 120)
+            compare(controller.fixed_y, 180)
+        } else {
+            const input = findChild(main, data.action)
+            input.contentItem.forceActiveFocus()
+            keyClick(Qt.Key_A, Qt.ControlModifier)
+            for (const digit of "123") keyClick(digit)
+            compare(input.value, 123)
+            compare(controller.fixed_position_confirmed, false)
+        }
+
+        compare(controller.positionDirty, true)
+        compare(controller.savedFixedX, controller.fixed_x)
+        compare(controller.savedFixedY, controller.fixed_y)
+        // A deliberate choice allows later fitting monitor selections again.
+        const chosenX = controller.fixed_x
+        const chosenY = controller.fixed_y
+        const next = createTemporaryObject(monitorComponent, main, { name: "D" })
+        main.selectMonitor(next)
+        compare(controller.fixed_position_confirmed, true)
+        compare(controller.fixed_x, chosenX)
+        compare(controller.fixed_y, chosenY)
+        compare(controller.savedMonitorIdentity, controller.monitor_identity)
+    }
+
+    function test_returning_to_saved_monitor_confirms_saved_position() {
+        const original = createTemporaryObject(monitorComponent, main, { name: "A" })
+        const smaller = createTemporaryObject(monitorComponent, main,
+            { name: "B", width: 1920, height: 1080 })
+        controller.current_position = false
+        main.selectMonitor(original)
+        controller.fixed_x = 3000
+        controller.fixed_y = 1500
+        main.confirmMonitor()
+        const savedIdentity = controller.savedMonitorIdentity
+
+        main.selectMonitor(smaller)
+        compare(controller.fixed_x, 1919)
+        compare(controller.fixed_y, 1079)
+        compare(controller.fixed_position_confirmed, false)
+
+        // Returning restores the saved point unclamped; it needs no new confirmation.
+        main.selectMonitor(original)
+        compare(controller.fixed_x, 3000)
+        compare(controller.fixed_y, 1500)
+        compare(controller.fixed_position_confirmed, true)
+        compare(controller.savedMonitorIdentity, savedIdentity)
+        compare(controller.savedFixedX, 3000)
+        compare(controller.savedFixedY, 1500)
+    }
+
+    function test_selecting_new_monitor_accepts_unclamped_position() {
+        controller.current_position = false
+        compare(controller.fixed_position_confirmed, false)
+        const next = createTemporaryObject(monitorComponent, main, { name: "new-monitor" })
+
+        main.selectMonitor(next)
+
+        compare(controller.fixed_position_confirmed, true)
+        compare(controller.positionDirty, true)
+        compare(controller.savedFixedX, 80)
+        compare(controller.savedFixedY, 150)
+        compare(controller.savedMonitorIdentity, controller.monitor_identity)
     }
 
     function test_reselecting_saved_monitor_at_smaller_resolution_keeps_saved_coordinates() {

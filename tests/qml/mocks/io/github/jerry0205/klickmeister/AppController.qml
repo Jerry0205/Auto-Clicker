@@ -62,9 +62,10 @@ QtObject {
         savedFixedY = fixed_y
     }
     function restore_saved_position() {
-        if (fixed_position_confirmed || !savedMonitorIdentity || savedMonitorIdentity !== monitor_identity) return
+        if (fixed_position_confirmed || !savedMonitorIdentity || savedMonitorIdentity !== monitor_identity) return false
         fixed_x = savedFixedX
         fixed_y = savedFixedY
+        return true
     }
     function save_config() {
         if (!configDirty) return true

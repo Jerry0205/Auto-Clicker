@@ -79,7 +79,7 @@ pub mod qobject {
         fn mark_position_changed(self: Pin<&mut AppController>);
 
         #[qinvokable]
-        fn restore_saved_position(self: Pin<&mut AppController>);
+        fn restore_saved_position(self: Pin<&mut AppController>) -> bool;
 
         #[qinvokable]
         fn shutdown(self: Pin<&mut AppController>);
@@ -446,11 +446,14 @@ impl qobject::AppController {
     }
 
     /// Undo substitute-monitor clamping once the saved monitor is selected again.
-    pub fn restore_saved_position(mut self: Pin<&mut Self>) {
-        if let Some((x, y)) = self.rust().saved_coordinates_for_live_monitor() {
-            self.as_mut().set_fixed_x(x);
-            self.as_mut().set_fixed_y(y);
-        }
+    /// Returns whether the saved coordinates replaced the displayed ones.
+    pub fn restore_saved_position(mut self: Pin<&mut Self>) -> bool {
+        let Some((x, y)) = self.rust().saved_coordinates_for_live_monitor() else {
+            return false;
+        };
+        self.as_mut().set_fixed_x(x);
+        self.as_mut().set_fixed_y(y);
+        true
     }
 
     /// Save a changed draft, including settings that do not require a click run.
