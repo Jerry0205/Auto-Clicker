@@ -40,6 +40,7 @@ struct Observed {
     hotkey_created: usize,
     reject_hotkey: bool,
     empty_hotkey_trigger: bool,
+    hotkey_version: Option<u32>,
     remote_session: Option<OwnedObjectPath>,
     revoked_session: Option<OwnedObjectPath>,
     buttons: Vec<(i32, u32)>,
@@ -255,7 +256,11 @@ impl FakeHotkeys {
             seen.notify_one();
             release.notified().await;
         }
-        2
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .hotkey_version
+            .unwrap_or(2)
     }
 
     async fn create_session(
@@ -970,6 +975,81 @@ async fn hotkey_can_be_registered_again_after_rejection_and_session_loss() -> Te
     result?;
     service.close().await?;
     Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn unbound_v1_hotkey_can_be_retried_without_configure_shortcuts() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    {
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        state.hotkey_version = Some(1);
+        state.empty_hotkey_trigger = true;
+    }
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult =
+        async {
+            event(&mut events, |e| {
+            matches!(e, WorkerEvent::Error(message) if message.contains("Kein Tastenkürzel"))
+        }).await?;
+            let (seen, release) = {
+                let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+                state.empty_hotkey_trigger = false;
+                state.delay_hotkey = true;
+                (state.hotkey_seen.clone(), state.hotkey_release.clone())
+            };
+            worker.send(Command::ConfigureHotkey("Pause".into()))?;
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Registering))
+            })
+            .await?;
+            timeout(Duration::from_secs(3), seen.notified()).await?;
+            {
+                let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+                ensure(
+                    state.hotkey_created == 2,
+                    "retry must create a fresh v1 session",
+                )?;
+                ensure(
+                    state.closed == 1,
+                    "retry must close the old unbound session",
+                )?;
+                ensure(
+                    state.configure_calls == 0,
+                    "v1 must never call ConfigureShortcuts",
+                )?;
+            }
+            worker.send(Command::Start(continuous()))?;
+            event(&mut events, |e| {
+            matches!(e, WorkerEvent::Error(message) if message.contains("Richte vor dem Start"))
+        }).await?;
+            release.notify_one();
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+            })
+            .await?;
+            worker.send(Command::Start(ClickSettings {
+                repeat: Some(1),
+                ..continuous()
+            }))?;
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::State(RunState::Stopped))
+            })
+            .await?;
+            ensure(
+                presses(&observed) == 1,
+                "the recovered binding must allow a click run",
+            )
+        }
+        .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
 }
 
 async fn close_remote_session(service: &zbus::Connection, observed: &Shared) -> TestResult {
