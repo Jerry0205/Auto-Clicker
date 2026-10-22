@@ -730,6 +730,121 @@ TestCase {
         compare(main.positionPicker, null)
     }
 
+    function test_picked_position_uses_the_pickers_actual_monitor_data() {
+        return [{ tag: "smaller monitor", width: 100, height: 100 },
+                { tag: "same size monitor", width: 0, height: 0 }]
+    }
+
+    function test_picked_position_uses_the_pickers_actual_monitor(data) {
+        controller.current_position = false
+        main.beginPicker(false)
+        const picker = main.positionPicker
+        verify(picker !== null)
+        tryCompare(picker, "inputReady", true)
+        tryCompare(picker, "active", true)
+        const actual = main.selectedMonitor
+        // Reproduce a compositor placing the picker on a different output:
+        // the selection and the actual fullscreen output no longer agree.
+        const other = createTemporaryObject(monitorComponent, main, {
+            name: "Other", virtualX: actual.virtualX + actual.width,
+            width: data.width || actual.width, height: data.height || actual.height
+        })
+        main.selectMonitor(other)
+        mouseClick(picker.contentItem, 120, 180)
+        keyClick(Qt.Key_Return)
+        tryCompare(main, "positionPicker", null)
+        compare(main.selectedMonitor, actual)
+        compare(controller.monitor_identity, controller.savedMonitorIdentity)
+        compare(controller.monitor_x, actual.virtualX)
+        compare(controller.monitor_y, actual.virtualY)
+        compare(controller.monitor_width, actual.width)
+        compare(controller.monitor_height, actual.height)
+        compare(findChild(main, "monitorInput").currentIndex,
+                main.monitorOptions.findIndex(option => option.screen === actual))
+        compare(controller.fixed_x, 120)
+        compare(controller.fixed_y, 180)
+        compare(controller.savedFixedX, 120)
+        compare(controller.savedFixedY, 180)
+        verify(controller.configDirty)
+        compare(findChild(main, "xInput").value, controller.fixed_x)
+        compare(findChild(main, "yInput").value, controller.fixed_y)
+        verify(controller.fixed_x < controller.monitor_width)
+        verify(controller.fixed_y < controller.monitor_height)
+        verify(controller.fixed_position_confirmed)
+        verify(!controller.selecting_position)
+        main.close()
+        compare(controller.saveCount, 1)
+        verify(!controller.configDirty)
+    }
+
+    function test_invalid_picker_result_preserves_saved_position_and_can_be_retried() {
+        controller.current_position = false
+        main.confirmMonitor()
+        const saved = { x: controller.fixed_x, y: controller.fixed_y,
+                        identity: controller.savedMonitorIdentity }
+        main.beginPicker(false)
+        const picker = main.positionPicker
+        tryCompare(picker, "inputReady", true)
+        // Deliberately inject an invalid result to exercise the defensive
+        // receiver guard. Pointer input itself is clamped by setTarget().
+        // Use confirm() so the failed attempt also closes the picker, as in UI.
+        picker.targetX = picker.width + 5
+        picker.targetY = 0
+        picker.confirm()
+        tryCompare(main, "positionPicker", null)
+        verify(!controller.selecting_position)
+        verify(!controller.fixed_position_confirmed)
+        verify(controller.error_message.length > 0)
+        compare(controller.fixed_x, saved.x)
+        compare(controller.fixed_y, saved.y)
+        compare(controller.savedMonitorIdentity, saved.identity)
+        compare(controller.savedFixedX, saved.x)
+        compare(controller.savedFixedY, saved.y)
+        main.beginPicker(false)
+        const retry = main.positionPicker
+        verify(retry !== null)
+        tryCompare(retry, "inputReady", true)
+        tryCompare(retry, "active", true)
+        mouseClick(retry.contentItem, 120, 180)
+        keyClick(Qt.Key_Return)
+        tryCompare(main, "positionPicker", null)
+        compare(controller.error_message, "")
+        verify(controller.fixed_position_confirmed)
+        compare(controller.fixed_x, 120)
+        compare(controller.fixed_y, 180)
+        compare(controller.savedFixedX, 120)
+        compare(controller.savedFixedY, 180)
+    }
+
+    function test_screen_change_cancels_open_picker_without_saving_its_point_data() {
+        return [{ tag: "outputs changed", event: "outputs", invalidates: false },
+                { tag: "size changed", event: "size", invalidates: true },
+                { tag: "origin changed", event: "origin", invalidates: false }]
+    }
+
+    function test_screen_change_cancels_open_picker_without_saving_its_point(data) {
+        controller.current_position = false
+        main.confirmMonitor()
+        const saved = { x: controller.fixed_x, y: controller.fixed_y,
+                        identity: controller.savedMonitorIdentity }
+        main.beginPicker(false)
+        const picker = main.positionPicker
+        tryCompare(picker, "inputReady", true)
+        tryCompare(picker, "active", true)
+        mouseClick(picker.contentItem, 120, 180)
+        if (data.event === "outputs") main.handleScreensChanged()
+        else main.handleMonitorGeometryChanged(data.invalidates)
+        tryCompare(main, "positionPicker", null)
+        verify(!controller.selecting_position)
+        tryCompare(main, "active", true)
+        compare(controller.fixed_x, saved.x)
+        compare(controller.fixed_y, saved.y)
+        compare(controller.savedFixedX, saved.x)
+        compare(controller.savedFixedY, saved.y)
+        compare(controller.savedMonitorIdentity, saved.identity)
+        compare(controller.fixed_position_confirmed, !data.invalidates)
+    }
+
     function test_rate_and_status_distinguish_cycles_from_clicks() {
         const rateLabel = findChild(main, "rateLabel")
         const statusLabel = findChild(main, "statusLabel")

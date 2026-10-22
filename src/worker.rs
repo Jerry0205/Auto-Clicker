@@ -40,7 +40,7 @@ use tokio::{
 
 use crate::{
     model::{ClickSettings, ValidationError},
-    portal::PortalClickSession,
+    portal::{PortalClickSession, register_connection},
     scheduler::Schedule,
     state::{RunState, StateMachine},
 };
@@ -473,6 +473,9 @@ async fn setup_hotkey(
     };
     let mut session = None;
     let operation = async {
+        register_connection(&connection).await.map_err(|error| {
+            format!("Klickmeister konnte nicht beim KDE-Portaldienst angemeldet werden: {error}")
+        })?;
         let portal = GlobalShortcuts::with_connection(connection.clone())
             .await
             .map_err(|error| format!("Tastenkürzel sind nicht verfügbar. Prüfe den KDE-Portaldienst. Details: {error}"))?;

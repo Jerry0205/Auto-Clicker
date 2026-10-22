@@ -201,6 +201,23 @@ Kirigami.ApplicationWindow {
             hostWindow: root
             onSelectingChanged: controller.selecting_position = selecting
             onPicked: function(x, y) {
+                // KWin can place fullscreen windows on another output. Resolve
+                // the actual screen before saving its local coordinates. The
+                // picker's Screen wrapper is destroyed with its window, so keep
+                // the corresponding entry from the application's screen list.
+                const screens = Qt.application.screens
+                const index = picker.screen
+                    ? monitors.restoreIndex(screens, monitors.identity(picker.screen)) : -1
+                const positionError = qsTr("Der gewählte Punkt kann keinem Bildschirm zugeordnet werden. Wähle die Position erneut.")
+                if (index < 0 || x < 0 || y < 0
+                        || x >= screens[index].width || y >= screens[index].height) {
+                    controller.fixed_position_confirmed = false
+                    controller.error_message = positionError
+                    return
+                }
+                if (controller.error_message === positionError) controller.clear_error()
+                root.selectMonitor(screens[index])
+                monitorInput.currentIndex = index
                 controller.fixed_x = x
                 controller.fixed_y = y
                 controller.current_position = false
@@ -705,7 +722,7 @@ Kirigami.ApplicationWindow {
                 wrapMode: Text.WordWrap
                 font: Kirigami.Theme.smallFont
                 color: Kirigami.Theme.disabledTextColor
-                text: qsTr("Gib beim Start im KDE-Dialog denselben Bildschirm frei.")
+                text: qsTr("Das Hauptfenster kann auf einem anderen Bildschirm bleiben.")
             }
         }
     }

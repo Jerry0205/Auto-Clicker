@@ -20,6 +20,34 @@ use crate::model::{ClickSettings, MonitorGeometry};
 const EVENT_TIMEOUT: Duration = Duration::from_millis(250);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Register each owned bus connection before its first portal request. Qt's
+/// desktop file name does not identify the worker's separate D-Bus peers.
+pub(crate) async fn register_connection(
+    connection: &ashpd::zbus::Connection,
+) -> Result<(), ashpd::Error> {
+    let app_id = ashpd::AppID::try_from(crate::APP_ID)?;
+    match ashpd::register_host_app_with_connection(connection.clone(), app_id).await {
+        // Older portal frontends derive the identity from the launch context.
+        // Only the absence of Registry permits that legacy path; a denied or
+        // failed registration must still abort setup.
+        Err(ashpd::Error::PortalNotFound(interface))
+            if interface.as_str() == "org.freedesktop.host.portal.Registry" =>
+        {
+            Ok(())
+        }
+        Err(ashpd::Error::Zbus(ashpd::zbus::Error::MethodError(name, _, _)))
+            if matches!(
+                name.as_str(),
+                "org.freedesktop.DBus.Error.UnknownMethod"
+                    | "org.freedesktop.DBus.Error.UnknownInterface"
+            ) =>
+        {
+            Ok(())
+        }
+        result => result,
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum PortalError {
     #[error("Die Freigabe wurde abgebrochen.")]
@@ -39,11 +67,11 @@ pub enum PortalError {
     #[error("Die Freigabe für die Maussteuerung wurde beendet. Starte erneut, um sie anzufordern.")]
     SessionClosed,
     #[error(
-        "Kein Bildschirm freigegeben. Wähle beim nächsten Start den Bildschirm der festen Position."
+        "KDE hat keine Bildschirmdaten für die feste Position geliefert. Prüfe die Bildschirmfreigabe und starte erneut."
     )]
     MissingMonitorStream,
     #[error(
-        "Der freigegebene Bildschirm stimmt nicht mit der Auswahl überein. Gib beim nächsten Start den in Klickmeister ausgewählten Bildschirm frei."
+        "Der ausgewählte Bildschirm stimmt nicht mit den freigegebenen Bildschirmdaten überein. Prüfe die Bildschirmanordnung und wähle die feste Position erneut."
     )]
     MonitorMismatch,
     #[error(
@@ -81,6 +109,50 @@ struct MonitorStream {
     width: i32,
     height: i32,
     position: Option<(i32, i32)>,
+}
+
+#[derive(Clone, Copy)]
+struct StreamCandidate {
+    node_id: u32,
+    position: Option<(i32, i32)>,
+    size: Option<(i32, i32)>,
+    source_type: Option<SourceType>,
+}
+
+/// Select by logical geometry, never by stream order or an inferred origin.
+fn select_monitor_stream(
+    expected: MonitorGeometry,
+    candidates: impl IntoIterator<Item = StreamCandidate>,
+) -> Result<MonitorStream, PortalError> {
+    let mut selected = None;
+    let mut has_monitor = false;
+    for candidate in candidates {
+        if candidate
+            .source_type
+            .is_some_and(|source| source != SourceType::Monitor)
+        {
+            continue;
+        }
+        has_monitor = true;
+        let position = candidate.position.ok_or(PortalError::MonitorUnverifiable)?;
+        let (width, height) = candidate.size.ok_or(PortalError::MonitorUnverifiable)?;
+        if validate_monitor(expected, Some(position), (width, height)).is_ok() {
+            if selected.is_some() {
+                return Err(PortalError::MonitorUnverifiable);
+            }
+            selected = Some(MonitorStream {
+                node_id: candidate.node_id,
+                position: Some(position),
+                width,
+                height,
+            });
+        }
+    }
+    selected.ok_or(if has_monitor {
+        PortalError::MonitorMismatch
+    } else {
+        PortalError::MissingMonitorStream
+    })
 }
 
 impl PortalClickSession {
@@ -139,6 +211,9 @@ impl PortalClickSession {
         owned_closed: &mut Option<ClosedWatcher>,
         monitor: Option<MonitorGeometry>,
     ) -> Result<(RemoteDesktop, Option<MonitorStream>), PortalError> {
+        register_connection(connection)
+            .await
+            .map_err(PortalError::Unavailable)?;
         let fixed_position = monitor.is_some();
         let portal = RemoteDesktop::with_connection(connection.clone())
             .await
@@ -204,7 +279,9 @@ impl PortalClickSession {
                         session,
                         SelectSourcesOptions::default()
                             .set_sources(Some(SourceType::Monitor.into()))
-                            .set_multiple(false)
+                            // KDE otherwise combines multiple outputs into a
+                            // workspace stream without a monitor position.
+                            .set_multiple(true)
                             .set_cursor_mode(CursorMode::Hidden),
                     )
                     .await
@@ -221,25 +298,16 @@ impl PortalClickSession {
                 return Err(PortalError::PointerNotGranted);
             }
 
-            let stream = if fixed_position {
-                let Some(stream) = selected.streams().first() else {
-                    return Err(PortalError::MissingMonitorStream);
-                };
-                let Some((width, height)) = stream.size() else {
-                    return Err(PortalError::MissingMonitorStream);
-                };
-                if let Some(expected) = monitor
-                    && let Err(error) =
-                        validate_monitor(expected, stream.position(), (width, height))
-                {
-                    return Err(error);
-                }
-                Some(MonitorStream {
-                    node_id: stream.pipe_wire_node_id(),
-                    position: stream.position(),
-                    width,
-                    height,
-                })
+            let stream = if let Some(expected) = monitor {
+                Some(select_monitor_stream(
+                    expected,
+                    selected.streams().iter().map(|stream| StreamCandidate {
+                        node_id: stream.pipe_wire_node_id(),
+                        position: stream.position(),
+                        size: stream.size(),
+                        source_type: stream.source_type(),
+                    }),
+                )?)
             } else {
                 None
             };
@@ -353,6 +421,117 @@ fn validate_monitor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LEFT: MonitorGeometry = MonitorGeometry {
+        x: -1920,
+        y: 0,
+        width: 1920,
+        height: 1080,
+    };
+
+    fn candidate(node_id: u32, x: i32) -> StreamCandidate {
+        StreamCandidate {
+            node_id,
+            position: Some((x, 0)),
+            size: Some((1920, 1080)),
+            source_type: Some(SourceType::Monitor),
+        }
+    }
+
+    #[test]
+    fn selects_the_matching_output_independently_of_stream_order() -> Result<(), PortalError> {
+        let left = candidate(42, -1920);
+        let right = candidate(99, 0);
+        for streams in [[left, right], [right, left]] {
+            assert_eq!(select_monitor_stream(LEFT, streams)?.node_id, 42);
+            assert_eq!(
+                select_monitor_stream(MonitorGeometry { x: 0, ..LEFT }, streams)?.node_id,
+                99
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_a_single_output_and_legacy_missing_source_type() -> Result<(), PortalError> {
+        let stream = StreamCandidate {
+            source_type: None,
+            ..candidate(42, -1920)
+        };
+        assert_eq!(select_monitor_stream(LEFT, [stream])?.node_id, 42);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_missing_metadata_even_next_to_a_matching_output() {
+        let matching = candidate(42, -1920);
+        for unknown in [
+            StreamCandidate {
+                position: None,
+                ..candidate(99, 0)
+            },
+            StreamCandidate {
+                size: None,
+                ..candidate(99, 0)
+            },
+        ] {
+            for streams in [[matching, unknown], [unknown, matching]] {
+                assert!(matches!(
+                    select_monitor_stream(LEFT, streams),
+                    Err(PortalError::MonitorUnverifiable)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_mirrored_outputs_with_indistinguishable_geometry() {
+        assert!(matches!(
+            select_monitor_stream(LEFT, [candidate(42, -1920), candidate(99, -1920)]),
+            Err(PortalError::MonitorUnverifiable)
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_nonmatching_or_invalid_output_geometry() {
+        assert!(matches!(
+            select_monitor_stream(LEFT, []),
+            Err(PortalError::MissingMonitorStream)
+        ));
+        for stream in [
+            candidate(99, 0),
+            StreamCandidate {
+                size: Some((1280, 720)),
+                ..candidate(42, -1920)
+            },
+        ] {
+            assert!(matches!(
+                select_monitor_stream(LEFT, [stream]),
+                Err(PortalError::MonitorMismatch)
+            ));
+        }
+        assert!(matches!(
+            select_monitor_stream(MonitorGeometry { width: 0, ..LEFT }, [candidate(42, -1920)]),
+            Err(PortalError::MonitorMismatch)
+        ));
+    }
+
+    #[test]
+    fn ignores_explicit_non_monitor_sources() -> Result<(), PortalError> {
+        let window = StreamCandidate {
+            source_type: Some(SourceType::Window),
+            ..candidate(99, -1920)
+        };
+        assert_eq!(
+            select_monitor_stream(LEFT, [window, candidate(42, -1920)])?.node_id,
+            42
+        );
+        assert!(matches!(
+            select_monitor_stream(LEFT, [window]),
+            Err(PortalError::MissingMonitorStream)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn monitor_matching_checks_origin_size_and_missing_metadata() {
