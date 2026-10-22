@@ -72,13 +72,13 @@ Nach einem Linksklick oder einer Korrektur per Pfeiltasten bleibt die Position f
 
 Das Hauptfenster wird während der Auswahl minimiert und danach mit seiner bisherigen Größe, Position und Maximierung wiederhergestellt. Die Auswahl liegt direkt über dem Desktop. Sie erstellt keine Bildschirmaufnahme und verwendet keine Lupe.
 
-Gib beim Start im KDE-Dialog denselben Bildschirm frei, den du in Klickmeister ausgewählt hast. Klickmeister prüft die Zuordnung vor dem ersten Klick. Bei einem anderen Bildschirm oder einer uneindeutigen Zuordnung wird der Start abgebrochen.
+Das Hauptfenster kann auf einem anderen Monitor bleiben als die feste Position. Klickmeister ordnet die von KDE gelieferten Monitorinformationen vor dem ersten Klick anhand von Position und logischer Größe eindeutig zu. Fehlende, nicht passende oder mehrdeutige Angaben brechen den Start ab; gespiegelte Ausgänge mit identischer Geometrie werden nicht unterstützt.
 
 Eine feste Position bleibt mit ihrem Bildschirm gespeichert. Ändern sich Auflösung oder Skalierung, muss sie erneut bestätigt werden. Ist der Bildschirm nicht verfügbar oder nicht eindeutig wiederzuerkennen, prüfe Bildschirm und Koordinaten und wähle **Position bestätigen** oder eine neue Position. Die gespeicherte Position bleibt erhalten, bis du sie bestätigst oder ersetzt.
 
 ## Freigaben und Datenschutz
 
-KDE fragt nach Freigaben für das globale Tastenkürzel und die Maussteuerung. Bei einer festen Position kommt eine Bildschirmfreigabe hinzu, damit Klickmeister die Koordinaten zuordnen kann. Dabei werden keine Bild- oder Videodaten gelesen.
+KDE fragt nach Freigaben für das globale Tastenkürzel und die Maussteuerung. Bei einer festen Position kommt eine Bildschirmfreigabe für die Monitor-Streams aller Ausgänge hinzu, damit Klickmeister die Koordinaten eindeutig zuordnen kann. Verwendet werden nur die Monitorinformationen; Bild- oder Videodaten werden nicht gelesen.
 
 Klickmeister liest keine Tastatureingaben, Passwörter oder Zwischenablagen und fordert keine Screenshots an. Gespeichert werden nur die Einstellungen. Die Anwendung erfasst keine Nutzungsdaten oder Telemetrie und benötigt keinen Netzwerkzugriff.
 
@@ -92,7 +92,7 @@ Für jeden Lauf muss das Tastenkürzel für Start und Stopp eingerichtet sein. F
 
 ### Warum wird eine feste Position nicht übernommen?
 
-Eine feste Position gilt nur für ihren ausgewählten Bildschirm. Gib im KDE-Dialog denselben Bildschirm frei. Nach Änderungen an Auflösung oder Skalierung sowie bei einer fehlenden Bildschirmzuordnung muss die Position in Klickmeister geprüft und bestätigt werden.
+Eine feste Position gilt nur für ihren ausgewählten Bildschirm, unabhängig vom Standort des Hauptfensters. Nach Änderungen an Anordnung, Auflösung oder Skalierung sowie bei einer fehlenden Bildschirmzuordnung muss die Position in Klickmeister geprüft und bestätigt werden.
 
 ### Wann werden die Einstellungen gespeichert?
 
@@ -149,7 +149,7 @@ Führe zuerst `cargo build --locked` und danach `bash scripts/setup-qmlls.sh` au
 
 ### Desktop-Integration
 
-Der Qt-Desktop-Dateiname lautet `io.github.jerry0205.klickmeister` und entspricht der installierten `.desktop`-Datei. Der QML-Smoke-Test prüft diesen Wert. Die [Portal-Anwendungs-ID](https://flatpak.github.io/xdg-desktop-portal/docs/api-reference) wird für die separaten D-Bus-Verbindungen aus dem Startkontext bestimmt. Eine direkt gestartete Entwicklungs-Binärdatei kann deshalb in KDE-Freigabedialogen anders benannt werden als die über das Anwendungsmenü gestartete Anwendung.
+Der Qt-Desktop-Dateiname lautet `io.github.jerry0205.klickmeister` und entspricht der installierten `.desktop`-Datei. Der QML-Smoke-Test prüft diesen Wert. Klickmeister meldet auch seine separaten D-Bus-Verbindungen vor dem ersten Portalaufruf mit dieser ID bei der [Portal-Registry](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.host.portal.Registry.html) an. Damit funktioniert die Zuordnung auch beim direkten Start der Binärdatei. Die `.desktop`-Datei muss im Anwendungsverzeichnis installiert sein; für Entwicklungsprüfungen genügt `~/.local/share/applications/`. Bei älteren Portaldiensten ohne Registry erfolgt die Zuordnung weiterhin über den Startkontext.
 
 Details zum Aufbau und zu Sicherheitsentscheidungen stehen in [ARCHITECTURE.md](ARCHITECTURE.md) und [SECURITY_REVIEW.md](SECURITY_REVIEW.md).
 

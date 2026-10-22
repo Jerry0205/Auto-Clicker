@@ -21,18 +21,29 @@ class Target(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.count = 0
+        self.last_point = None
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor("#152334"))
         p.setPen(QColor("white"))
-        p.drawText(30, 50, "Klickmeister: native Funktionsprüfung – eigenes Testziel")
+        p.drawText(
+            30, 50, f"Klickmeister: eigenes Testziel auf {self.screen().name()}"
+        )
         p.drawText(30, 80, f"Empfangene Mausereignisse: {self.count}")
-        p.drawText(30, 110, "Klickziel: X=80, Y=400. Tests werden automatisch beendet.")
+        point = self.last_point or (80, 400)
+        p.drawText(
+            30,
+            110,
+            f"Zuletzt empfangen: X={point[0]:g}, Y={point[1]:g}"
+            if self.last_point is not None
+            else "Noch kein Klick empfangen. Jede Position in diesem Fenster ist ein Testziel.",
+        )
+        x, y = round(point[0]), round(point[1])
         p.setPen(QPen(QColor("#5eeab0"), 3))
-        p.drawEllipse(50, 370, 60, 60)
-        p.drawLine(65, 400, 95, 400)
-        p.drawLine(80, 385, 80, 415)
+        p.drawEllipse(x - 30, y - 30, 60, 60)
+        p.drawLine(x - 15, y, x + 15, y)
+        p.drawLine(x, y - 15, x, y + 15)
 
     def closeEvent(self, event):
         # Keep the sink mapped even if a window-manager shortcut is delivered
@@ -46,6 +57,7 @@ class Target(QWidget):
             QEvent.MouseButtonRelease,
         ):
             self.count += 1
+            self.last_point = (e.position().x(), e.position().y())
             log.write(
                 json.dumps(
                     {
@@ -73,6 +85,13 @@ class Target(QWidget):
 
 
 w = Target()
+screen_name = os.environ.get("KLICKMEISTER_NATIVE_SCREEN")
+if screen_name:
+    matches = [screen for screen in app.screens() if screen.name() == screen_name]
+    if len(matches) != 1:
+        raise RuntimeError(f"Testbildschirm nicht eindeutig verfügbar: {screen_name}")
+    w.setScreen(matches[0])
+    w.move(matches[0].geometry().topLeft())
 w.showFullScreen()
 server = QLocalServer()
 assert server.listen(base + "/target.sock")

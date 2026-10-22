@@ -2,16 +2,15 @@ use cxx_qt_lib::{
     QGuiApplication, QMap, QMapPair_QString_QVariant, QQmlApplicationEngine, QQuickStyle, QString,
     QUrl, QVariant,
 };
+use klickmeister::APP_ID;
 use std::process::ExitCode;
-
-const DESKTOP_FILE_NAME: &str = "io.github.jerry0205.klickmeister";
 
 fn main() -> ExitCode {
     let smoke_test = std::env::args_os().any(|argument| argument == "--smoke-test");
     QQuickStyle::set_style(&QString::from("org.kde.desktop"));
 
     let mut app = QGuiApplication::new();
-    QGuiApplication::set_desktop_file_name(&QString::from(DESKTOP_FILE_NAME));
+    QGuiApplication::set_desktop_file_name(&QString::from(APP_ID));
     let mut app_pin = app.pin_mut();
     app_pin
         .as_mut()

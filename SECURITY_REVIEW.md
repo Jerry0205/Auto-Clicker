@@ -1,12 +1,12 @@
 # Security Review
 
-Stand: 2026-09-28, nach Version 0.1.2 (Screenshot-Pfad entfernt; frühere native Geräteprüfung siehe Testbericht zu 0.1.1)
+Stand: 2026-10-22, Arbeitskopie nach Version 0.1.3 (Portal-Anmeldung und Mehrmonitorzuordnung; frühere native Geräteprüfung siehe Testbericht zu 0.1.1)
 
 ## 1. Benötigte Berechtigungen
 
 - Globale Shortcut-Aktion: erforderlich als sofort erreichbarer Start/Stop-Failsafe.
 - RemoteDesktop-Gerät `POINTER`: erforderlich, um linke, rechte oder mittlere Button-Ereignisse zu emulieren.
-- Ein Monitor als ScreenCast-Koordinatenreferenz: nur bei fester Position erforderlich.
+- Monitor-Streams als ScreenCast-Koordinatenreferenz: nur bei fester Position erforderlich. Die KDE-Freigabe umfasst dabei alle Ausgänge; Klickmeister liest ausschließlich ihre Metadaten und verwendet nur den eindeutig passenden Stream für die Mauspositionierung.
 
 Nicht angefordert werden `KEYBOARD`, `TOUCHSCREEN`, Screenshots, Clipboard, Kamera, Mikrofon, Dateien, Standort, Benachrichtigungen, Hintergrundausführung oder Netzwerk.
 
@@ -47,7 +47,7 @@ Alle Startpfade verwenden denselben `StateMachine`. `Starting` und `Clicking` we
 ## 7. Bekannte Einschränkungen
 
 - Ein echtes globales Auslesen der Cursorposition ist unter Wayland absichtlich nicht möglich. Der Picker nutzt ein eigenes Vollbildfenster.
-- Für absolute Positionen muss der Benutzer im KWin-Dialog denselben Monitor wählen. Position und Größe werden vor Nutzung mit der Auswahl abgeglichen; fehlende Metadaten verhindern den Start. Displayänderungen können die Sitzung ungültig machen und führen dann zum Stop mit Fehlermeldung.
+- Für absolute Positionen müssen Position und logische Größe genau einen Monitor-Stream identifizieren. Fehlende Metadaten und gespiegelte Ausgänge mit identischer Geometrie verhindern den Start. Displayänderungen können die Sitzung ungültig machen und führen dann zum Stop mit Fehlermeldung.
 - Portal-Dialoge sind derzeit nicht an einen exportierten Wayland-Fensterhandle gekoppelt und können daher als separates KWin-Dialogfenster erscheinen.
 - Der Positionswähler fragt keine Bildschirmaufnahme an. Das Screenshot-Portal liefert zu Aufnahmen keine verlässliche Ausschnittgeometrie; der frühere Portal-Hänger ist im historischen [Gerätebericht](tests/DEVICE_TEST_REPORT.md) dokumentiert.
 - Die Abfrage nach einem Runende erfasst nur Tastendrücke, die xdg-desktop-portal bis zu seiner Antwort schon empfangen und weitergeleitet hat. Davor liegen KWin, kglobalaccel und xdg-desktop-portal-kde. Hängt eine dieser Komponenten, während der Nutzer den Hotkey drückt und danach auf Stopp klickt, erreichen diese Tastendrücke das Portal erst nach der Antwort und gelten als neu. Sie wirken dann wie frische Betätigungen: Im Ruhezustand fordert jede einen Start an, während eines Runs stoppt jede ihn. Ein einzelner solcher Tastendruck, allgemein eine ungerade Anzahl, kann den Klicker so wieder starten; erneutes Drücken des Hotkeys oder die Stop-Schaltfläche beenden ihn wie gewohnt. Wie lange ein solcher Hänger dauert, ist nicht begrenzt. Eine zeitliche Startsperre nach einem Stop ist deshalb bewusst nicht eingebaut: Sie würde lange Hänger nicht abdecken und echte Tastendrücke verwerfen.

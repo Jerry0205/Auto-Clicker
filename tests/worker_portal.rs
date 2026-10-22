@@ -24,8 +24,18 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 const PATH: &str = "/org/freedesktop/portal/desktop";
 static BUS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[derive(Clone)]
+struct FakeMonitor {
+    node_id: u32,
+    position: Option<(i32, i32)>,
+    size: Option<(i32, i32)>,
+}
+
 #[derive(Default)]
 struct Observed {
+    registered_apps: HashMap<String, String>,
+    require_registration: bool,
+    reject_registration: bool,
     hotkey_session: String,
     hotkey_created: usize,
     reject_hotkey: bool,
@@ -40,6 +50,10 @@ struct Observed {
     remote_owner: String,
     hotkey_owner: String,
     fixed_stream: bool,
+    multiple_sources: bool,
+    multi_monitor_layout: bool,
+    reverse_monitor_streams: bool,
+    monitor_streams: Option<Vec<FakeMonitor>>,
     motions: Vec<(u32, f64, f64)>,
     delay_hotkey: bool,
     close_after_hotkey_response: bool,
@@ -61,6 +75,35 @@ struct Observed {
     version_release: Arc<Notify>,
 }
 type Shared = Arc<Mutex<Observed>>;
+
+struct FakeRegistry(Shared);
+#[zbus::interface(name = "org.freedesktop.host.portal.Registry", crate = "ashpd::zbus")]
+impl FakeRegistry {
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn register(
+        &self,
+        app_id: String,
+        _options: Options,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        let sender = header.sender().ok_or_else(|| failed("missing sender"))?;
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.reject_registration {
+            return Err(zbus::fdo::Error::AccessDenied("registration denied".into()));
+        }
+        if app_id != "io.github.jerry0205.klickmeister"
+            || state.registered_apps.contains_key(sender.as_str())
+        {
+            return Err(failed("invalid or repeated registration"));
+        }
+        state.registered_apps.insert(sender.to_string(), app_id);
+        Ok(())
+    }
+}
 
 fn failed(error: impl std::fmt::Display) -> zbus::fdo::Error {
     zbus::fdo::Error::Failed(error.to_string())
@@ -138,6 +181,13 @@ async fn create(
     observed: &Shared,
     hotkey: bool,
 ) -> zbus::fdo::Result<OwnedObjectPath> {
+    {
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        let sender = header.sender().ok_or_else(|| failed("missing sender"))?;
+        if state.require_registration && !state.registered_apps.contains_key(sender.as_str()) {
+            return Err(failed("An app id is required"));
+        }
+    }
     let session = handle(header, options, "session_handle_token", "session")?;
     connection
         .object_server()
@@ -352,10 +402,14 @@ impl FakeRemote {
         #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
-        let (fixed, delay, seen, release) = {
+        let (fixed, multiple, multi_layout, reverse, override_streams, delay, seen, release) = {
             let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             (
                 state.fixed_stream,
+                state.multiple_sources,
+                state.multi_monitor_layout,
+                state.reverse_monitor_streams,
+                state.monitor_streams.clone(),
                 state.delay_start,
                 state.start_seen.clone(),
                 state.start_release.clone(),
@@ -363,13 +417,57 @@ impl FakeRemote {
         };
         let mut results = HashMap::from([("devices".into(), OwnedValue::from(2_u32))]);
         if fixed {
-            let stream = vec![(
+            let mut stream = vec![(
                 42_u32,
                 HashMap::from([
+                    ("source_type", Value::new(1_u32)),
                     ("position", Value::new((-1920_i32, 0_i32))),
                     ("size", Value::new((1920_i32, 1080_i32))),
                 ]),
             )];
+            if multi_layout {
+                if multiple {
+                    stream.insert(
+                        0,
+                        (
+                            99_u32,
+                            HashMap::from([
+                                ("source_type", Value::new(1_u32)),
+                                ("position", Value::new((0_i32, 0_i32))),
+                                ("size", Value::new((1920_i32, 1080_i32))),
+                            ]),
+                        ),
+                    );
+                    if reverse {
+                        stream.reverse();
+                    }
+                } else {
+                    // KDE combines the workspace when multiple=false. Its
+                    // metadata has a size but no per-monitor position.
+                    stream = vec![(
+                        99_u32,
+                        HashMap::from([
+                            ("size", Value::new((3840_i32, 1080_i32))),
+                            ("source_type", Value::new(1_u32)),
+                        ]),
+                    )];
+                }
+            }
+            if let Some(monitors) = override_streams {
+                stream = monitors
+                    .into_iter()
+                    .map(|monitor| {
+                        let mut properties = HashMap::new();
+                        if let Some(position) = monitor.position {
+                            properties.insert("position", Value::new(position));
+                        }
+                        if let Some(size) = monitor.size {
+                            properties.insert("size", Value::new(size));
+                        }
+                        (monitor.node_id, properties)
+                    })
+                    .collect();
+            }
             results.insert(
                 "streams".into(),
                 Value::new(stream).try_into().map_err(failed)?,
@@ -466,14 +564,15 @@ impl FakeScreencast {
             options.get("types").and_then(|v| u32::try_from(v).ok()),
             Some(1)
         );
-        assert_eq!(
-            options.get("multiple").and_then(|v| bool::try_from(v).ok()),
-            Some(false)
-        );
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .fixed_stream = true;
+        let multiple = options
+            .get("multiple")
+            .and_then(|v| bool::try_from(v).ok())
+            .ok_or_else(|| failed("missing multiple option"))?;
+        {
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.fixed_stream = true;
+            state.multiple_sources = multiple;
+        }
         respond(connection, &header, &options, Options::new()).await
     }
 }
@@ -1389,11 +1488,286 @@ fn ensure(condition: bool, message: &str) -> TestResult {
 async fn fake_portal(observed: &Shared) -> zbus::Result<zbus::Connection> {
     zbus::connection::Builder::session()?
         .name("org.freedesktop.portal.Desktop")?
+        .serve_at(PATH, FakeRegistry(observed.clone()))?
         .serve_at(PATH, FakeHotkeys(observed.clone()))?
         .serve_at(PATH, FakeRemote(observed.clone()))?
         .serve_at(PATH, FakeScreencast(observed.clone()))?
         .build()
         .await
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn every_owned_portal_connection_registers_the_app_before_creating_sessions() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .require_registration = true;
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+        })
+        .await?;
+        worker.send(Command::Start(ClickSettings {
+            position: Some((80, 400)),
+            monitor: Some(MonitorGeometry {
+                x: -1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            }),
+            repeat: Some(1),
+            ..continuous()
+        }))?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Clicking))
+        })
+        .await?;
+        event(&mut events, |e| {
+            matches!(e, WorkerEvent::State(RunState::Stopped))
+        })
+        .await?;
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        ensure(
+            state.registered_apps.len() == 2,
+            "each owned connection must register separately",
+        )?;
+        ensure(
+            state.hotkey_owner != state.remote_owner,
+            "portal connections must remain independent",
+        )?;
+        ensure(
+            state.registered_apps.contains_key(&state.hotkey_owner),
+            "hotkey owner was not registered",
+        )?;
+        ensure(
+            state.registered_apps.contains_key(&state.remote_owner),
+            "pointer owner was not registered",
+        )?;
+        ensure(
+            state.motions == [(42, 80.0, 400.0)],
+            "fixed position was not reached",
+        )?;
+        ensure(state.buttons.len() == 2, "expected one complete click")
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn denied_app_registration_does_not_create_portal_sessions() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    observed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .reject_registration = true;
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(
+            &mut events,
+            |e| matches!(e, WorkerEvent::Error(message) if message.contains("registration denied")),
+        )
+        .await?;
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        ensure(
+            state.hotkey_created == 0 && state.remote_session.is_none(),
+            "denied registration must stop portal setup",
+        )
+    }
+    .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn fixed_position_selects_its_monitor_from_kde_output_streams() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    for reverse in [false, true] {
+        let observed = Shared::default();
+        {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            state.multi_monitor_layout = true;
+            state.reverse_monitor_streams = reverse;
+        }
+        let service = fake_portal(&observed).await?;
+        let (tx, mut events) = mpsc::unbounded_channel();
+        let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+            let _ = tx.send(event);
+        });
+        let result: TestResult = async {
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+            })
+            .await?;
+            worker.send(Command::Start(ClickSettings {
+                position: Some((80, 400)),
+                monitor: Some(MonitorGeometry {
+                    x: -1920,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                }),
+                repeat: Some(1),
+                ..continuous()
+            }))?;
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::State(RunState::Clicking))
+            })
+            .await?;
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::State(RunState::Stopped))
+            })
+            .await?;
+            let (closed_before, first_session) = {
+                let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+                ensure(
+                    state.multiple_sources,
+                    "KDE needs individual monitor streams",
+                )?;
+                ensure(
+                    state.motions == [(42, 80.0, 400.0)],
+                    "wrong monitor stream selected",
+                )?;
+                ensure(state.buttons.len() == 2, "expected one complete click")?;
+                (state.closed, state.remote_session.clone())
+            };
+            worker.send(Command::Start(ClickSettings {
+                position: Some((120, 250)),
+                monitor: Some(MonitorGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                }),
+                repeat: Some(1),
+                ..continuous()
+            }))?;
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::State(RunState::Clicking))
+            })
+            .await?;
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::State(RunState::Stopped))
+            })
+            .await?;
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            ensure(
+                state.closed > closed_before && state.remote_session != first_session,
+                "switching monitor must replace the granted session",
+            )?;
+            ensure(
+                state.motions == [(42, 80.0, 400.0), (99, 120.0, 250.0)],
+                "monitor switch used the old stream",
+            )?;
+            ensure(state.buttons.len() == 4, "expected two complete clicks")
+        }
+        .await;
+        tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+        service.close().await?;
+        result?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn invalid_monitor_streams_close_without_any_input() -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let matching = FakeMonitor {
+        node_id: 42,
+        position: Some((-1920, 0)),
+        size: Some((1920, 1080)),
+    };
+    for streams in [
+        vec![],
+        vec![
+            matching.clone(),
+            FakeMonitor {
+                node_id: 99,
+                ..matching.clone()
+            },
+        ],
+        vec![
+            matching.clone(),
+            FakeMonitor {
+                node_id: 99,
+                position: None,
+                ..matching.clone()
+            },
+        ],
+        vec![
+            matching.clone(),
+            FakeMonitor {
+                node_id: 99,
+                size: None,
+                ..matching.clone()
+            },
+        ],
+        vec![FakeMonitor {
+            size: Some((1280, 720)),
+            ..matching.clone()
+        }],
+    ] {
+        let observed = Shared::default();
+        observed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .monitor_streams = Some(streams);
+        let service = fake_portal(&observed).await?;
+        let (tx, mut events) = mpsc::unbounded_channel();
+        let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+            let _ = tx.send(event);
+        });
+        let result: TestResult = async {
+            event(&mut events, |e| {
+                matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))
+            })
+            .await?;
+            worker.send(Command::Start(ClickSettings {
+                position: Some((80, 400)),
+                monitor: Some(MonitorGeometry {
+                    x: -1920,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                }),
+                repeat: Some(1),
+                ..continuous()
+            }))?;
+            event(&mut events, |e| matches!(e, WorkerEvent::Error(_))).await?;
+            let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            ensure(
+                state.motions.is_empty() && state.buttons.is_empty(),
+                "invalid streams must emit no input",
+            )?;
+            ensure(
+                state.closed >= 1,
+                "invalid stream session must be closed before reporting the error",
+            )
+        }
+        .await;
+        tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+        service.close().await?;
+        result?;
+    }
+    Ok(())
 }
 
 fn continuous() -> ClickSettings {

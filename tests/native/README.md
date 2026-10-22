@@ -56,5 +56,13 @@ python tests/native/run.py tests/native/target_loss.py
 
 Verworfene Läufe zählen nicht als bestandene Nachweise. Bei Änderungen an KDE,
 Monitoranordnung oder Sprache zuerst die sichtbaren Dialoge und Koordinaten prüfen.
+Der automatisierte Starter `run.py` verwendet weiterhin genau einen Monitor.
+Für beaufsichtigte Mehrmonitorprüfungen kann `target.py` separat pro Ausgang
+mit eigenem `KLICKMEISTER_NATIVE_DIR` gestartet werden. Die optionale Variable
+`KLICKMEISTER_NATIVE_SCREEN` wählt den exakten Qt-Bildschirmnamen (zum Beispiel
+`X11-1`); ohne diese Variable gilt der primäre Bildschirm. Das Ziel zeigt den
+Bildschirmnamen und die zuletzt tatsächlich empfangenen lokalen Koordinaten an.
+Ereignisse enthalten zusätzlich globale Koordinaten.
+
 `scenarios.py` enthält Hilfsfunktionen für weitere beaufsichtigte Fälle; es ist
 kein eigenständiger Teststarter.
