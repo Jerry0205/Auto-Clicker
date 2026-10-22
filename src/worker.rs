@@ -898,6 +898,14 @@ async fn run_worker(
                         if start_request.take().is_some() {
                             stop_run(&mut machine, &mut active, &mut countdown, &emit);
                         }
+                        // ConfigureShortcuts requires v2. On v1 an unbound
+                        // session can only recover through a fresh BindShortcuts.
+                        if !hotkey_bound && hotkey.as_ref().is_some_and(|state| state.portal.version() < 2)
+                            && let Some(state) = hotkey.take()
+                        {
+                            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.session.close()).await;
+                            let _ = timeout(PORTAL_CLOSE_TIMEOUT, state.connection.close()).await;
+                        }
                         if let Some(state) = &hotkey {
                             let portal = Arc::clone(&state.portal);
                             let session = Arc::clone(&state.session);
