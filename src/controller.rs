@@ -61,9 +61,6 @@ pub mod qobject {
         fn stop(self: Pin<&mut AppController>);
 
         #[qinvokable]
-        fn toggle(self: Pin<&mut AppController>);
-
-        #[qinvokable]
         fn configure_hotkey(self: Pin<&mut AppController>);
 
         #[qinvokable]
@@ -406,15 +403,6 @@ impl qobject::AppController {
     /// Stop a run or an outstanding start request.
     pub fn stop(mut self: Pin<&mut Self>) {
         self.as_mut().send_command(Command::Stop);
-    }
-
-    /// Toggle clicking from the UI; like the Start button, a start gets the countdown.
-    pub fn toggle(mut self: Pin<&mut Self>) {
-        if *self.running() || *self.busy() {
-            self.as_mut().stop();
-        } else {
-            self.as_mut().start_from_button();
-        }
     }
 
     /// Open the desktop portal configuration for the global shortcut.
