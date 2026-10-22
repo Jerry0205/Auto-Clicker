@@ -55,6 +55,10 @@ struct Observed {
     reverse_monitor_streams: bool,
     monitor_streams: Option<Vec<FakeMonitor>>,
     motions: Vec<(u32, f64, f64)>,
+    select_devices_response: u32,
+    select_sources_response: u32,
+    select_sources_calls: usize,
+    remote_start_calls: usize,
     delay_hotkey: bool,
     close_after_hotkey_response: bool,
     hotkey_seen: Arc<Notify>,
@@ -134,6 +138,16 @@ async fn respond(
     options: &Options,
     results: Options,
 ) -> zbus::fdo::Result<OwnedObjectPath> {
+    respond_with_status(connection, header, options, 0, results).await
+}
+
+async fn respond_with_status(
+    connection: &zbus::Connection,
+    header: &zbus::message::Header<'_>,
+    options: &Options,
+    status: u32,
+    results: Options,
+) -> zbus::fdo::Result<OwnedObjectPath> {
     let path = handle(header, options, "handle_token", "request")?;
     connection
         .emit_signal(
@@ -141,7 +155,7 @@ async fn respond(
             &path,
             "org.freedesktop.portal.Request",
             "Response",
-            &(0_u32, results),
+            &(status, results),
         )
         .await
         .map_err(failed)?;
@@ -392,7 +406,12 @@ impl FakeRemote {
             options.get("types").and_then(|v| u32::try_from(v).ok()),
             Some(2)
         );
-        respond(connection, &header, &options, Options::new()).await
+        let status = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .select_devices_response;
+        respond_with_status(connection, &header, &options, status, Options::new()).await
     }
     async fn start(
         &self,
@@ -403,7 +422,8 @@ impl FakeRemote {
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
         let (fixed, multiple, multi_layout, reverse, override_streams, delay, seen, release) = {
-            let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.remote_start_calls += 1;
             (
                 state.fixed_stream,
                 state.multiple_sources,
@@ -568,12 +588,14 @@ impl FakeScreencast {
             .get("multiple")
             .and_then(|v| bool::try_from(v).ok())
             .ok_or_else(|| failed("missing multiple option"))?;
-        {
+        let status = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-            state.fixed_stream = true;
+            state.select_sources_calls += 1;
+            state.fixed_stream = state.select_sources_response == 0;
             state.multiple_sources = multiple;
-        }
-        respond(connection, &header, &options, Options::new()).await
+            state.select_sources_response
+        };
+        respond_with_status(connection, &header, &options, status, Options::new()).await
     }
 }
 
@@ -2937,6 +2959,68 @@ async fn cancelled_gui_start_once(cancellation: GuiCancellation) -> TestResult {
         )
     }
     .await;
+    tokio::task::spawn_blocking(move || worker.shutdown()).await?;
+    service.close().await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires a private D-Bus session via dbus-run-session"]
+async fn rejected_device_or_source_selection_does_not_start_mouse_control() -> TestResult {
+    for (sources, fixed) in [(false, false), (false, true), (true, true)] {
+        for status in [1, 2] {
+            rejected_selection_once(sources, fixed, status).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn rejected_selection_once(sources: bool, fixed: bool, status: u32) -> TestResult {
+    let _serial = BUS_TEST_LOCK.lock().await;
+    let observed = Shared::default();
+    {
+        let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        if sources {
+            state.select_sources_response = status;
+        } else {
+            state.select_devices_response = status;
+        }
+    }
+    let service = fake_portal(&observed).await?;
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let worker = WorkerHandle::spawn("Pause".into(), move |event| {
+        let _ = tx.send(event);
+    });
+    let result: TestResult = async {
+        event(&mut events, |e| matches!(e, WorkerEvent::HotkeyPhase(HotkeyPhase::Ready))).await?;
+        let settings = ClickSettings {
+            repeat: Some(1),
+            position: fixed.then_some((80, 150)),
+            monitor: fixed.then_some(MonitorGeometry { x: -1920, y: 0, width: 1920, height: 1080 }),
+            ..continuous()
+        };
+        worker.send(Command::Start(settings.clone()))?;
+        let ended = events_until(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Error | RunState::Stopped))).await?;
+        ensure(
+            run_states(&ended) == [RunState::Starting, RunState::Error],
+            &format!("rejected selection must fail before clicking: {ended:?}"),
+        )?;
+        let errors = events_until(&mut events, |e| matches!(e, WorkerEvent::Error(_))).await?;
+        ensure(errors.iter().any(|e| matches!(e, WorkerEvent::Error(message) if message.contains("abgelehnt oder abgebrochen"))), "selection rejection must be reported")?;
+        {
+            let mut state = observed.lock().unwrap_or_else(|e| e.into_inner());
+            ensure(state.remote_start_calls == 0, "Start must not follow a rejected selection")?;
+            ensure(state.select_sources_calls == usize::from(sources), "device rejection must also skip source selection")?;
+            ensure(state.buttons.is_empty() && state.motions.is_empty(), "rejected selection must not inject input")?;
+            ensure(state.closed == 1, "the rejected session must be closed")?;
+            state.select_devices_response = 0;
+            state.select_sources_response = 0;
+        }
+        worker.send(Command::Start(settings))?;
+        event(&mut events, |e| matches!(e, WorkerEvent::State(RunState::Stopped))).await?;
+        let state = observed.lock().unwrap_or_else(|e| e.into_inner());
+        ensure(state.remote_start_calls == 1 && state.buttons.len() == 2, "retry after rejection must create a new session and click once")
+    }.await;
     tokio::task::spawn_blocking(move || worker.shutdown()).await?;
     service.close().await?;
     result

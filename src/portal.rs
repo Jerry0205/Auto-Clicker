@@ -268,7 +268,9 @@ impl PortalClickSession {
                         .set_persist_mode(PersistMode::Application),
                 )
                 .await
-                .map_err(PortalError::Unavailable)?;
+                .map_err(PortalError::Unavailable)?
+                .response()
+                .map_err(PortalError::Denied)?;
 
             if fixed_position {
                 let screencast = Screencast::with_connection(connection.clone())
@@ -285,7 +287,9 @@ impl PortalClickSession {
                             .set_cursor_mode(CursorMode::Hidden),
                     )
                     .await
-                    .map_err(PortalError::Unavailable)?;
+                    .map_err(PortalError::Unavailable)?
+                    .response()
+                    .map_err(PortalError::Denied)?;
             }
 
             let selected = portal
